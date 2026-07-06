@@ -1,5 +1,6 @@
 # Node
-node_modules/
+frontend/node_modules/
+Backend/node_modules/
 dist/
 
 # Python
@@ -9,10 +10,12 @@ __pycache__/
 venv/
 
 # Environment files
-.env
+frontend/.env
+Backend/.env
 
 # macOS
 .DS_Store
 
 # VS Code
 .vscode/
+
