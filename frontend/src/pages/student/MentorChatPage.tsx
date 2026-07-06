@@ -36,7 +36,7 @@ export default function MentorChatPage() {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages.data?.data.length])
   useEffect(() => { studentApi.markMentorRead().catch(() => {}) }, [])
 
-  const mentorData = mentor.data as { name?: string; mentorCode?: string; department?: string } | undefined
+  const mentorData = (mentor.data as { mentor?: { name?: string; mentorCode?: string; department?: string } } | undefined)?.mentor
   const msgs = messages.data?.data ?? []
 
   return (

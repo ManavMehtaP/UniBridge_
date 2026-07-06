@@ -31,6 +31,18 @@ export const facultyApi = {
   studentResults: (enrollmentNo: string) =>
     api.get(`/faculty/students/${enrollmentNo}/results`).then((r) => r.data),
 
+  hodBatches: () => api.get<{ activeSemester: { id: string; label: string }; data: { id: string; code: string; yearLevel: string }[] }>('/faculty/hod-batches').then((r) => r.data),
+  attendanceDay: (batchId: string, date: string) =>
+    api.get<{
+      date: string; dayOfWeek: number; isEditable: boolean; daysDelta: number;
+      lectures: { slotId: string; subjectId: string; subjectCode: string; subjectName: string; slotStart: string; slotEnd: string; room?: string | null }[];
+      students: { enrollmentId: string; rollNo: string; name: string; enrollmentNo: string }[];
+      marks: Record<string, boolean>;
+      subjects: { id: string; code: string; name: string }[];
+    }>('/faculty/attendance/day', { params: { batchId, date } }).then((r) => r.data),
+  attendanceDaySave: (body: { batchId: string; date: string; lectures: { slotId?: string; subjectId: string; marks: Record<string, boolean> }[] }) =>
+    api.post('/faculty/attendance/day', body).then((r) => r.data),
+
   attendancePending: () => api.get('/faculty/attendance/pending').then((r) => r.data),
   attendanceSummary: () => api.get('/faculty/attendance/summary').then((r) => r.data),
   attendanceSession: (params: Params) =>

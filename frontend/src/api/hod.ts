@@ -1,6 +1,7 @@
 import { api } from './client'
 import type { PaginatedResponse } from '@/types/common'
 import type * as T from '@/types/hod'
+import type { HodTimetableSlot } from '@/types/hod'
 
 type Params = Record<string, string | number | boolean | undefined>
 
@@ -217,6 +218,14 @@ export const hodApi = {
       api.get<{ phases: T.PhaseTimelineItem[] }>('/hod/calendar/phase-timeline', { params: { semesterId } }).then((r) => r.data),
     export: (academicYearId?: string) =>
       download('/hod/calendar/export', 'calendar.pdf', { academicYearId }),
+  },
+
+  // ── Timetable ──
+  timetable: {
+    list: (params: Params) => api.get<{ semesterId: string; slots: HodTimetableSlot[] }>('/hod/timetable', { params }).then((r) => r.data),
+    create: (body: Record<string, unknown>) => api.post('/hod/timetable', body).then((r) => r.data),
+    update: (slotId: string, body: Record<string, unknown>) => api.put(`/hod/timetable/${slotId}`, body).then((r) => r.data),
+    remove: (slotId: string) => api.delete(`/hod/timetable/${slotId}`).then((r) => r.data),
   },
 
   // ── Settings ──

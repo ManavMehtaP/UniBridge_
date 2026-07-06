@@ -1,1 +1,1130 @@
-../schema.prisma
+// ============================================================
+// UniPortal — Prisma Schema
+// Full production schema — all tables, enums, indexes, relations
+//
+// Key rules baked into this schema:
+//   1. enrollment_no is the permanent student identity (never changes)
+//   2. roll_no is per-semester — lives in StudentEnrollment only
+//   3. HOD is a Faculty row with isHod = true, never appears in MentorAssignment
+//   4. HodBatchScope: each batch has exactly ONE HOD owner per semester (@unique batchId)
+//   5. All tables soft-delete via deletedAt — no hard deletes on academic records
+//   6. Every tenant-scoped table carries universityId for multi-tenant isolation
+// ============================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 7 moved the URL to prisma.config.ts; keep this block URL-less.
+}
+
+enum Plan {
+  FREE
+  PRO
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────
+
+
+enum YearLevel {
+  FY      // First Year  — Semester 1, 2
+  SY      // Second Year — Semester 3, 4
+  TY      // Third Year  — Semester 5, 6
+  FINAL   // Final Year  — Semester 7, 8
+}
+
+enum SubjectType {
+  THEORY
+  PRACTICAL
+  LAB
+  TUTORIAL
+}
+
+enum AnnouncementScope {
+  ALL           // all faculty + all students in university
+  BATCH         // specific batch only
+  YEAR_LEVEL    // all students of a year level (FY / SY / TY / FINAL)
+}
+
+enum EventType {
+  HOLIDAY
+  EXAM
+  CULTURAL
+  PHASE       // T1 start, T2 end, etc.
+  OTHER
+}
+
+enum CalendarVisibility {
+  ALL           // HOD + Faculty + Students
+  FACULTY_HOD   // HOD + Faculty only
+  HOD_ONLY
+}
+
+enum SenderRole {
+  FACULTY
+  STUDENT
+}
+
+enum AcademicYearStatus {
+  DRAFT       // created but not yet active
+  ACTIVE      // current running year
+  ARCHIVED    // past year, read-only
+}
+
+enum SemesterStatus {
+  UPCOMING
+  ACTIVE
+  COMPLETE
+}
+
+enum RiskFactor {
+  ATTENDANCE
+  MARKS
+  BOTH
+}
+
+enum NotificationKey {
+  RESULT_UPLOADED
+  NEW_ENROLLMENT
+  AT_RISK_ALERT
+  FACULTY_ATTENDANCE_LOG
+  MENTOR_CHAT_MESSAGE
+  CALENDAR_REMINDER
+  PROMOTION_COMPLETED
+  MENTOR_ASSIGNED
+}
+
+enum ActivityType {
+  RESULT_UPLOAD
+  STUDENT_CSV_UPLOAD
+  FACULTY_CSV_UPLOAD
+  MENTOR_ASSIGNED
+  ATTENDANCE_LOCKED
+  PROMOTION_EXECUTED
+  BATCH_CREATED
+  SEMESTER_CREATED
+  CALENDAR_EVENT_ADDED
+  ANNOUNCEMENT_POSTED
+}
+
+enum PromotionDraftStatus {
+  IN_PROGRESS
+  COMPLETE
+  EXECUTED
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETE
+  FAILED
+}
+
+enum BranchCode {
+  IT
+  CSE
+  CE
+  AIML
+  RAI
+  EC
+  MECH
+  CIVIL
+  OTHER
+}
+
+// ─────────────────────────────────────────────────────────────
+// 1. UNIVERSITY (Tenant root)
+// ─────────────────────────────────────────────────────────────
+
+model University {
+  id           String    @id @default(uuid())
+  name         String
+  slug         String    @unique   // subdomain: lju.uniportal.in → "lju"
+  logoUrl      String?
+  website      String?
+  contactEmail String?
+  address      String?
+  plan         Plan      @default(FREE)
+  status       AcademicYearStatus @default(ACTIVE)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // relations
+  academicYears       AcademicYear[]
+  faculties           Faculty[]
+  students            Student[]
+  announcements       Announcement[]
+  calendarEvents      CalendarEvent[]
+  activityFeed        ActivityLog[]
+  branches            UniversityBranch[]
+  attendanceRules     AttendanceRules?
+  notificationConfig  NotificationConfig[]
+  archiveJobs         ArchiveJob[]
+
+  @@map("universities")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 2. UNIVERSITY BRANCHES
+//    Stores which branches this university offers
+//    (IT, CSE, CE, AIML, RAI, etc.)
+// ─────────────────────────────────────────────────────────────
+
+model UniversityBranch {
+  id           String    @id @default(uuid())
+  universityId String
+  code         String    // "IT", "CSE" — matches BranchCode enum or custom string
+  name         String    // "Information Technology"
+  createdAt    DateTime  @default(now())
+
+  university   University @relation(fields: [universityId], references: [id])
+  students     Student[]  @relation("StudentBranch")
+
+  @@unique([universityId, code])
+  @@map("university_branches")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 3. ACADEMIC YEAR
+//    Parent of all semester/batch/enrollment data.
+//    Label format: "2024-25", "2025-26"
+// ─────────────────────────────────────────────────────────────
+
+model AcademicYear {
+  id           String             @id @default(uuid())
+  universityId String
+  label        String             // "2026-27"
+  status       AcademicYearStatus @default(DRAFT)
+  startDate    DateTime
+  endDate      DateTime
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  university      University        @relation(fields: [universityId], references: [id])
+  semesters       Semester[]
+  batches         Batch[]
+  hodBatchScopes  HodBatchScope[]
+  promotionDrafts PromotionDraft[]
+  archiveJobs     ArchiveJob[]
+
+  @@unique([universityId, label])
+  @@index([universityId, status])
+  @@map("academic_years")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 4. SEMESTER
+//    semester.number is global (1–8 across all 4 years).
+//    1-2 = FY, 3-4 = SY, 5-6 = TY, 7-8 = FINAL
+// ─────────────────────────────────────────────────────────────
+
+model Semester {
+  id             String         @id @default(uuid())
+  universityId   String
+  academicYearId String
+  number         Int            // 1 to 8
+  label          String         // "Semester 3"
+  yearLevel      YearLevel      // FY | SY | TY | FINAL
+  status         SemesterStatus @default(UPCOMING)
+  startDate      DateTime
+  endDate        DateTime
+  phaseCount     Int            @default(4)   // always 4 (T1–T4)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  academicYear    AcademicYear        @relation(fields: [academicYearId], references: [id])
+  subjects        Subject[]
+  phases          Phase[]
+  enrollments     StudentEnrollment[]
+  timetableSlots  TimetableSlot[]
+  calendarEvents  CalendarEvent[]
+  hodBatchScopes  HodBatchScope[]
+  promotionFroms  PromotionMapping[]  @relation("FromSemester")
+  promotionTos    PromotionMapping[]  @relation("ToSemester")
+  facultyAssignments FacultyBatchAssignment[]
+
+  @@unique([universityId, academicYearId, number])
+  @@index([academicYearId, status])
+  @@map("semesters")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 5. PHASE (T1, T2, T3, T4)
+//    One semester has exactly 4 phases.
+//    Results are uploaded per phase.
+// ─────────────────────────────────────────────────────────────
+
+model Phase {
+  id          String    @id @default(uuid())
+  semesterId  String
+  label       String    // "T1", "T2", "T3", "T4"
+  number      Int       // 1, 2, 3, 4
+  startDate   DateTime
+  endDate     DateTime
+  examDate    DateTime?
+  isComplete  Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  semester    Semester  @relation(fields: [semesterId], references: [id])
+  results     Result[]
+
+  @@unique([semesterId, number])
+  @@index([semesterId])
+  @@map("phases")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 6. BATCH / DIVISION
+//    Code examples: "SY-3", "C2", "B1", "FY-2"
+//    Belongs to one AcademicYear.
+//    Has exactly ONE HOD owner per semester (via HodBatchScope).
+// ─────────────────────────────────────────────────────────────
+
+model Batch {
+  id             String    @id @default(uuid())
+  universityId   String
+  academicYearId String
+  code           String    // "C2", "B1", "SY-3"
+  yearLevel      YearLevel
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  academicYear       AcademicYear           @relation(fields: [academicYearId], references: [id])
+  enrollments        StudentEnrollment[]
+  facultyAssignments FacultyBatchAssignment[]
+  timetableSlots     TimetableSlot[]
+  hodScope           HodBatchScope?          // ONE HOD per batch — @unique on HodBatchScope.batchId
+
+  @@unique([academicYearId, code])
+  @@index([academicYearId, yearLevel])
+  @@map("batches")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 7. HOD BATCH SCOPE
+//    Links a HOD (Faculty with isHod=true) to the specific
+//    batches they own for a given semester.
+//
+//    CRITICAL CONSTRAINTS:
+//      - batchId is @unique: one batch has exactly ONE HOD owner
+//      - facultyId must point to a Faculty with isHod=true (enforced at app layer)
+//      - Scoping middleware reads this table on EVERY HOD request
+// ─────────────────────────────────────────────────────────────
+
+model HodBatchScope {
+  id             String   @id @default(uuid())
+  facultyId      String   // must be isHod = true — validated at app layer
+  batchId        String   @unique   // ONE HOD per batch — DB-level constraint
+  semesterId     String
+  academicYearId String
+  createdAt      DateTime @default(now())
+
+  faculty      Faculty      @relation(fields: [facultyId], references: [id])
+  batch        Batch        @relation(fields: [batchId], references: [id])
+  semester     Semester     @relation(fields: [semesterId], references: [id])
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id])
+
+  @@unique([facultyId, batchId, semesterId])
+  @@index([facultyId])            // fast lookup for hodScope middleware
+  @@index([facultyId, semesterId])
+  @@map("hod_batch_scopes")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 8. SUBJECT
+//    Defined per semester by HOD.
+//    Each semester has its own subject list — NOT shared.
+//    Subjects link to batches via FacultyBatchAssignment.
+// ─────────────────────────────────────────────────────────────
+
+model Subject {
+  id           String      @id @default(uuid())
+  universityId String
+  semesterId   String
+  code         String      // "COA", "DM", "TOC"
+  name         String      // "Computer Organization & Architecture"
+  credits      Int         @default(4)
+  type         SubjectType @default(THEORY)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  deletedAt    DateTime?   // soft delete — blocked if has results/attendance
+
+  semester           Semester               @relation(fields: [semesterId], references: [id])
+  results            Result[]
+  notes              Note[]
+  attendanceRecords  AttendanceRecord[]
+  timetableSlots     TimetableSlot[]
+  facultyAssignments FacultyBatchAssignment[]
+  pyqFiles           PYQFile[]
+
+  @@unique([semesterId, code])
+  @@index([semesterId])
+  @@map("subjects")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 9. FACULTY
+//    HOD is also Faculty — isHod = true.
+//    HOD: no MentorAssignment rows, has HodBatchScope rows.
+//    Faculty: has MentorAssignment rows, NO HodBatchScope rows.
+// ─────────────────────────────────────────────────────────────
+
+model Faculty {
+  id              String    @id @default(uuid())
+  universityId    String
+  employeeId      String    // College-assigned, e.g. "EMP001"
+  name            String
+  email           String    @unique
+  passwordHash    String
+  department      String    // "IT", "CSE"
+  isHod           Boolean   @default(false)
+  mentorCode      String?   // 3-char, e.g. "SYD" — null for HOD
+  profilePhotoUrl String?
+  phone           String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime? // soft delete
+
+  university         University               @relation(fields: [universityId], references: [id])
+  hodBatchScopes     HodBatchScope[]          // populated only when isHod = true
+  batchAssignments   FacultyBatchAssignment[] // subjects taught
+  mentorAssignments  MentorAssignment[]       // populated only when isHod = false
+  attendanceRecords  AttendanceRecord[]       // attendance marked by this faculty
+  announcements      Announcement[]
+  uploadedNotes      Note[]
+  quizzes            Quiz[]
+  calendarEvents     CalendarEvent[]
+  activityLogs       ActivityLog[]
+  refreshTokens      RefreshToken[]
+  notificationPrefs  NotificationConfig[]
+  chatMessagesAsFaculty ChatMessage[]         @relation("FacultyChatMessages")
+  uploadedResults    Result[]                 @relation("UploadedByFaculty")
+  promotionDrafts    PromotionDraft[]
+
+  @@unique([universityId, employeeId])
+  @@index([universityId, isHod])
+  @@index([universityId, mentorCode])
+  @@map("faculties")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 10. FACULTY BATCH ASSIGNMENT
+//     Maps faculty → subject → batch → semester.
+//     Controls: who can mark attendance, who can upload notes
+//     for which subject in which batch.
+// ─────────────────────────────────────────────────────────────
+
+model FacultyBatchAssignment {
+  id         String   @id @default(uuid())
+  facultyId  String
+  batchId    String
+  subjectId  String
+  semesterId String
+  createdAt  DateTime @default(now())
+
+  faculty    Faculty  @relation(fields: [facultyId], references: [id])
+  batch      Batch    @relation(fields: [batchId], references: [id])
+  subject    Subject  @relation(fields: [subjectId], references: [id])
+  semester   Semester @relation(fields: [semesterId], references: [id])
+
+  @@unique([facultyId, batchId, subjectId, semesterId])
+  @@index([batchId, semesterId])
+  @@index([facultyId, semesterId])
+  @@map("faculty_batch_assignments")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 11. STUDENT
+//     enrollment_no = permanent college-issued ID. NEVER changes.
+//     roll_no changes each semester — lives in StudentEnrollment.
+//     branch is permanent (set at admission).
+// ─────────────────────────────────────────────────────────────
+
+model Student {
+  id              String    @id @default(uuid())
+  universityId    String
+  enrollmentNo    String    @unique   // "LJ20IT045" — permanent, college-issued
+  name            String
+  email           String    @unique
+  passwordHash    String
+  branch          String    // "IT", "CSE" — permanent, set at admission
+  branchId        String?   // FK to UniversityBranch (optional, for structured lookup)
+  admissionYear   Int       // 2023
+  profilePhotoUrl String?
+  phone           String?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  university             University          @relation(fields: [universityId], references: [id])
+  branchRef              UniversityBranch?   @relation("StudentBranch", fields: [branchId], references: [id])
+  enrollments            StudentEnrollment[]
+  mentorAssignments      MentorAssignment[]
+  selfNotes              SelfNote[]
+  quizAttempts           QuizAttempt[]
+  aiConversations        AIConversation[]
+  refreshTokens          RefreshToken[]
+  chatMessagesAsStudent  ChatMessage[]       @relation("StudentChatMessages")
+
+  @@index([universityId])
+  @@index([universityId, branch])
+  @@map("students")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 12. STUDENT ENROLLMENT (Pivot / Core linking table)
+//     One row per student per semester.
+//     roll_no lives HERE — not on Student.
+//     promotedFromId = self-referential chain of the student's
+//     full academic journey across all semesters.
+//
+//     isCurrent = true on exactly ONE row per student at a time.
+//     When promoted: old row isCurrent = false, new row created.
+// ─────────────────────────────────────────────────────────────
+
+model StudentEnrollment {
+  id              String    @id @default(uuid())
+  studentId       String    // FK to Student (not enrollmentNo — use id for joins)
+  semesterId      String
+  batchId         String
+  rollNo          String    // "IT-24-045" — changes every semester
+  yearLevel       YearLevel // FY | SY | TY | FINAL
+  isCurrent       Boolean   @default(true)   // only ONE per student is true
+  promotedFromId  String?   // FK to previous StudentEnrollment row (null for sem 1)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  student       Student           @relation(fields: [studentId], references: [id])
+  semester      Semester          @relation(fields: [semesterId], references: [id])
+  batch         Batch             @relation(fields: [batchId], references: [id])
+  promotedFrom  StudentEnrollment?  @relation("PromotionChain", fields: [promotedFromId], references: [id])
+  promotedTo    StudentEnrollment[] @relation("PromotionChain")
+  results       Result[]
+  attendances   AttendanceRecord[]
+
+  @@unique([studentId, semesterId])             // one enrollment per student per semester
+  @@index([batchId, semesterId])               // HOD scope queries
+  @@index([studentId, isCurrent])              // fast "current enrollment" lookup
+  @@index([semesterId, yearLevel])
+  @@map("student_enrollments")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 13. MENTOR ASSIGNMENT
+//     Links a non-HOD faculty to a student for a semester.
+//     mentorCode is the 3-char code (e.g. "SYD") on the faculty row.
+//     HOD rows (isHod = true) NEVER appear here — enforced at app layer.
+//     Drives the 1:1 chat room between faculty and student.
+// ─────────────────────────────────────────────────────────────
+
+model MentorAssignment {
+  id          String   @id @default(uuid())
+  facultyId   String   // must be isHod = false
+  studentId   String
+  semesterId  String
+  mentorCode  String   // denormalized copy of faculty.mentorCode at time of assignment
+  createdAt   DateTime @default(now())
+
+  faculty      Faculty       @relation(fields: [facultyId], references: [id])
+  student      Student       @relation(fields: [studentId], references: [id])
+  chatMessages ChatMessage[]
+
+  @@unique([facultyId, studentId, semesterId])
+  @@index([facultyId, semesterId])
+  @@index([studentId, semesterId])
+  @@map("mentor_assignments")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 14. RESULT
+//     Uploaded by HOD only. Immutable after publish.
+//     Keyed on (enrollmentId, phaseId, subjectId) — unique per
+//     student × phase × subject. Re-upload does an upsert.
+// ─────────────────────────────────────────────────────────────
+
+model Result {
+  id             String   @id @default(uuid())
+  enrollmentId   String   // FK to StudentEnrollment
+  phaseId        String   // T1 / T2 / T3 / T4
+  subjectId      String
+  marksObtained  Float
+  maxMarks       Float    @default(100)
+  grade          String?  // "A+", "B", "F"
+  isPublished    Boolean  @default(false)
+  publishedAt    DateTime?
+  uploadedById   String   // Faculty (HOD) id
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  enrollment  StudentEnrollment @relation(fields: [enrollmentId], references: [id])
+  phase       Phase             @relation(fields: [phaseId], references: [id])
+  subject     Subject           @relation(fields: [subjectId], references: [id])
+  uploadedBy  Faculty           @relation("UploadedByFaculty", fields: [uploadedById], references: [id])
+
+  @@unique([enrollmentId, phaseId, subjectId])
+  @@index([phaseId, subjectId])          // analytics queries
+  @@index([enrollmentId])                // student results page
+  @@map("results")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 15. ATTENDANCE RECORD
+//     One row per student per lecture per subject.
+//     lectureDate + subjectId + enrollmentId = unique lecture event.
+//     isLocked = true after HOD locks — faculty cannot edit.
+// ─────────────────────────────────────────────────────────────
+
+model AttendanceRecord {
+  id           String   @id @default(uuid())
+  enrollmentId String
+  subjectId    String
+  slotId       String?  // timetable slot — distinguishes paired lectures (TOC,TOC)
+  facultyId    String   // who marked this lecture
+  lectureDate  DateTime @db.Date
+  isPresent    Boolean
+  isLocked     Boolean  @default(false)
+  remarks      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  enrollment  StudentEnrollment @relation(fields: [enrollmentId], references: [id])
+  subject     Subject           @relation(fields: [subjectId], references: [id])
+  faculty     Faculty           @relation(fields: [facultyId], references: [id])
+
+  @@unique([enrollmentId, subjectId, lectureDate, slotId])
+  @@index([enrollmentId, subjectId])    // student attendance % calculation
+  @@index([subjectId, lectureDate])     // faculty attendance view
+  @@index([enrollmentId, isLocked])
+  @@map("attendance_records")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 16. NOTE (Faculty-uploaded study material)
+//     PDF, DOC, links uploaded by faculty per subject.
+//     aiSummary and flashcards populated by Django AI service.
+//     deletedAt soft-delete preserves S3 key for deferred cleanup.
+// ─────────────────────────────────────────────────────────────
+
+model Note {
+  id          String    @id @default(uuid())
+  subjectId   String
+  facultyId   String
+  title       String
+  description String?
+  fileUrl     String    // S3 public/presigned URL
+  fileKey     String    // S3 object key for deletion
+  mimeType    String    // "application/pdf", "video/mp4"
+  fileSizeKb  Int?
+  aiSummary   String?   // populated by Django after processing
+  aiJobId     String?   // async job ID for tracking
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  subject    Subject    @relation(fields: [subjectId], references: [id])
+  faculty    Faculty    @relation(fields: [facultyId], references: [id])
+  flashcards Flashcard[]
+
+  @@index([subjectId])
+  @@index([facultyId])
+  @@map("notes")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 17. FLASHCARD
+//     AI-generated Q&A pairs linked to a Note.
+//     Created by Django AI service after processing a PDF.
+// ─────────────────────────────────────────────────────────────
+
+model Flashcard {
+  id       String @id @default(uuid())
+  noteId   String
+  question String
+  answer   String
+  order    Int    @default(0)
+
+  note     Note   @relation(fields: [noteId], references: [id])
+
+  @@index([noteId])
+  @@map("flashcards")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 18. SELF NOTE (Student personal notes — private)
+// ─────────────────────────────────────────────────────────────
+
+model SelfNote {
+  id        String    @id @default(uuid())
+  studentId String
+  subjectId String?   // optional — can be a general note
+  title     String
+  content   String    // rich text (TipTap JSON or HTML)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  student   Student  @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+  @@map("self_notes")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 19. PYQ FILE (Previous Year Question paper PDFs)
+//     Uploaded by HOD per subject.
+//     Django AI service reads these to generate PYQ analysis.
+// ─────────────────────────────────────────────────────────────
+
+model PYQFile {
+  id         String    @id @default(uuid())
+  subjectId  String
+  uploadedById String  // HOD faculty id
+  year       String    // "2023-24" — the year the question paper is from
+  fileUrl    String
+  fileKey    String
+  aiJobId    String?   // async analysis job id
+  isAnalyzed Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+
+  subject    Subject  @relation(fields: [subjectId], references: [id])
+
+  @@index([subjectId])
+  @@map("pyq_files")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 20. PYQ ANALYSIS RESULT
+//     Stored result of Django AI topic-frequency analysis.
+//     One row per subject per semester analysis run.
+// ─────────────────────────────────────────────────────────────
+
+model PYQAnalysis {
+  id              String   @id @default(uuid())
+  subjectId       String
+  semesterId      String
+  topicFrequencies Json    // { "Pipelining": 8, "Cache Memory": 5, ... }
+  analyzedAt      DateTime @default(now())
+
+  @@unique([subjectId, semesterId])
+  @@index([subjectId])
+  @@map("pyq_analyses")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 21. QUIZ
+//     Created by faculty (manually or AI-generated).
+//     isAiGenerated = true when created via Django quiz generator.
+//     isPublished = false until faculty reviews and approves.
+// ─────────────────────────────────────────────────────────────
+
+model Quiz {
+  id            String    @id @default(uuid())
+  facultyId     String
+  subjectId     String
+  semesterId    String
+  title         String
+  description   String?
+  isAiGenerated Boolean   @default(false)
+  isPublished   Boolean   @default(false)
+  dueDate       DateTime?
+  timeLimitMins Int?      // null = untimed
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  faculty    Faculty       @relation(fields: [facultyId], references: [id])
+  questions  Question[]
+  attempts   QuizAttempt[]
+
+  @@index([subjectId, semesterId])
+  @@index([facultyId])
+  @@map("quizzes")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 22. QUESTION
+//     MCQ questions belonging to a Quiz.
+//     options stored as JSON array: [{ id, text }]
+// ─────────────────────────────────────────────────────────────
+
+model Question {
+  id            String  @id @default(uuid())
+  quizId        String
+  text          String
+  options       Json    // [{ "id": "A", "text": "..." }, ...]
+  correctOption String  // "A" | "B" | "C" | "D"
+  explanation   String?
+  order         Int     @default(0)
+
+  quiz          Quiz    @relation(fields: [quizId], references: [id], onDelete: Cascade)
+
+  @@index([quizId])
+  @@map("questions")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 23. QUIZ ATTEMPT
+//     One per student per quiz. Student cannot re-attempt.
+//     answers = { questionId: selectedOptionId }
+// ─────────────────────────────────────────────────────────────
+
+model QuizAttempt {
+  id          String   @id @default(uuid())
+  studentId   String
+  quizId      String
+  score       Float    // percentage score
+  answers     Json     // { "q_id_1": "B", "q_id_2": "A" }
+  submittedAt DateTime @default(now())
+
+  student     Student  @relation(fields: [studentId], references: [id])
+  quiz        Quiz     @relation(fields: [quizId], references: [id])
+
+  @@unique([studentId, quizId])
+  @@index([quizId])
+  @@map("quiz_attempts")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 24. TIMETABLE SLOT
+//     Weekly schedule per batch per subject.
+//     dayOfWeek: 1=Monday, 6=Saturday
+// ─────────────────────────────────────────────────────────────
+
+model TimetableSlot {
+  id         String @id @default(uuid())
+  semesterId String
+  batchId    String
+  subjectId  String
+  facultyId  String?      // optional — faculty may not be assigned yet
+  dayOfWeek  Int          // 1–6 (Mon–Sat)
+  slotStart  String       // "09:00"
+  slotEnd    String       // "10:00"
+  room       String?      // "Lab 3", "Hall B"
+  createdAt  DateTime     @default(now())
+
+  semester   Semester @relation(fields: [semesterId], references: [id])
+  batch      Batch    @relation(fields: [batchId], references: [id])
+  subject    Subject  @relation(fields: [subjectId], references: [id])
+
+  @@index([batchId, semesterId])
+  @@index([semesterId, dayOfWeek])
+  @@map("timetable_slots")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 25. CALENDAR EVENT
+//     University-wide events visible to all or scoped.
+//     Created by any HOD, scoped to university.
+//     HODs can only edit/delete events they created.
+// ─────────────────────────────────────────────────────────────
+
+model CalendarEvent {
+  id           String            @id @default(uuid())
+  universityId String
+  semesterId   String?           // optional — some events span semesters
+  title        String
+  description  String?
+  startDate    DateTime          @db.Date
+  endDate      DateTime          @db.Date
+  eventType    EventType
+  visibleTo    CalendarVisibility @default(ALL)
+  createdById  String            // Faculty (HOD) who created it
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  deletedAt    DateTime?
+
+  university  University @relation(fields: [universityId], references: [id])
+  semester    Semester?  @relation(fields: [semesterId], references: [id])
+  createdBy   Faculty    @relation(fields: [createdById], references: [id])
+
+  @@index([universityId, startDate])
+  @@index([semesterId])
+  @@map("calendar_events")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 26. ANNOUNCEMENT
+//     HOD can broadcast to ALL, a BATCH, or a YEAR_LEVEL.
+//     Faculty can announce only to their assigned batches.
+//     Students see announcements based on scope matching.
+// ─────────────────────────────────────────────────────────────
+
+model Announcement {
+  id           String            @id @default(uuid())
+  universityId String
+  facultyId    String            // sender
+  title        String
+  body         String
+  scope        AnnouncementScope @default(ALL)
+  scopeValue   String?           // batchId or "SY" when scope != ALL
+  isRead       Boolean           @default(false)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  deletedAt    DateTime?
+
+  university   University @relation(fields: [universityId], references: [id])
+  faculty      Faculty    @relation(fields: [facultyId], references: [id])
+  reads        AnnouncementRead[]
+
+  @@index([universityId, createdAt])
+  @@index([scope, scopeValue])
+  @@map("announcements")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 27. ANNOUNCEMENT READ (Track read status per student)
+// ─────────────────────────────────────────────────────────────
+
+model AnnouncementRead {
+  id             String   @id @default(uuid())
+  announcementId String
+  studentId      String
+  readAt         DateTime @default(now())
+
+  announcement   Announcement @relation(fields: [announcementId], references: [id])
+
+  @@unique([announcementId, studentId])
+  @@index([studentId])
+  @@map("announcement_reads")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 28. CHAT MESSAGE
+//     Real-time 1:1 messages between a mentor (faculty) and student.
+//     Keyed to MentorAssignment — only valid mentor-student pairs can chat.
+//     Persisted to DB (not ephemeral) for full chat history.
+// ─────────────────────────────────────────────────────────────
+
+model ChatMessage {
+  id                  String     @id @default(uuid())
+  mentorAssignmentId  String
+  senderRole          SenderRole
+  facultyId           String?    // set when senderRole = FACULTY
+  studentId           String?    // set when senderRole = STUDENT
+  content             String
+  isRead              Boolean    @default(false)
+  sentAt              DateTime   @default(now())
+  editedAt            DateTime?
+
+  mentorAssignment    MentorAssignment @relation(fields: [mentorAssignmentId], references: [id])
+  faculty             Faculty?         @relation("FacultyChatMessages", fields: [facultyId], references: [id])
+  student             Student?         @relation("StudentChatMessages", fields: [studentId], references: [id])
+
+  @@index([mentorAssignmentId, sentAt])   // paginated message history
+  @@index([mentorAssignmentId, isRead])   // unread count queries
+  @@map("chat_messages")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 29. AI CONVERSATION
+//     Stores the student's conversation history with the
+//     AI assistant (RAG-based, per subject context).
+//     messages stored as JSON array of { role, content } objects.
+// ─────────────────────────────────────────────────────────────
+
+model AIConversation {
+  id         String   @id @default(uuid())
+  studentId  String
+  subjectId  String?  // null = general assistant, not subject-scoped
+  messages   Json     // [{ role: "user"|"assistant", content: "..." }]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  student    Student  @relation(fields: [studentId], references: [id])
+
+  @@index([studentId])
+  @@map("ai_conversations")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 30. PROMOTION DRAFT
+//     Stores the in-progress state of a year-promotion wizard.
+//     HOD saves mappings incrementally across steps.
+//     status = EXECUTED after POST /hod/promotion/execute runs.
+// ─────────────────────────────────────────────────────────────
+
+model PromotionDraft {
+  id               String               @id @default(uuid())
+  hodId            String               // faculty with isHod=true
+  fromAcademicYearId String
+  toAcademicYearId   String
+  status           PromotionDraftStatus @default(IN_PROGRESS)
+  executedAt       DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  hod              Faculty            @relation(fields: [hodId], references: [id])
+  fromAcademicYear AcademicYear       @relation(fields: [fromAcademicYearId], references: [id])
+  mappings         PromotionMapping[]
+
+  @@index([hodId])
+  @@map("promotion_drafts")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 31. PROMOTION MAPPING
+//     One row per student in a PromotionDraft.
+//     fromEnrollmentId → toSemesterId + toBatchId + toRollNo.
+//     isHeld = true means student is NOT promoted (detained).
+// ─────────────────────────────────────────────────────────────
+
+model PromotionMapping {
+  id               String   @id @default(uuid())
+  draftId          String
+  enrollmentNo     String   // denormalized for CSV upload matching
+  fromEnrollmentId String   // StudentEnrollment in source semester
+  fromSemesterId   String
+  toSemesterId     String
+  toBatchId        String
+  toRollNo         String?  // assigned in Step 3 of wizard
+  isHeld           Boolean  @default(false)  // true = detained, not promoted
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  draft          PromotionDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  fromSemester   Semester       @relation("FromSemester", fields: [fromSemesterId], references: [id])
+  toSemester     Semester       @relation("ToSemester", fields: [toSemesterId], references: [id])
+
+  @@unique([draftId, fromEnrollmentId])
+  @@index([draftId])
+  @@map("promotion_mappings")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 32. REFRESH TOKEN
+//     One active refresh token per faculty/student.
+//     Old tokens deleted on logout or refresh.
+// ─────────────────────────────────────────────────────────────
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique    // hashed before storage in production
+  facultyId String?
+  studentId String?
+  expiresAt DateTime
+  userAgent String?  // browser/device info
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  faculty   Faculty? @relation(fields: [facultyId], references: [id])
+  student   Student? @relation(fields: [studentId], references: [id])
+
+  @@index([facultyId])
+  @@index([studentId])
+  @@index([expiresAt])   // for TTL cleanup job
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 33. NOTIFICATION CONFIG
+//     Per-faculty notification preference toggles.
+//     One row per faculty per notification key.
+// ─────────────────────────────────────────────────────────────
+
+model NotificationConfig {
+  id           String          @id @default(uuid())
+  universityId String
+  facultyId    String
+  key          NotificationKey
+  enabled      Boolean         @default(true)
+  updatedAt    DateTime        @updatedAt
+
+  university   University @relation(fields: [universityId], references: [id])
+  faculty      Faculty    @relation(fields: [facultyId], references: [id])
+
+  @@unique([facultyId, key])
+  @@map("notification_configs")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 34. ATTENDANCE RULES
+//     University-level thresholds set by HOD in Settings.
+//     One row per university.
+// ─────────────────────────────────────────────────────────────
+
+model AttendanceRules {
+  id                  String   @id @default(uuid())
+  universityId        String   @unique
+  minThresholdPct     Float    @default(75)   // below = AT_RISK
+  warningThresholdPct Float    @default(80)   // below = warning notification
+  autoNotifyMentor    Boolean  @default(true)
+  autoLockAfterDays   Int      @default(7)    // lock after N days
+  updatedAt           DateTime @updatedAt
+
+  university University @relation(fields: [universityId], references: [id])
+
+  @@map("attendance_rules")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 35. ACTIVITY LOG
+//     Audit trail for the "Recent Activities" feed on dashboard.
+//     One row per HOD action (upload, publish, promote, etc.).
+// ─────────────────────────────────────────────────────────────
+
+model ActivityLog {
+  id           String       @id @default(uuid())
+  universityId String
+  facultyId    String
+  type         ActivityType
+  title        String       // "T2 Result uploaded"
+  description  String       // "T2 results for 12 subjects uploaded."
+  metadata     Json?        // arbitrary extra context
+  createdAt    DateTime     @default(now())
+
+  university   University @relation(fields: [universityId], references: [id])
+  faculty      Faculty    @relation(fields: [facultyId], references: [id])
+
+  @@index([universityId, createdAt])
+  @@index([facultyId, createdAt])
+  @@map("activity_logs")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 36. ARCHIVE JOB
+//     Tracks async archive/export jobs triggered from Settings
+//     Danger Zone. Celery (or bull queue) processes these.
+// ─────────────────────────────────────────────────────────────
+
+model ArchiveJob {
+  id             String    @id @default(uuid())
+  universityId   String
+  academicYearId String
+  requestedById  String    // HOD faculty id
+  status         JobStatus @default(QUEUED)
+  downloadUrl    String?   // S3 presigned URL when complete
+  errorMessage   String?
+  createdAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  university   University   @relation(fields: [universityId], references: [id])
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id])
+
+  @@index([universityId])
+  @@map("archive_jobs")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 37. PASSWORD RESET TOKEN
+//     Short-lived token for faculty password reset flow.
+// ─────────────────────────────────────────────────────────────
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  token     String   @unique    // hashed
+  facultyId String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([facultyId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}

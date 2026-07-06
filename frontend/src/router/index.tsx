@@ -18,6 +18,7 @@ import HodAnalytics from '@/pages/hod/AnalyticsPage'
 import HodPromotion from '@/pages/hod/PromotionPage'
 import HodCalendar from '@/pages/hod/CalendarPage'
 import HodSettings from '@/pages/hod/SettingsPage'
+import HodTimetable from '@/pages/hod/TimetablePage'
 
 // Faculty portal pages
 import FacDashboard from '@/pages/faculty/DashboardPage'
@@ -68,6 +69,7 @@ export const router = createBrowserRouter([
           { path: '/hod/results', element: <HodResults /> },
           { path: '/hod/attendance', element: <HodAttendance /> },
           { path: '/hod/subjects', element: <HodSubjects /> },
+          { path: '/hod/timetable', element: <HodTimetable /> },
           { path: '/hod/mentorship', element: <HodMentorship /> },
           { path: '/hod/analytics', element: <HodAnalytics /> },
           { path: '/hod/promotion', element: <HodPromotion /> },

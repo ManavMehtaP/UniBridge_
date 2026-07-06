@@ -1,203 +1,196 @@
-import { useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { CalendarCheck, Check, X } from 'lucide-react'
+import { AlertTriangle, Check, Copy, X } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
 import { errorMessage } from '@/api/client'
-import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
 import { PageShell } from '@/components/shared/PageShell'
 import { FilterBar } from '@/components/shared/FilterBar'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Select } from '@/components/ui/Select'
-import { Avatar } from '@/components/ui/Avatar'
-import { StatCard } from '@/components/ui/StatCard'
-import { Table, Td, Th, Tr } from '@/components/ui/Table'
-import { TableSkeleton, StatCardSkeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { CardSkeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
 
-export default function FacultyAttendancePage() {
-  const qc = useQueryClient()
-  const scope = useFacultyScope()
-  const summary = useQuery({ queryKey: ['faculty', 'attendance-summary'], queryFn: facultyApi.attendanceSummary })
+// Keyed by slotId so paired lectures (TOC,TOC) don't share state.
+type Marks = Record<string, Record<string, boolean>> // slotId -> enrollmentId -> present
+type ProxyMap = Record<string, string> // slotId -> replacement subjectId
 
-  const [subjectId, setSubjectId] = useState('')
+export default function FacultyAttendancePage() {
+  const batches = useQuery({ queryKey: ['faculty', 'hod-batches'], queryFn: facultyApi.hodBatches })
   const [batchId, setBatchId] = useState('')
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
-  const [marks, setMarks] = useState<Record<string, boolean>>({})
+  const [marks, setMarks] = useState<Marks>({})
+  const [proxy, setProxy] = useState<ProxyMap>({})
 
-  const canLoadSession = subjectId && batchId && date
-
-  const session = useQuery({
-    queryKey: ['faculty', 'attendance-session', { subjectId, batchId, date }],
-    queryFn: () => facultyApi.attendanceSession({ subjectId, batchId, lectureDate: date }),
-    enabled: !!canLoadSession,
+  const day = useQuery({
+    queryKey: ['faculty', 'att-day', batchId, date],
+    queryFn: () => facultyApi.attendanceDay(batchId, date),
+    enabled: !!batchId && !!date,
   })
 
-  const subjectOpts = useMemo(() => {
-    const seen = new Set<string>()
-    const opts: { value: string; label: string }[] = []
-    scope.data?.assignments.forEach((a) => {
-      if (!seen.has(a.subject.id)) { seen.add(a.subject.id); opts.push({ value: a.subject.id, label: `${a.subject.code} — ${a.subject.name}` }) }
+  // Seed local marks from server on batch/date change (server keys by slotId).
+  useEffect(() => {
+    if (!day.data) return
+    const seeded: Marks = {}
+    day.data.lectures.forEach((lec) => { seeded[lec.slotId] = {} })
+    Object.entries(day.data.marks).forEach(([k, v]) => {
+      const [enrollmentId, slotId] = k.split(':')
+      if (!seeded[slotId]) seeded[slotId] = {}
+      seeded[slotId][enrollmentId] = v
     })
-    return opts
-  }, [scope.data])
+    setMarks(seeded)
+    setProxy({})
+  }, [day.data])
 
-  const batchOpts = useMemo(() => {
-    if (!subjectId) return []
-    const seen = new Set<string>()
-    return scope.data?.assignments
-      .filter((a) => a.subject.id === subjectId)
-      .filter((a) => !seen.has(a.batch.id) && seen.add(a.batch.id))
-      .map((a) => ({ value: a.batch.id, label: `Batch ${a.batch.code}` })) ?? []
-  }, [scope.data, subjectId])
+  const effectiveSubject = (slotId: string, defaultSubjectId: string) => proxy[slotId] ?? defaultSubjectId
 
-  const post = useMutation({
-    mutationFn: () => {
-      const attendance = (session.data?.students ?? []).map((s) => ({
-        enrollmentId: s.enrollmentId,
-        isPresent: marks[s.enrollmentId] ?? false,
-      }))
-      return facultyApi.postAttendance({ subjectId, batchId, lectureDate: date, attendance })
-    },
-    onSuccess: (res: { recordsCreated?: number }) => {
-      toast.success(`Attendance saved (${res.recordsCreated ?? 0} students)`)
-      qc.invalidateQueries({ queryKey: ['faculty', 'attendance-session'] })
-      qc.invalidateQueries({ queryKey: ['faculty', 'attendance-summary'] })
-      setMarks({})
+  function toggle(slotId: string, enrollmentId: string) {
+    setMarks((m) => ({ ...m, [slotId]: { ...(m[slotId] ?? {}), [enrollmentId]: !(m[slotId]?.[enrollmentId] ?? false) } }))
+  }
+  function markAllInLecture(slotId: string, value: boolean) {
+    const entry: Record<string, boolean> = {}
+    day.data?.students.forEach((s) => (entry[s.enrollmentId] = value))
+    setMarks((m) => ({ ...m, [slotId]: entry }))
+  }
+  function copyFromLecture(sourceSlotId: string) {
+    const source = marks[sourceSlotId] ?? {}
+    if (Object.keys(source).length === 0) return toast.error('Mark this lecture first, then copy.')
+    const next: Marks = { ...marks }
+    day.data?.lectures.forEach((lec) => {
+      if (lec.slotId === sourceSlotId) return
+      next[lec.slotId] = { ...source }
+    })
+    setMarks(next)
+    toast.success('Copied to all other lectures')
+  }
+
+  const stats = useMemo(() => {
+    if (!day.data) return null
+    let total = 0, present = 0
+    day.data.lectures.forEach((lec) => {
+      const cells = marks[lec.slotId] ?? {}
+      day.data!.students.forEach((s) => {
+        if (cells[s.enrollmentId] != null) total++
+        if (cells[s.enrollmentId]) present++
+      })
+    })
+    return { total, present, absent: total - present }
+  }, [marks, day.data])
+
+  const save = useMutation({
+    mutationFn: () => facultyApi.attendanceDaySave({
+      batchId, date,
+      lectures: (day.data?.lectures ?? []).map((lec) => ({
+        slotId: lec.slotId,
+        subjectId: effectiveSubject(lec.slotId, lec.subjectId),
+        marks: marks[lec.slotId] ?? {},
+      })),
+    }),
+    onSuccess: (res: { inserted?: number; updated?: number }) => {
+      toast.success(`Saved (${res.inserted ?? 0} new, ${res.updated ?? 0} updated)`)
+      day.refetch()
     },
     onError: (e) => toast.error(errorMessage(e)),
   })
 
-  function markAll(value: boolean) {
-    const m: Record<string, boolean> = {}
-    session.data?.students.forEach((s) => (m[s.enrollmentId] = value))
-    setMarks(m)
-  }
-
-  const marked = session.data?.students.filter((s) => marks[s.enrollmentId] != null).length ?? 0
-  const total = session.data?.students.length ?? 0
-  const presentCount = Object.values(marks).filter(Boolean).length
+  const batchOpts = batches.data?.data.map((b) => ({ value: b.id, label: `Batch ${b.code}` })) ?? []
 
   return (
-    <PageShell title="Attendance" subtitle="Mark and track student attendance">
-      <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-4">
-        {summary.isLoading ? (
-          <StatCardSkeleton count={4} />
-        ) : summary.data ? (
-          <>
-            <StatCard value={`${Math.round(summary.data.overallAvgPct ?? 0)}%`} label="Overall Avg" icon={<CalendarCheck size={18} className="text-success" />} iconBg="var(--success-light)" />
-            <StatCard value={summary.data.totalLectures ?? 0} label="Lectures Taken" />
-            <StatCard value={summary.data.belowThresholdCount ?? 0} label="Below Threshold" delta="Needs attention" trend="down" />
-            <StatCard value={summary.data.pendingLectures ?? 0} label="Pending" />
-          </>
-        ) : null}
-      </div>
+    <PageShell title="Attendance" subtitle="Mark daily attendance by batch — lectures auto-fetched from the timetable">
+      <FilterBar>
+        <Select className="w-52" value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Select batch" options={batchOpts} />
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 rounded-sm border border-border bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10" />
+        {day.data && !day.data.isEditable && (
+          <Badge tone="danger" dot>Read-only (over 7 days old)</Badge>
+        )}
+        {day.data?.daysDelta === 0 && <Badge tone="primary" dot>Today</Badge>}
+      </FilterBar>
 
-      <Card className="mb-4">
-        <CardHeader title="Mark Attendance" subtitle="Choose subject, batch and date" />
-        <CardBody>
-          <FilterBar>
-            <Select className="w-64" value={subjectId} onChange={(e) => { setSubjectId(e.target.value); setBatchId(''); setMarks({}) }} placeholder="Subject" options={subjectOpts} />
-            <Select className="w-40" value={batchId} onChange={(e) => { setBatchId(e.target.value); setMarks({}) }} placeholder="Batch" options={batchOpts} disabled={!subjectId} />
-            <input type="date" value={date} onChange={(e) => { setDate(e.target.value); setMarks({}) }} className="h-10 rounded-sm border border-border bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10" />
-          </FilterBar>
-
-          {!canLoadSession ? (
-            <EmptyState title="Pick a subject, batch and date" description="Then mark each student present or absent." className="border-0" />
-          ) : session.isLoading ? (
-            <TableSkeleton rows={8} cols={4} />
-          ) : session.data && session.data.students.length === 0 ? (
-            <EmptyState title="No students in this batch" className="border-0" />
-          ) : (
-            <>
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-sm bg-surface-2 px-3 py-2">
-                <div className="text-xs text-text-secondary">
-                  Marked <b>{marked}</b> / <b>{total}</b> · Present <b className="text-success">{presentCount}</b> · Absent <b className="text-danger">{marked - presentCount}</b>
-                </div>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => markAll(true)}>Mark All Present</Button>
-                  <Button variant="outline" size="sm" onClick={() => markAll(false)}>Mark All Absent</Button>
-                </div>
-              </div>
-              <Table>
+      {!batchId ? (
+        <EmptyState title="Pick a batch" description="Choose a batch and date to load lectures." />
+      ) : day.isLoading ? (
+        <CardSkeleton height={400} />
+      ) : day.data && day.data.lectures.length === 0 ? (
+        <EmptyState
+          icon={<AlertTriangle size={22} />}
+          title="No lectures scheduled"
+          description="The HOD hasn't added lectures for this batch on this day. Add slots in HOD → Timetable."
+        />
+      ) : day.data ? (
+        <Card>
+          <CardHeader
+            title={new Date(date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
+            subtitle={stats ? `${day.data.lectures.length} lectures · ${day.data.students.length} students · ${stats.present}/${stats.total} present marked` : undefined}
+            action={<Button onClick={() => save.mutate()} loading={save.isPending} disabled={!day.data.isEditable}>Save Attendance</Button>}
+          />
+          <CardBody className="pt-0">
+            <div className="scrollbar-thin overflow-x-auto rounded-sm border border-border">
+              <table className="min-w-full text-[13px]">
                 <thead>
-                  <tr>
-                    <Th>Student</Th>
-                    <Th>Enrollment No.</Th>
-                    <Th>Roll No.</Th>
-                    <Th className="text-right">Status</Th>
+                  <tr className="bg-surface-2">
+                    <th className="sticky left-0 z-10 border-r border-border bg-surface-2 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Roll No.</th>
+                    <th className="sticky left-[80px] z-10 border-r border-border bg-surface-2 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">Student</th>
+                    {day.data.lectures.map((lec) => {
+                      const swapped = proxy[lec.slotId] && proxy[lec.slotId] !== lec.subjectId
+                      const effSub = day.data!.subjects.find((s) => s.id === effectiveSubject(lec.slotId, lec.subjectId))
+                      return (
+                        <th key={lec.slotId} className="min-w-[120px] border-r border-border-light px-2 py-2 text-center">
+                          <div className="mb-1 text-[11px] font-semibold text-primary">{lec.slotStart}–{lec.slotEnd}</div>
+                          <Select
+                            className="mb-1 h-7 text-xs"
+                            value={effectiveSubject(lec.slotId, lec.subjectId)}
+                            onChange={(e) => setProxy((p) => ({ ...p, [lec.slotId]: e.target.value }))}
+                            options={day.data!.subjects.map((s) => ({ value: s.id, label: s.code }))}
+                          />
+                          <div className="truncate text-[10px] text-text-muted">{effSub?.name ?? lec.subjectName}</div>
+                          {swapped && <Badge tone="warning">Proxy</Badge>}
+                          <div className="mt-1.5 flex justify-center gap-0.5">
+                            <button onClick={() => markAllInLecture(lec.slotId, true)} title="All present" className="rounded-xs border border-border bg-surface px-1.5 text-[10px] font-semibold text-success hover:bg-success-light">All ✓</button>
+                            <button onClick={() => markAllInLecture(lec.slotId, false)} title="All absent" className="rounded-xs border border-border bg-surface px-1.5 text-[10px] font-semibold text-danger hover:bg-danger-light">All ✗</button>
+                            <button onClick={() => copyFromLecture(lec.slotId)} title="Copy to others" className="flex items-center rounded-xs border border-border bg-surface px-1.5 text-[10px] font-semibold text-primary hover:bg-primary-light"><Copy size={10} /></button>
+                          </div>
+                        </th>
+                      )
+                    })}
                   </tr>
                 </thead>
                 <tbody>
-                  {session.data?.students.map((s) => {
-                    const state = marks[s.enrollmentId]
-                    return (
-                      <Tr key={s.enrollmentId}>
-                        <Td>
-                          <div className="flex items-center gap-2.5">
-                            <Avatar name={s.name} size={30} />
-                            <span className="font-medium">{s.name}</span>
-                          </div>
-                        </Td>
-                        <Td className="font-mono text-xs text-text-secondary">{s.enrollmentNo}</Td>
-                        <Td className="whitespace-nowrap text-text-secondary">{s.rollNo ?? '—'}</Td>
-                        <Td>
-                          <div className="flex justify-end gap-1">
-                            <button onClick={() => setMarks((m) => ({ ...m, [s.enrollmentId]: true }))} className={cn('flex h-8 w-8 items-center justify-center rounded-sm border transition', state === true ? 'bg-success text-white border-success' : 'border-border text-text-secondary hover:bg-success-light hover:text-success')} title="Present">
-                              <Check size={16} />
+                  {day.data.students.map((stu) => (
+                    <tr key={stu.enrollmentId} className="border-t border-border-light hover:bg-surface-2">
+                      <td className="sticky left-0 z-10 border-r border-border bg-surface px-3 py-1.5 font-mono text-xs text-text-secondary">{stu.rollNo}</td>
+                      <td className="sticky left-[80px] z-10 border-r border-border bg-surface px-3 py-1.5 font-medium">{stu.name}</td>
+                      {day.data!.lectures.map((lec) => {
+                        const state = marks[lec.slotId]?.[stu.enrollmentId]
+                        return (
+                          <td key={lec.slotId} className="border-r border-border-light px-2 py-1.5 text-center">
+                            <button
+                              disabled={!day.data!.isEditable}
+                              onClick={() => toggle(lec.slotId, stu.enrollmentId)}
+                              className={cn(
+                                'flex h-7 w-7 mx-auto items-center justify-center rounded-sm border transition',
+                                state === true && 'bg-success border-success text-white',
+                                state === false && 'bg-danger border-danger text-white',
+                                state == null && 'border-border text-text-muted hover:bg-surface-2',
+                                !day.data!.isEditable && 'cursor-not-allowed opacity-60',
+                              )}
+                              title={state === true ? 'Present — click to toggle' : state === false ? 'Absent — click to toggle' : 'Not marked'}
+                            >
+                              {state === true ? <Check size={14} /> : state === false ? <X size={14} /> : '—'}
                             </button>
-                            <button onClick={() => setMarks((m) => ({ ...m, [s.enrollmentId]: false }))} className={cn('flex h-8 w-8 items-center justify-center rounded-sm border transition', state === false ? 'bg-danger text-white border-danger' : 'border-border text-text-secondary hover:bg-danger-light hover:text-danger')} title="Absent">
-                              <X size={16} />
-                            </button>
-                          </div>
-                        </Td>
-                      </Tr>
-                    )
-                  })}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
                 </tbody>
-              </Table>
-              <div className="mt-4 flex justify-end">
-                <Button onClick={() => post.mutate()} loading={post.isPending} disabled={marked === 0}>
-                  Save Attendance ({marked} marked)
-                </Button>
-              </div>
-            </>
-          )}
-        </CardBody>
-      </Card>
-
-      <Card>
-        <CardHeader title="Below Threshold" subtitle="Students below 75% attendance in your subjects" />
-        <CardBody className="pt-0">
-          <BelowThresholdList />
-        </CardBody>
-      </Card>
-    </PageShell>
-  )
-}
-
-function BelowThresholdList() {
-  const list = useQuery({ queryKey: ['faculty', 'below-threshold'], queryFn: () => facultyApi.belowThreshold({}) })
-  if (list.isLoading) return <TableSkeleton rows={4} cols={4} />
-  const rows = (list.data as { data?: { enrollmentNo: string; name: string; subjectCode?: string; attendancePct: number }[] })?.data ?? []
-  if (rows.length === 0) return <EmptyState title="No at-risk students" description="Everyone is above threshold. 🎉" className="border-0" />
-  return (
-    <ul className="divide-y divide-border-light">
-      {rows.map((r) => (
-        <li key={r.enrollmentNo + (r.subjectCode ?? '')} className="flex items-center justify-between py-2.5">
-          <div className="flex items-center gap-2.5">
-            <Avatar name={r.name} size={30} />
-            <div>
-              <div className="text-[13px] font-semibold text-text-primary">{r.name}</div>
-              <div className="text-xs text-text-muted">{r.enrollmentNo} {r.subjectCode && `· ${r.subjectCode}`}</div>
+              </table>
             </div>
-          </div>
-          <Badge tone="danger">{Math.round(r.attendancePct)}%</Badge>
-        </li>
-      ))}
-    </ul>
+          </CardBody>
+        </Card>
+      ) : null}
+    </PageShell>
   )
 }

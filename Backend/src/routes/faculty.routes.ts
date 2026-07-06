@@ -121,6 +121,19 @@ facultyRouter.get("/attendance/pending", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyAttendancePending(req.user!.id, req.user!.universityId, req.query.semesterId as string | undefined));
 }));
 
+// Batches visible to faculty for daily attendance (all batches in tenant/dept).
+facultyRouter.get("/hod-batches", asyncHandler(async (req, res) => {
+  res.json(await portalService.facultyHodBatches(req.user!.universityId, req.user!.id));
+}));
+
+// Daily attendance MATRIX (students x lectures) for a batch on a date.
+facultyRouter.get("/attendance/day", asyncHandler(async (req, res) => {
+  res.json(await portalService.facultyAttendanceDay(req.user!.universityId, req.user!.id, str(req.query.batchId), str(req.query.date)));
+}));
+facultyRouter.post("/attendance/day", asyncHandler(async (req, res) => {
+  res.json(await portalService.facultyAttendanceDaySave(req.user!.universityId, req.user!.id, req.body));
+}));
+
 facultyRouter.get("/attendance/session", asyncHandler(async (req, res) => {
   res.json(
     await portalService.facultyAttendanceSession(

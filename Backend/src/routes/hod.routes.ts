@@ -200,3 +200,12 @@ hodRouter.post("/settings/danger/reset-mentor-assignments", asyncHandler(async (
 hodRouter.delete("/settings/danger/attendance-records", asyncHandler(async (req, res) => res.json(await portalService.deleteAttendanceRecords(String(req.body.semesterId), Boolean(req.body.confirm)))));
 hodRouter.post("/settings/danger/archive-year", asyncHandler(async (req, res) => res.status(202).json(await portalService.archiveYear(String(req.body.academicYearId)))));
 hodRouter.get("/settings/danger/archive-status/:jobId", asyncHandler(async (req, res) => res.json(await portalService.archiveStatus(str(req.params.jobId)))));
+
+// ── Timetable CRUD (HOD) ────────────────────────────────
+hodRouter.get("/timetable", asyncHandler(async (req, res) => res.json(await portalService.listTimetable(scopeFrom(req), req.query.batchId as string | undefined, req.query.semesterId as string | undefined))));
+hodRouter.post("/timetable", asyncHandler(async (req, res) => res.status(201).json(await portalService.createTimetableSlot(scopeFrom(req), req.body))));
+hodRouter.put("/timetable/:slotId", asyncHandler(async (req, res) => res.json(await portalService.updateTimetableSlot(str(req.params.slotId), req.body))));
+hodRouter.delete("/timetable/:slotId", asyncHandler(async (req, res) => {
+  await portalService.deleteTimetableSlot(str(req.params.slotId));
+  res.status(204).send();
+}));

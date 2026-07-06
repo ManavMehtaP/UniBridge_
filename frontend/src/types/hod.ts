@@ -234,3 +234,18 @@ export interface NotificationPref {
   label: string
   enabled: boolean
 }
+
+export interface HodTimetableSlot {
+  id: string
+  dayOfWeek: number
+  slotStart: string
+  slotEnd: string
+  room?: string | null
+  batchId: string
+  batchCode: string
+  subjectId: string
+  subjectCode: string
+  subjectName: string
+  facultyId?: string | null
+  facultyName?: string | null
+}

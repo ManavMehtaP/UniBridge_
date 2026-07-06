@@ -3,6 +3,7 @@ import {
   BookOpen,
   Calendar,
   CalendarCheck,
+  CalendarDays,
   ClipboardList,
   LayoutDashboard,
   RefreshCw,
@@ -23,6 +24,7 @@ export const hodNavItems: NavSection[] = [
       { id: 'results', label: 'Results', path: '/hod/results', icon: ClipboardList },
       { id: 'attendance', label: 'Attendance', path: '/hod/attendance', icon: CalendarCheck },
       { id: 'subjects', label: 'Subjects', path: '/hod/subjects', icon: BookOpen },
+      { id: 'timetable', label: 'Timetable', path: '/hod/timetable', icon: CalendarDays },
     ],
   },
   {

@@ -3401,4 +3401,194 @@ export const portalService = {
   async studentStudyPlannerAiStatus(jobId: string) {
     return { jobId, status: "complete", suggestions: [] };
   },
+
+  // ─── HOD: Timetable CRUD ───────────────────────────────────
+  async listTimetable(scope: Scope, batchId?: string, semesterId?: string) {
+    const semId = semesterId || (await getActiveSemester(scope.universityId)).id;
+    const slots = await prisma.timetableSlot.findMany({
+      where: { semesterId: semId, ...(batchId ? { batchId } : { batchId: { in: scope.hodBatchIds } }) },
+      include: { subject: { select: { id: true, code: true, name: true } }, batch: { select: { id: true, code: true } } },
+      orderBy: [{ dayOfWeek: "asc" }, { slotStart: "asc" }],
+    });
+    const facultyIds = [...new Set(slots.map((s) => s.facultyId).filter(Boolean) as string[])];
+    const faculties = facultyIds.length
+      ? await prisma.faculty.findMany({ where: { id: { in: facultyIds } }, select: { id: true, name: true, employeeId: true } })
+      : [];
+    const facById = new Map(faculties.map((f) => [f.id, f]));
+    return {
+      semesterId: semId,
+      slots: slots.map((s) => ({
+        id: s.id, dayOfWeek: s.dayOfWeek, slotStart: s.slotStart, slotEnd: s.slotEnd, room: s.room,
+        batchId: s.batchId, batchCode: s.batch.code,
+        subjectId: s.subjectId, subjectCode: s.subject.code, subjectName: s.subject.name,
+        facultyId: s.facultyId, facultyName: s.facultyId ? facById.get(s.facultyId)?.name ?? null : null,
+      })),
+    };
+  },
+
+  async createTimetableSlot(scope: Scope, body: { batchId: string; subjectId: string; facultyId?: string | null; dayOfWeek: number; slotStart: string; slotEnd: string; room?: string; semesterId?: string }) {
+    const semId = body.semesterId || (await getActiveSemester(scope.universityId)).id;
+    if (!scope.hodBatchIds.includes(body.batchId)) throw new ApiError(403, "BATCH_NOT_IN_SCOPE", "Batch not in your scope.");
+    const slot = await prisma.timetableSlot.create({
+      data: {
+        semesterId: semId, batchId: body.batchId, subjectId: body.subjectId,
+        facultyId: body.facultyId ?? null,
+        dayOfWeek: body.dayOfWeek, slotStart: body.slotStart, slotEnd: body.slotEnd,
+        room: body.room ?? null,
+      },
+    });
+    return { id: slot.id };
+  },
+
+  async updateTimetableSlot(id: string, body: Partial<{ subjectId: string; facultyId: string | null; dayOfWeek: number; slotStart: string; slotEnd: string; room: string | null }>) {
+    await prisma.timetableSlot.update({
+      where: { id },
+      data: {
+        subjectId: body.subjectId, facultyId: body.facultyId,
+        dayOfWeek: body.dayOfWeek, slotStart: body.slotStart, slotEnd: body.slotEnd,
+        room: body.room,
+      },
+    });
+    return { id };
+  },
+
+  async deleteTimetableSlot(id: string) {
+    await prisma.timetableSlot.delete({ where: { id } });
+  },
+
+  // ─── Faculty: batches under HOD (all in dept) ──────────────
+  async facultyHodBatches(universityId: string, facultyId: string) {
+    const me = await facultyById(facultyId);
+    const activeSem = await getActiveSemester(universityId);
+    const batches = await prisma.batch.findMany({
+      where: { universityId, academicYearId: activeSem.academicYearId || undefined },
+      orderBy: { code: "asc" },
+    });
+    // Filter to dept-aligned batches: for now return all — dept mapping isn't on Batch.
+    // ponytail: department scoping when Batch.department exists.
+    void me;
+    return {
+      activeSemester: { id: activeSem.id, label: activeSem.label },
+      data: batches.map((b) => ({ id: b.id, code: b.code, yearLevel: b.yearLevel })),
+    };
+  },
+
+  // ─── Faculty: daily attendance matrix ──────────────────────
+  async facultyAttendanceDay(universityId: string, facultyId: string, batchId: string, dateStr: string) {
+    if (!batchId || !dateStr) throw new ApiError(400, "VALIDATION_ERROR", "batchId and date are required.");
+    const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) throw new ApiError(400, "VALIDATION_ERROR", "Invalid date.");
+    // ponytail: use DB `Date` (day-only) — align to UTC midnight
+    const day = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayOfWeek = day.getUTCDay(); // 0=Sun..6=Sat
+    const activeSem = await getActiveSemester(universityId);
+
+    const slots = await prisma.timetableSlot.findMany({
+      where: { batchId, semesterId: activeSem.id, dayOfWeek },
+      include: { subject: { select: { id: true, code: true, name: true } } },
+      orderBy: { slotStart: "asc" },
+    });
+
+    const enrollments = await prisma.studentEnrollment.findMany({
+      where: { batchId, semesterId: activeSem.id, isCurrent: true },
+      include: { student: { select: { id: true, name: true, enrollmentNo: true } } },
+      orderBy: { rollNo: "asc" },
+    });
+
+    // Existing marks for THIS batch on THIS date, keyed by slot so paired lectures stay separate.
+    const enrollmentIds = enrollments.map((e) => e.id);
+    const slotIds = slots.map((s) => s.id);
+    const existing = slotIds.length && enrollmentIds.length
+      ? await prisma.attendanceRecord.findMany({
+        where: { enrollmentId: { in: enrollmentIds }, lectureDate: day, slotId: { in: slotIds } },
+      })
+      : [];
+    // key: `${enrollmentId}:${slotId}` — frontend reads by slot
+    const markMap: Record<string, boolean> = {};
+    for (const r of existing) if (r.slotId) markMap[`${r.enrollmentId}:${r.slotId}`] = r.isPresent;
+
+    // 7-day edit window (past only). Future dates blocked here too.
+    const now = new Date();
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const daysDelta = Math.round((today.getTime() - day.getTime()) / 86400000);
+    const isEditable = daysDelta >= 0 && daysDelta <= 7;
+
+    // Subject-swap suggestions: any subject in the same semester, in case of proxy
+    const allSubjects = await prisma.subject.findMany({
+      where: { semesterId: activeSem.id, deletedAt: null },
+      select: { id: true, code: true, name: true },
+    });
+
+    void facultyId;
+    return {
+      date: day.toISOString().slice(0, 10),
+      dayOfWeek,
+      isEditable,
+      daysDelta,
+      lectures: slots.map((s) => ({
+        slotId: s.id,
+        subjectId: s.subjectId,
+        subjectCode: s.subject.code,
+        subjectName: s.subject.name,
+        slotStart: s.slotStart,
+        slotEnd: s.slotEnd,
+        room: s.room,
+      })),
+      students: enrollments.map((e) => ({
+        enrollmentId: e.id,
+        rollNo: e.rollNo,
+        name: e.student.name,
+        enrollmentNo: e.student.enrollmentNo,
+      })),
+      marks: markMap,
+      subjects: allSubjects,
+    };
+  },
+
+  async facultyAttendanceDaySave(universityId: string, facultyId: string, body: {
+    batchId: string;
+    date: string;
+    lectures: { slotId?: string; subjectId: string; marks: Record<string, boolean> }[];
+  }) {
+    if (!body.batchId || !body.date || !Array.isArray(body.lectures)) throw new ApiError(400, "VALIDATION_ERROR", "batchId, date, lectures required.");
+    const d = new Date(body.date);
+    const day = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const now = new Date();
+    const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const daysDelta = Math.round((today.getTime() - day.getTime()) / 86400000);
+    if (daysDelta < 0) throw new ApiError(400, "FUTURE_DATE", "Cannot mark future attendance.");
+    if (daysDelta > 7) throw new ApiError(403, "EDIT_WINDOW_EXPIRED", "Attendance older than 7 days cannot be edited.");
+
+    const activeSem = await getActiveSemester(universityId);
+    const enrollments = await prisma.studentEnrollment.findMany({
+      where: { batchId: body.batchId, semesterId: activeSem.id, isCurrent: true },
+      select: { id: true },
+    });
+    const enrIds = new Set(enrollments.map((e) => e.id));
+
+    let inserted = 0, updated = 0;
+    for (const lec of body.lectures) {
+      if (!lec.slotId) continue; // ponytail: require slotId so paired lectures don't collide
+      for (const [enrollmentId, isPresent] of Object.entries(lec.marks)) {
+        if (!enrIds.has(enrollmentId)) continue;
+        const existing = await prisma.attendanceRecord.findFirst({
+          where: { enrollmentId, lectureDate: day, slotId: lec.slotId },
+        });
+        if (existing) {
+          if (existing.isLocked) continue;
+          await prisma.attendanceRecord.update({
+            where: { id: existing.id },
+            data: { isPresent, facultyId, subjectId: lec.subjectId },
+          });
+          updated++;
+        } else {
+          await prisma.attendanceRecord.create({
+            data: { enrollmentId, subjectId: lec.subjectId, slotId: lec.slotId, facultyId, lectureDate: day, isPresent },
+          });
+          inserted++;
+        }
+      }
+    }
+    return { inserted, updated };
+  },
 };
