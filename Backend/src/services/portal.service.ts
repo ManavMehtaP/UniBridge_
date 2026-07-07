@@ -124,6 +124,27 @@ async function phaseById(phaseId: string) {
   return p;
 }
 
+async function requireExamCoordinator(facultyId: string, universityId: string) {
+  const semester = await getActiveSemester(universityId);
+  const coordinator = semester.id
+    ? await prisma.examCoordinator.findFirst({ where: { semesterId: semester.id, facultyId } })
+    : null;
+  if (!coordinator) throw new ApiError(403, "NOT_EXAM_COORDINATOR", "Only an exam coordinator can do this.");
+  return { coordinator, semester };
+}
+
+// ponytail: enrollment-no range is a string compare — works because a college's
+// enrollment numbers share one fixed-width format. Revisit if formats ever mix.
+async function examRangeEnrollments(batchId: string, semesterId: string, from: string, to: string) {
+  const enrs = await prisma.studentEnrollment.findMany({
+    where: { batchId, semesterId, isCurrent: true },
+    include: { student: { select: { enrollmentNo: true, name: true } } },
+  });
+  return enrs
+    .filter((e) => e.student.enrollmentNo >= from && e.student.enrollmentNo <= to)
+    .sort((a, b) => a.student.enrollmentNo.localeCompare(b.student.enrollmentNo));
+}
+
 async function enrollmentById(enrollmentId: string) {
   const e = await prisma.studentEnrollment.findUnique({ where: { id: enrollmentId } });
   if (!e) throw new ApiError(404, "ENROLLMENT_NOT_FOUND", "Enrollment not found.");
@@ -3491,6 +3512,237 @@ export const portalService = {
       data: { isRead: true },
     });
     return { updated: r.count };
+  },
+
+  // ─── Exam coordination (paper checking + publish) ──────────
+  // T1–T3 papers are out of 25. T4 is written out of 50 and stored ÷2 (max 25).
+  async examCoordinators(scope: Scope) {
+    const sem = await getActiveSemester(scope.universityId);
+    const rows = sem.id ? await prisma.examCoordinator.findMany({ where: { semesterId: sem.id } }) : [];
+    const facIds = rows.map((r) => r.facultyId);
+    const facs = facIds.length ? await prisma.faculty.findMany({ where: { id: { in: facIds } }, select: { id: true, name: true, employeeId: true } }) : [];
+    const byId = new Map(facs.map((f) => [f.id, f]));
+    const options = await prisma.faculty.findMany({
+      where: { universityId: scope.universityId, isHod: false, isActive: true, deletedAt: null },
+      select: { id: true, name: true, employeeId: true }, orderBy: { name: "asc" },
+    });
+    return {
+      semesterId: sem.id,
+      coordinators: [1, 2].map((slot) => {
+        const row = rows.find((r) => r.slot === slot);
+        const f = row ? byId.get(row.facultyId) : undefined;
+        return { slot, facultyId: row?.facultyId ?? null, name: f?.name ?? null, employeeId: f?.employeeId ?? null };
+      }),
+      facultyOptions: options,
+    };
+  },
+
+  async assignExamCoordinator(scope: Scope, slot: number, facultyId: string) {
+    if (slot !== 1 && slot !== 2) throw new ApiError(400, "VALIDATION_ERROR", "Slot must be 1 or 2.");
+    const sem = await getActiveSemester(scope.universityId);
+    if (!sem.id) throw new ApiError(400, "NO_ACTIVE_SEMESTER", "No active semester.");
+    const fac = await prisma.faculty.findFirst({ where: { id: facultyId, universityId: scope.universityId, isHod: false, deletedAt: null } });
+    if (!fac) throw new ApiError(404, "FACULTY_NOT_FOUND", "Faculty not found or is a HOD.");
+    const other = await prisma.examCoordinator.findFirst({ where: { semesterId: sem.id, facultyId, NOT: { slot } } });
+    if (other) throw new ApiError(409, "ALREADY_COORDINATOR", "This faculty already holds the other coordinator slot.");
+    await prisma.examCoordinator.upsert({
+      where: { semesterId_slot: { semesterId: sem.id, slot } },
+      update: { facultyId, assignedById: scope.userId },
+      create: { universityId: scope.universityId, semesterId: sem.id, slot, facultyId, assignedById: scope.userId },
+    });
+    await this.notifyMany(scope.universityId, [{ facultyId }], "EXAM_COORDINATOR_ASSIGNED",
+      `You are Exam-Coordinator-${slot}`, `The HOD assigned you as Exam-Coordinator-${slot} for ${sem.label}.`, "/faculty/exams");
+    return { slot, facultyId, name: fac.name };
+  },
+
+  async removeExamCoordinator(scope: Scope, slot: number) {
+    const sem = await getActiveSemester(scope.universityId);
+    await prisma.examCoordinator.deleteMany({ where: { semesterId: sem.id, slot } });
+    return { removed: true };
+  },
+
+  async facultyExamStatus(facultyId: string, universityId: string) {
+    const sem = await getActiveSemester(universityId);
+    const row = sem.id ? await prisma.examCoordinator.findFirst({ where: { semesterId: sem.id, facultyId } }) : null;
+    return { isCoordinator: !!row, slot: row?.slot ?? null, semesterId: sem.id, semesterLabel: sem.label };
+  },
+
+  async examContext(universityId: string) {
+    const sem = await getActiveSemester(universityId);
+    if (!sem.id) return { semesterId: "", phases: [], subjects: [], batches: [], faculty: [] };
+    const [phases, subjects, batches, faculty] = await Promise.all([
+      prisma.phase.findMany({ where: { semesterId: sem.id }, orderBy: { number: "asc" } }),
+      prisma.subject.findMany({ where: { semesterId: sem.id, deletedAt: null }, orderBy: { code: "asc" } }),
+      prisma.batch.findMany({ where: { academicYearId: sem.academicYearId }, orderBy: { code: "asc" } }),
+      prisma.faculty.findMany({ where: { universityId, isHod: false, isActive: true, deletedAt: null }, select: { id: true, name: true, employeeId: true }, orderBy: { name: "asc" } }),
+    ]);
+    return {
+      semesterId: sem.id,
+      phases: phases.map((p) => ({ id: p.id, label: p.label, number: p.number, entryMax: p.number === 4 ? 50 : 25 })),
+      subjects: subjects.map((s) => ({ id: s.id, code: s.code, name: s.name })),
+      batches: batches.map((b) => ({ id: b.id, code: b.code })),
+      faculty,
+    };
+  },
+
+  async examAssignments(universityId: string, opts: { phaseId?: string; facultyId?: string } = {}) {
+    const sem = await getActiveSemester(universityId);
+    if (!sem.id) return { data: [] };
+    const rows = await prisma.paperCheckAssignment.findMany({
+      where: { semesterId: sem.id, ...(opts.phaseId ? { phaseId: opts.phaseId } : {}), ...(opts.facultyId ? { facultyId: opts.facultyId } : {}) },
+      orderBy: { createdAt: "desc" },
+    });
+    if (rows.length === 0) return { data: [] };
+    const [phases, subjects, batches, facs] = await Promise.all([
+      prisma.phase.findMany({ where: { semesterId: sem.id } }),
+      prisma.subject.findMany({ where: { semesterId: sem.id } }),
+      prisma.batch.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.batchId))] } } }),
+      prisma.faculty.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.facultyId))] } }, select: { id: true, name: true } }),
+    ]);
+    const phaseById2 = new Map(phases.map((p) => [p.id, p]));
+    const subjById = new Map(subjects.map((s) => [s.id, s]));
+    const batchById2 = new Map(batches.map((b) => [b.id, b]));
+    const facById = new Map(facs.map((f) => [f.id, f]));
+    const data = await Promise.all(rows.map(async (r) => {
+      const enrs = await examRangeEnrollments(r.batchId, sem.id, r.fromEnrollmentNo, r.toEnrollmentNo);
+      const ids = enrs.map((e) => e.id);
+      const results = ids.length ? await prisma.result.findMany({ where: { enrollmentId: { in: ids }, phaseId: r.phaseId, subjectId: r.subjectId }, select: { isPublished: true } }) : [];
+      const marked = results.length;
+      const published = results.length > 0 && results.every((x) => x.isPublished);
+      return {
+        id: r.id, phaseId: r.phaseId, phaseLabel: phaseById2.get(r.phaseId)?.label ?? "?",
+        subjectId: r.subjectId, subjectCode: subjById.get(r.subjectId)?.code ?? "?",
+        batchId: r.batchId, batchCode: batchById2.get(r.batchId)?.code ?? "?",
+        facultyId: r.facultyId, facultyName: facById.get(r.facultyId)?.name ?? "?",
+        fromEnrollmentNo: r.fromEnrollmentNo, toEnrollmentNo: r.toEnrollmentNo,
+        totalStudents: ids.length, markedCount: marked,
+        status: published ? "Published" : marked === 0 ? "Pending" : marked < ids.length ? "In Progress" : "Complete",
+        createdAt: r.createdAt,
+      };
+    }));
+    return { data };
+  },
+
+  async createExamAssignment(coordId: string, universityId: string, body: { phaseId: string; subjectId: string; batchId: string; facultyId: string; fromEnrollmentNo: string; toEnrollmentNo: string }) {
+    const { semester } = await requireExamCoordinator(coordId, universityId);
+    for (const k of ["phaseId", "subjectId", "batchId", "facultyId", "fromEnrollmentNo", "toEnrollmentNo"] as const) {
+      if (!body[k]) throw new ApiError(400, "VALIDATION_ERROR", `${k} is required.`);
+    }
+    const from = body.fromEnrollmentNo.trim().toUpperCase();
+    const to = body.toEnrollmentNo.trim().toUpperCase();
+    if (from > to) throw new ApiError(400, "VALIDATION_ERROR", "From-enrollment must not be greater than to-enrollment.");
+    const enrs = await examRangeEnrollments(body.batchId, semester.id, from, to);
+    if (enrs.length === 0) throw new ApiError(400, "EMPTY_RANGE", "No students found in that enrollment range for this batch.");
+    const siblings = await prisma.paperCheckAssignment.findMany({ where: { semesterId: semester.id, phaseId: body.phaseId, subjectId: body.subjectId, batchId: body.batchId } });
+    if (siblings.some((s) => from <= s.toEnrollmentNo && to >= s.fromEnrollmentNo)) {
+      throw new ApiError(409, "RANGE_OVERLAP", "This range overlaps an existing assignment for the same paper.");
+    }
+    const row = await prisma.paperCheckAssignment.create({
+      data: { universityId, semesterId: semester.id, phaseId: body.phaseId, subjectId: body.subjectId, batchId: body.batchId, facultyId: body.facultyId, fromEnrollmentNo: from, toEnrollmentNo: to, assignedById: coordId },
+    });
+    const [subject, phase] = await Promise.all([subjectById(body.subjectId), phaseById(body.phaseId)]);
+    await this.notifyMany(universityId, [{ facultyId: body.facultyId }], "PAPER_CHECK_ASSIGNED",
+      `Papers to check — ${subject.code} ${phase.label}`,
+      `You have ${enrs.length} papers to check (${from} to ${to}).`, "/faculty/exams");
+    return { id: row.id, studentCount: enrs.length };
+  },
+
+  async deleteExamAssignment(coordId: string, universityId: string, id: string) {
+    await requireExamCoordinator(coordId, universityId);
+    await prisma.paperCheckAssignment.deleteMany({ where: { id, universityId } });
+    return { deleted: true };
+  },
+
+  async examAssignmentStudents(facultyId: string, universityId: string, assignmentId: string) {
+    const a = await prisma.paperCheckAssignment.findUnique({ where: { id: assignmentId } });
+    if (!a || a.universityId !== universityId) throw new ApiError(404, "NOT_FOUND", "Assignment not found.");
+    if (a.facultyId !== facultyId) {
+      const coord = await prisma.examCoordinator.findFirst({ where: { semesterId: a.semesterId, facultyId } });
+      if (!coord) throw new ApiError(403, "FORBIDDEN", "This paper set is not assigned to you.");
+    }
+    const [phase, subject, batch] = await Promise.all([phaseById(a.phaseId), subjectById(a.subjectId), batchById(a.batchId)]);
+    const entryMax = phase.number === 4 ? 50 : 25;
+    const enrs = await examRangeEnrollments(a.batchId, a.semesterId, a.fromEnrollmentNo, a.toEnrollmentNo);
+    const results = await prisma.result.findMany({ where: { enrollmentId: { in: enrs.map((e) => e.id) }, phaseId: a.phaseId, subjectId: a.subjectId } });
+    const resByEnr = new Map(results.map((r) => [r.enrollmentId, r]));
+    return {
+      assignment: {
+        id: a.id, phaseLabel: phase.label, phaseNumber: phase.number, entryMax,
+        subjectCode: subject.code, subjectName: subject.name, batchCode: batch.code,
+        fromEnrollmentNo: a.fromEnrollmentNo, toEnrollmentNo: a.toEnrollmentNo,
+        isPublished: results.length > 0 && results.every((r) => r.isPublished),
+      },
+      students: enrs.map((e) => {
+        const r = resByEnr.get(e.id);
+        return {
+          enrollmentId: e.id, rollNo: e.rollNo, enrollmentNo: e.student.enrollmentNo, name: e.student.name,
+          // stored marks are always /25; show the entry-scale value (T4 doubles back to /50)
+          enteredMarks: r ? r.marksObtained * (entryMax === 50 ? 2 : 1) : null,
+          grade: r?.grade ?? null, isPublished: r?.isPublished ?? false,
+        };
+      }),
+    };
+  },
+
+  async saveExamAssignmentMarks(facultyId: string, universityId: string, assignmentId: string, marks: { enrollmentId: string; marks: number | null }[]) {
+    const a = await prisma.paperCheckAssignment.findUnique({ where: { id: assignmentId } });
+    if (!a || a.universityId !== universityId) throw new ApiError(404, "NOT_FOUND", "Assignment not found.");
+    if (a.facultyId !== facultyId) {
+      const coord = await prisma.examCoordinator.findFirst({ where: { semesterId: a.semesterId, facultyId } });
+      if (!coord) throw new ApiError(403, "FORBIDDEN", "This paper set is not assigned to you.");
+    }
+    const phase = await phaseById(a.phaseId);
+    const entryMax = phase.number === 4 ? 50 : 25;
+    const allowedIds = new Set((await examRangeEnrollments(a.batchId, a.semesterId, a.fromEnrollmentNo, a.toEnrollmentNo)).map((e) => e.id));
+    let saved = 0;
+    for (const m of marks) {
+      if (m.marks == null) continue;
+      if (!allowedIds.has(m.enrollmentId)) throw new ApiError(400, "OUT_OF_RANGE", "Student is outside your assigned range.");
+      if (!Number.isFinite(m.marks) || m.marks < 0 || m.marks > entryMax) {
+        throw new ApiError(400, "VALIDATION_ERROR", `Marks must be between 0 and ${entryMax}.`);
+      }
+      const stored = entryMax === 50 ? m.marks / 2 : m.marks; // T4: /50 entry → /25 stored
+      const existing = await prisma.result.findUnique({
+        where: { enrollmentId_phaseId_subjectId: { enrollmentId: m.enrollmentId, phaseId: a.phaseId, subjectId: a.subjectId } },
+      });
+      if (existing?.isPublished) throw new ApiError(409, "ALREADY_PUBLISHED", "Marks are live — they can no longer be edited.");
+      const grade = gradeFromPct((stored / 25) * 100);
+      if (existing) {
+        await prisma.result.update({ where: { id: existing.id }, data: { marksObtained: stored, maxMarks: 25, grade, uploadedById: facultyId } });
+      } else {
+        await prisma.result.create({ data: { enrollmentId: m.enrollmentId, phaseId: a.phaseId, subjectId: a.subjectId, marksObtained: stored, maxMarks: 25, grade, uploadedById: facultyId } });
+      }
+      saved++;
+    }
+    return { saved };
+  },
+
+  async examPublish(coordId: string, universityId: string, phaseId: string) {
+    const { semester } = await requireExamCoordinator(coordId, universityId);
+    const assignments = await prisma.paperCheckAssignment.findMany({ where: { semesterId: semester.id, phaseId } });
+    if (assignments.length === 0) throw new ApiError(400, "NO_ASSIGNMENTS", "No paper-check assignments exist for this phase.");
+    const incomplete: string[] = [];
+    const enrollmentIds = new Set<string>();
+    for (const a of assignments) {
+      const enrs = await examRangeEnrollments(a.batchId, semester.id, a.fromEnrollmentNo, a.toEnrollmentNo);
+      const marked = await prisma.result.count({ where: { enrollmentId: { in: enrs.map((e) => e.id) }, phaseId, subjectId: a.subjectId } });
+      if (marked < enrs.length) incomplete.push(`${a.fromEnrollmentNo}–${a.toEnrollmentNo} (${marked}/${enrs.length})`);
+      enrs.forEach((e) => enrollmentIds.add(e.id));
+    }
+    if (incomplete.length > 0) throw new ApiError(400, "INCOMPLETE_RESULTS", `Ranges still missing marks: ${incomplete.join(", ")}`);
+    const publishedAt = new Date();
+    await prisma.result.updateMany({
+      where: { phaseId, enrollmentId: { in: [...enrollmentIds] }, isPublished: false },
+      data: { isPublished: true, publishedAt },
+    });
+    const phase = await phaseById(phaseId);
+    const students = await prisma.studentEnrollment.findMany({ where: { id: { in: [...enrollmentIds] } }, select: { studentId: true } });
+    await this.notifyMany(universityId, [...new Set(students.map((s) => s.studentId))].map((studentId) => ({ studentId })),
+      "RESULT_UPLOADED", `${phase.label} Results are Live`, `Your ${phase.label} results have been published. Tap to view.`, "/student/results");
+    const hods = await prisma.faculty.findMany({ where: { universityId, isHod: true, deletedAt: null }, select: { id: true } });
+    await this.notifyMany(universityId, hods.map((h) => ({ facultyId: h.id })),
+      "RESULT_UPLOADED", `${phase.label} Results pushed live`, `Exam coordinator published ${phase.label} results for ${students.length} students.`, "/hod/exams");
+    return { published: true, publishedAt, studentCount: students.length };
   },
 
   // ─── HOD announcements ────────────────────────────────────

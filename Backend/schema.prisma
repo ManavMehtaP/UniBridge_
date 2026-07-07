@@ -895,6 +895,41 @@ model AnnouncementRead {
   @@map("announcement_reads")
 }
 
+// Exam coordinators: HOD appoints exactly two faculty per semester (slot 1 and 2).
+model ExamCoordinator {
+  id           String   @id @default(uuid())
+  universityId String
+  semesterId   String
+  slot         Int      // 1 = Exam-Coordinator-1, 2 = Exam-Coordinator-2
+  facultyId    String
+  assignedById String   // HOD faculty id
+  createdAt    DateTime @default(now())
+
+  @@unique([semesterId, slot])
+  @@index([facultyId])
+  @@map("exam_coordinators")
+}
+
+// Paper-checking duty: coordinator assigns an enrollment-no range of one
+// batch+subject+phase to a faculty. Marks land in Result keyed the same way.
+model PaperCheckAssignment {
+  id               String   @id @default(uuid())
+  universityId     String
+  semesterId       String
+  phaseId          String
+  subjectId        String
+  batchId          String
+  facultyId        String   // the checker
+  fromEnrollmentNo String
+  toEnrollmentNo   String
+  assignedById     String   // coordinator faculty id
+  createdAt        DateTime @default(now())
+
+  @@index([facultyId, phaseId])
+  @@index([semesterId, phaseId])
+  @@map("paper_check_assignments")
+}
+
 // Per-user event notifications (Result Out, Attendance Marked, etc.). Distinct from broadcast Announcements.
 model Notification {
   id           String   @id @default(uuid())

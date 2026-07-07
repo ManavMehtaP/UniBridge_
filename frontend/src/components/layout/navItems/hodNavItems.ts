@@ -9,6 +9,7 @@ import {
   Megaphone,
   RefreshCw,
   Settings,
+  ShieldCheck,
   UserCheck,
   UserPlus,
   Users,
@@ -31,6 +32,7 @@ export const hodNavItems: NavSection[] = [
   {
     section: 'Management',
     items: [
+      { id: 'exams', label: 'Exam Panel', path: '/hod/exams', icon: ShieldCheck },
       { id: 'announcements', label: 'Announcements', path: '/hod/announcements', icon: Megaphone },
       { id: 'mentorship', label: 'Mentorship', path: '/hod/mentorship', icon: UserPlus },
       { id: 'analytics', label: 'Analytics', path: '/hod/analytics', icon: Activity },

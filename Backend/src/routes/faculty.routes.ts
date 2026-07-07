@@ -362,6 +362,48 @@ facultyRouter.patch("/chat/:mentorAssignmentId/mark-read", asyncHandler(async (r
   res.json(await portalService.facultyMarkChatRead(req.user!.id, req.user!.universityId, str(req.params.mentorAssignmentId)));
 }));
 
+// ── Exam paper checking (coordinator + checker) ──
+facultyRouter.get("/exam/status", asyncHandler(async (req, res) => {
+  res.json(await portalService.facultyExamStatus(req.user!.id, req.user!.universityId));
+}));
+
+facultyRouter.get("/exam/context", asyncHandler(async (req, res) => {
+  res.json(await portalService.examContext(req.user!.universityId));
+}));
+
+facultyRouter.get("/exam/assignments", asyncHandler(async (req, res) => {
+  // ?all=1 → coordinator sees every assignment; otherwise only your own paper sets
+  const all = req.query.all === "1";
+  if (all) {
+    const status = await portalService.facultyExamStatus(req.user!.id, req.user!.universityId);
+    if (!status.isCoordinator) return res.status(403).json({ code: "NOT_EXAM_COORDINATOR", message: "Only an exam coordinator can view all assignments." });
+  }
+  res.json(await portalService.examAssignments(req.user!.universityId, {
+    phaseId: req.query.phaseId as string | undefined,
+    facultyId: all ? undefined : req.user!.id,
+  }));
+}));
+
+facultyRouter.post("/exam/assignments", asyncHandler(async (req, res) => {
+  res.json(await portalService.createExamAssignment(req.user!.id, req.user!.universityId, req.body));
+}));
+
+facultyRouter.delete("/exam/assignments/:id", asyncHandler(async (req, res) => {
+  res.json(await portalService.deleteExamAssignment(req.user!.id, req.user!.universityId, str(req.params.id)));
+}));
+
+facultyRouter.get("/exam/assignments/:id/students", asyncHandler(async (req, res) => {
+  res.json(await portalService.examAssignmentStudents(req.user!.id, req.user!.universityId, str(req.params.id)));
+}));
+
+facultyRouter.post("/exam/assignments/:id/marks", asyncHandler(async (req, res) => {
+  res.json(await portalService.saveExamAssignmentMarks(req.user!.id, req.user!.universityId, str(req.params.id), req.body.marks ?? []));
+}));
+
+facultyRouter.post("/exam/publish", asyncHandler(async (req, res) => {
+  res.json(await portalService.examPublish(req.user!.id, req.user!.universityId, String(req.body.phaseId)));
+}));
+
 facultyRouter.get("/results/summary", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyResultsSummary(req.user!.id, req.user!.universityId, req.query.semesterId as string | undefined));
 }));

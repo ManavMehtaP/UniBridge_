@@ -20,6 +20,7 @@ import HodCalendar from '@/pages/hod/CalendarPage'
 import HodSettings from '@/pages/hod/SettingsPage'
 import HodTimetable from '@/pages/hod/TimetablePage'
 import HodAnnouncements from '@/pages/hod/AnnouncementsPage'
+import HodExamPanel from '@/pages/hod/ExamPanelPage'
 import NotificationsPage from '@/pages/NotificationsPage'
 
 // Faculty portal pages
@@ -32,6 +33,7 @@ import FacQuizzes from '@/pages/faculty/QuizzesPage'
 import FacAnnouncements from '@/pages/faculty/AnnouncementsPage'
 import FacMentees from '@/pages/faculty/MenteesPage'
 import FacResults from '@/pages/faculty/ResultsPage'
+import FacExams from '@/pages/faculty/ExamsPage'
 import FacCalendar from '@/pages/faculty/CalendarPage'
 import FacAnalytics from '@/pages/faculty/AnalyticsPage'
 import FacSettings from '@/pages/faculty/SettingsPage'
@@ -73,6 +75,7 @@ export const router = createBrowserRouter([
           { path: '/hod/subjects', element: <HodSubjects /> },
           { path: '/hod/timetable', element: <HodTimetable /> },
           { path: '/hod/announcements', element: <HodAnnouncements /> },
+          { path: '/hod/exams', element: <HodExamPanel /> },
           { path: '/hod/notifications', element: <NotificationsPage /> },
           { path: '/faculty/notifications', element: <NotificationsPage /> },
           { path: '/student/notifications', element: <NotificationsPage /> },
@@ -92,6 +95,7 @@ export const router = createBrowserRouter([
           { path: '/faculty/announcements', element: <FacAnnouncements /> },
           { path: '/faculty/mentees', element: <FacMentees /> },
           { path: '/faculty/results', element: <FacResults /> },
+          { path: '/faculty/exams', element: <FacExams /> },
           { path: '/faculty/calendar', element: <FacCalendar /> },
           { path: '/faculty/analytics', element: <FacAnalytics /> },
           { path: '/faculty/settings/:section?', element: <FacSettings /> },
