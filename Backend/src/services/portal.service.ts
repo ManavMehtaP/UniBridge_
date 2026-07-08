@@ -641,43 +641,66 @@ export const portalService = {
     return { enrollmentNo: student.enrollmentNo, name: student.name, branch: student.branch, batchCode: batch.code, rollNo: enrollment.rollNo, semesterLabel: semester.label, yearLevel: enrollment.yearLevel };
   },
 
-  async uploadStudentCsv(fileBuffer: Buffer | undefined, universityId: string, semesterId: string, batchId: string) {
+  // CSV columns: enrollment_no, name, branch, batch, roll_no.
+  // Batch is per-row (batch code). email + admission_year are derived — not in the sheet.
+  async uploadStudentCsv(fileBuffer: Buffer | undefined, universityId: string, semesterId: string) {
     if (!fileBuffer) throw new ApiError(400, "VALIDATION_ERROR", "CSV file is required.");
-    const rows = parseCsvRecords(fileBuffer, ["enrollment_no", "name", "email", "branch", "admission_year", "roll_no"]);
-    let created = 0;
+    const rows = parseCsvRecords(fileBuffer, ["enrollment_no", "name", "branch", "batch", "roll_no"]);
+    const semester = await getSemester(semesterId);
+    // resolve batch codes once for this academic year
+    const yearBatches = await prisma.batch.findMany({ where: { academicYearId: semester.academicYearId } });
+    const batchByCode = new Map(yearBatches.map((b) => [b.code.toUpperCase(), b]));
+
+    let created = 0, updated = 0;
     const errors: Array<{ row: number; enrollmentNo: string; reason: string }> = [];
     for (const { row, record } of rows) {
-      const enrollmentNo = String(record.enrollment_no ?? "");
+      const enrollmentNo = String(record.enrollment_no ?? "").trim();
       try {
+        const name = String(record.name ?? record.student ?? "").trim();
+        const branch = String(record.branch ?? "").trim().toUpperCase();
+        const batchCode = String(record.batch ?? "").trim().toUpperCase();
+        const rollNo = String(record.roll_no ?? "").trim();
+        if (!enrollmentNo || !name || !branch || !batchCode || !rollNo) {
+          errors.push({ row, enrollmentNo, reason: "Missing one of: enrollment_no, name, branch, batch, roll_no." });
+          continue;
+        }
+        const batch = batchByCode.get(batchCode);
+        if (!batch) { errors.push({ row, enrollmentNo, reason: `Batch "${batchCode}" not found in this year.` }); continue; }
+        await assertBranchAllowed(universityId, branch);
+
+        // ponytail: enrollment_no encodes admission year in its first two digits (e.g. 24… → 2024).
+        const yr2 = enrollmentNo.slice(0, 2);
+        const admissionYear = /^\d{2}$/.test(yr2) ? 2000 + Number(yr2) : new Date().getFullYear();
+
         let student = await prisma.student.findFirst({ where: { enrollmentNo } });
         if (!student) {
-          await assertBranchAllowed(universityId, String(record.branch ?? ""));
           student = await prisma.student.create({
             data: {
-              universityId,
-              enrollmentNo,
-              name: String(record.name ?? ""),
-              email: String(record.email ?? ""),
-              branch: String(record.branch ?? ""),
-              admissionYear: Number(record.admission_year ?? 0),
-              passwordHash: `${enrollmentNo}@123`,
-              isActive: true,
+              universityId, enrollmentNo, name, branch, admissionYear,
+              // email isn't in the sheet — derive a stable one; students log in with enrollment_no anyway.
+              email: `${enrollmentNo.toLowerCase()}@lju.edu.in`,
+              passwordHash: `${enrollmentNo}@123`, isActive: true,
             },
           });
+        } else {
+          await prisma.student.update({ where: { id: student.id }, data: { name, branch } });
         }
-        const existingEnrollment = await prisma.studentEnrollment.findFirst({ where: { studentId: student.id, semesterId } });
-        if (!existingEnrollment) {
-          const semester = await getSemester(semesterId);
+
+        const existing = await prisma.studentEnrollment.findFirst({ where: { studentId: student.id, semesterId } });
+        if (existing) {
+          await prisma.studentEnrollment.update({ where: { id: existing.id }, data: { batchId: batch.id, rollNo, yearLevel: batch.yearLevel } });
+          updated += 1;
+        } else {
           await prisma.studentEnrollment.create({
-            data: { studentId: student.id, semesterId, batchId, rollNo: String(record.roll_no ?? ""), yearLevel: semester.yearLevel, isCurrent: true },
+            data: { studentId: student.id, semesterId, batchId: batch.id, rollNo, yearLevel: batch.yearLevel, isCurrent: true },
           });
+          created += 1;
         }
-        created += 1;
-      } catch {
-        errors.push({ row, enrollmentNo, reason: "Failed to create student or enrollment." });
+      } catch (e) {
+        errors.push({ row, enrollmentNo, reason: e instanceof ApiError ? e.message : "Failed to import row." });
       }
     }
-    return { created, errors, totalRows: rows.length };
+    return { created, updated, errors, totalRows: rows.length };
   },
 
   // ── Faculty list / management ─────────────────────────────
@@ -3200,14 +3223,13 @@ export const portalService = {
     await prisma.student.update({ where: { id: s.id }, data: { deletedAt: new Date() } });
   },
 
-  async studentCsvUpload(scope: Scope, buffer: Buffer | undefined, opts: { semesterId?: string; batchId?: string }) {
-    if (!opts.batchId) throw new ApiError(400, "VALIDATION_ERROR", "batchId is required.");
+  async studentCsvUpload(scope: Scope, buffer: Buffer | undefined, opts: { semesterId?: string }) {
     const semesterId = opts.semesterId || (await getActiveSemester(scope.universityId)).id;
-    return this.uploadStudentCsv(buffer, scope.universityId, semesterId, opts.batchId);
+    return this.uploadStudentCsv(buffer, scope.universityId, semesterId);
   },
 
   async studentCsvTemplate() {
-    return "enrollment_no,name,email,branch,admission_year,roll_no\n";
+    return "enrollment_no,name,branch,batch,roll_no\n24IT001,Aarav Patel,IT,C2,IT-25-001\n";
   },
 
   async studentExport(scope: Scope) {

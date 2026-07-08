@@ -52,7 +52,6 @@ hodRouter.post("/students/csv", upload.single("file"), asyncHandler(async (req, 
   res.json(
     await portalService.studentCsvUpload(scopeFrom(req), req.file?.buffer, {
       semesterId: str(req.body.semesterId),
-      batchId: str(req.body.batchId),
     }),
   );
 }));
