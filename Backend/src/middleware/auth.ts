@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 
 import { ApiError } from "../utils/http.js";
+import { universityId } from "../config/university.js";
 import prisma from "../config/prisma.js";
 
 export function requireAuth(req: Request, _res: Response, next: NextFunction) {
@@ -11,70 +12,35 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
   }
 
   const [role, userId] = token.split(":");
-  if (!role || !userId || !req.university) {
+  if (!role || !userId) {
     return next(new ApiError(401, "AUTH_INVALID", "Invalid authorization token format."));
   }
 
-  if (role === "HOD") {
-    req.user = {
-      id: userId,
-      role: "FACULTY",
-      isHod: true,
-      universityId: req.university.id,
-    };
-    return next();
-  }
+  universityId()
+    .then(async (uniId) => {
+      if (role === "HOD" || role === "FACULTY") {
+        req.user = { id: userId, role: "FACULTY", isHod: role === "HOD", universityId: uniId };
+        return next();
+      }
 
-  if (role === "FACULTY") {
-    req.user = {
-      id: userId,
-      role: "FACULTY",
-      isHod: false,
-      universityId: req.university.id,
-    };
-    return next();
-  }
+      if (role === "STUDENT") {
+        const student = await prisma.student.findUnique({ where: { id: userId }, select: { id: true } });
+        if (!student) return next(new ApiError(401, "AUTH_INVALID", "Invalid student token."));
+        req.user = { id: userId, role: "STUDENT", isHod: false, universityId: uniId };
+        return next();
+      }
 
-  if (role === "STUDENT") {
-    prisma.student
-      .findUnique({ where: { id: userId }, select: { id: true } })
-      .then((student) => {
-        if (!student) {
-          return next(new ApiError(401, "AUTH_INVALID", "Invalid student token."));
-        }
-        req.user = {
-          id: userId,
-          role: "STUDENT",
-          isHod: false,
-          universityId: req.university!.id,
-        };
-        next();
-      })
-      .catch(next);
-    return;
-  }
+      if (role === "SUPER_ADMIN") {
+        // Dean tokens are verified against the isDean flag — any faculty id alone is not enough.
+        const faculty = await prisma.faculty.findUnique({ where: { id: userId }, select: { isDean: true } });
+        if (!faculty?.isDean) return next(new ApiError(401, "AUTH_INVALID", "Invalid dean token."));
+        req.user = { id: userId, role: "SUPER_ADMIN", isHod: false, universityId: uniId };
+        return next();
+      }
 
-  if (role === "SUPER_ADMIN") {
-    // Dean tokens are verified against the isDean flag — any faculty id alone is not enough.
-    prisma.faculty
-      .findUnique({ where: { id: userId }, select: { isDean: true } })
-      .then((faculty) => {
-        if (!faculty?.isDean) {
-          return next(new ApiError(401, "AUTH_INVALID", "Invalid dean token."));
-        }
-        req.user = {
-          id: userId,
-          role: "SUPER_ADMIN",
-          isHod: false,
-          universityId: req.university!.id,
-        };
-        next();
-      })
-      .catch(next);
-    return;
-  }
-
-  return next(new ApiError(401, "AUTH_INVALID", "Unsupported authorization token role."));
+      return next(new ApiError(401, "AUTH_INVALID", "Unsupported authorization token role."));
+    })
+    .catch(next);
 }
 
 export function requireSuperAdmin(req: Request, _res: Response, next: NextFunction) {

@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import { requireAuth } from "../middleware/auth.js";
+import { universityId } from "../config/university.js";
 import { portalService } from "../services/portal.service.js";
 import { asyncHandler } from "../utils/http.js";
 
@@ -14,7 +15,7 @@ authRouter.post("/register", asyncHandler(async (req, res) => {
   res.status(201).json(
     await portalService.register(
       req.body,
-      req.university!.id,
+      await universityId(),
     ),
   );
 }));

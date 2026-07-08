@@ -6,7 +6,6 @@ import morgan from "morgan";
 
 import { env } from "./config/env.js";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
-import { tenantMiddleware } from "./middleware/tenant.js";
 import { apiRouter } from "./routes/index.js";
 
 export function createApp() {
@@ -25,8 +24,6 @@ export function createApp() {
   app.get("/api/v1/health", (_req, res) => {
     res.status(200).json({ status: "ok" });
   });
-  app.use(tenantMiddleware);
-
   app.use("/api/v1", apiRouter);
 
   app.use(notFoundHandler);
