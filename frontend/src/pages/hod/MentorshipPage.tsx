@@ -196,7 +196,7 @@ export default function MentorshipPage() {
         title="Bulk Mentor Assignment"
         onUpload={hodApi.mentorship.assignCsv}
         buildForm={(form) => semesterId && form.append('semesterId', semesterId)}
-        extraFields={<p className="text-xs text-text-muted">CSV columns: enrollment_no, mentor_code</p>}
+        requiredColumns={['enrollment_no', 'mentor_code']}
       />
     </PageShell>
   )

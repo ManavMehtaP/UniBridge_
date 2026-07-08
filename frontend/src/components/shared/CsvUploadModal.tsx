@@ -16,6 +16,8 @@ export function CsvUploadModal({
   extraFields,
   buildForm,
   canSubmit = true,
+  requiredColumns,
+  optionalColumns,
 }: {
   open: boolean
   onClose: () => void
@@ -26,6 +28,10 @@ export function CsvUploadModal({
   /** Attach non-file fields (e.g. semesterId, batchId) to the FormData before send. */
   buildForm?: (form: FormData) => void
   canSubmit?: boolean
+  /** Column headers the CSV must contain — shown to the user as a hint. */
+  requiredColumns?: string[]
+  /** Column headers that are recognised but not mandatory. */
+  optionalColumns?: string[]
 }) {
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
@@ -81,6 +87,31 @@ export function CsvUploadModal({
     >
       <div className="space-y-4">
         {extraFields}
+
+        {(requiredColumns?.length || optionalColumns?.length) ? (
+          <div className="rounded-sm border border-border bg-surface-2 p-3">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-text-secondary">
+              Expected CSV columns
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {requiredColumns?.map((c) => (
+                <span key={c} className="rounded-xs border border-border bg-surface px-2 py-1 font-mono text-[11px] text-text-primary">
+                  {c}
+                </span>
+              ))}
+              {optionalColumns?.map((c) => (
+                <span key={c} className="rounded-xs border border-dashed border-border px-2 py-1 font-mono text-[11px] text-text-muted">
+                  {c}
+                  <span className="ml-1 font-sans text-[9px] uppercase tracking-wide">optional</span>
+                </span>
+              ))}
+            </div>
+            <div className="mt-2 text-[11px] text-text-muted">
+              First row must be the header. Column order doesn’t matter.
+            </div>
+          </div>
+        ) : null}
+
         <FileDrop accept=".csv" onFile={setFile} selectedName={file?.name} />
 
         {result && (

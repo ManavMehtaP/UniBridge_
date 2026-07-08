@@ -135,6 +135,8 @@ export interface SubjectRow {
   credits: number
   type: string
   assignedFaculty?: { id: string; name: string } | null
+  faculty?: { id: string; name: string }[]
+  assignments?: { id: string; facultyId: string; facultyName: string; batchId: string; batchCode: string }[]
   batches: string[]
   pyqUploaded?: boolean
 }

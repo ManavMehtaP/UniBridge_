@@ -141,7 +141,13 @@ export default function FacultyPage() {
 
       {detailOf && <FacultyDetailModal faculty={detailOf} onClose={() => setDetailOf(null)} />}
       <AddFacultyModal open={showAdd} onClose={() => setShowAdd(false)} onCreated={() => qc.invalidateQueries({ queryKey: ['hod', 'faculty'] })} />
-      <CsvUploadModal open={showUpload} onClose={() => setShowUpload(false)} title="Upload Faculty" onUpload={hodApi.faculty.uploadCsv} />
+      <CsvUploadModal
+        open={showUpload}
+        onClose={() => setShowUpload(false)}
+        title="Upload Faculty"
+        onUpload={hodApi.faculty.uploadCsv}
+        requiredColumns={['employee_id', 'name', 'email', 'department']}
+      />
 
       <ConfirmDialog
         open={!!deleteOf}

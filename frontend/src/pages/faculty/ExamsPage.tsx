@@ -26,6 +26,7 @@ interface ExamContext {
   subjects: { id: string; code: string; name: string }[]
   batches: { id: string; code: string }[]
   faculty: { id: string; name: string; employeeId: string }[]
+  subjectFaculty: Record<string, string[]> // subjectId → facultyIds that teach it
 }
 interface AssignmentStudents {
   assignment: { id: string; phaseLabel: string; entryMax: number; subjectCode: string; subjectName: string; batchCode: string; isPublished: boolean }
@@ -191,6 +192,19 @@ function CoordinatorDesk() {
   const rows = all.data?.data ?? []
   const formReady = Object.values(form).every(Boolean)
 
+  // Checker options are limited to faculty who teach the selected subject.
+  const subjectCheckerIds = form.subjectId ? new Set(ctx.data?.subjectFaculty?.[form.subjectId] ?? []) : null
+  const checkerOpts = (ctx.data?.faculty ?? [])
+    .filter((f) => !subjectCheckerIds || subjectCheckerIds.has(f.id))
+    .map((f) => ({ value: f.id, label: f.name }))
+
+  function pickSubject(subjectId: string) {
+    setForm((f) => {
+      const allowed = new Set(ctx.data?.subjectFaculty?.[subjectId] ?? [])
+      return { ...f, subjectId, facultyId: allowed.has(f.facultyId) ? f.facultyId : '' }
+    })
+  }
+
   return (
     <>
       <Card className="mt-5 p-4">
@@ -201,12 +215,14 @@ function CoordinatorDesk() {
         <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
           <Select value={form.phaseId} onChange={(e) => setForm((f) => ({ ...f, phaseId: e.target.value }))} placeholder="Phase"
             options={(ctx.data?.phases ?? []).map((p) => ({ value: p.id, label: `${p.label} (/${p.entryMax})` }))} />
-          <Select value={form.subjectId} onChange={(e) => setForm((f) => ({ ...f, subjectId: e.target.value }))} placeholder="Subject"
+          <Select value={form.subjectId} onChange={(e) => pickSubject(e.target.value)} placeholder="Subject"
             options={(ctx.data?.subjects ?? []).map((s) => ({ value: s.id, label: s.code }))} />
           <Select value={form.batchId} onChange={(e) => setForm((f) => ({ ...f, batchId: e.target.value }))} placeholder="Batch"
             options={(ctx.data?.batches ?? []).map((b) => ({ value: b.id, label: `Batch ${b.code}` }))} />
-          <Select value={form.facultyId} onChange={(e) => setForm((f) => ({ ...f, facultyId: e.target.value }))} placeholder="Checker"
-            options={(ctx.data?.faculty ?? []).map((f) => ({ value: f.id, label: f.name }))} />
+          <Select value={form.facultyId} onChange={(e) => setForm((f) => ({ ...f, facultyId: e.target.value }))}
+            placeholder={!form.subjectId ? 'Pick subject first' : checkerOpts.length ? 'Checker' : 'No faculty teach this'}
+            disabled={!form.subjectId || checkerOpts.length === 0}
+            options={checkerOpts} />
           <Input placeholder="From enrollment no" value={form.fromEnrollmentNo} onChange={(e) => setForm((f) => ({ ...f, fromEnrollmentNo: e.target.value }))} />
           <Input placeholder="To enrollment no" value={form.toEnrollmentNo} onChange={(e) => setForm((f) => ({ ...f, toEnrollmentNo: e.target.value }))} />
         </div>

@@ -185,20 +185,13 @@ export default function StudentsPage() {
         title="Upload Students"
         onUpload={hodApi.students.uploadCsv}
         onDownloadTemplate={hodApi.students.downloadTemplate}
-        canSubmit={!!batchId}
+        requiredColumns={['enrollment_no', 'name', 'branch', 'batch', 'roll_no']}
         extraFields={
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Target Batch *</label>
-              <Select value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Select batch" options={batchOptions} />
-            </div>
-            <div className="flex items-end text-xs text-text-muted">
-              Enrolls into {scope.data?.activeSemester.label ?? 'active semester'}.
-            </div>
-          </div>
+          <p className="text-xs text-text-muted">
+            Each row&rsquo;s <b>batch</b> column decides its batch. Enrolls into {scope.data?.activeSemester.label ?? 'the active semester'}.
+          </p>
         }
         buildForm={(form) => {
-          form.append('batchId', batchId)
           if (scope.data?.activeSemester.id) form.append('semesterId', scope.data.activeSemester.id)
         }}
       />

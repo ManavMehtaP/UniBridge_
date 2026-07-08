@@ -34,7 +34,8 @@ export default function SettingsPage() {
   return (
     <PageShell title="Settings" subtitle="Manage your profile and university configuration">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr]">
-        <nav className="space-y-0.5">
+        {/* Horizontal scrollable tabs on narrow screens, sticky vertical rail on desktop */}
+        <nav className="scrollbar-thin -mx-1 flex gap-1 overflow-x-auto px-1 pb-1 lg:sticky lg:top-4 lg:mx-0 lg:flex-col lg:gap-0.5 lg:self-start lg:overflow-visible lg:px-0 lg:pb-0">
           {SECTIONS.map((s) => {
             const Icon = s.icon
             const active = s.key === section
@@ -42,8 +43,9 @@ export default function SettingsPage() {
               <button
                 key={s.key}
                 onClick={() => navigate(`/hod/settings/${s.key}`)}
-                className={cn('flex w-full items-center gap-2.5 rounded-sm px-3 py-2 text-[13px] font-medium transition-colors',
-                  active ? 'bg-primary-light text-primary' : 'text-text-secondary hover:bg-surface-2')}
+                className={cn('flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-sm px-3 py-2 text-[13px] font-medium transition-colors lg:w-full',
+                  active ? 'bg-primary-light text-primary' : 'text-text-secondary hover:bg-surface-2',
+                  s.key === 'danger' && 'lg:mt-1 lg:border-t lg:border-border-light lg:pt-3')}
               >
                 <Icon size={16} className={cn(s.key === 'danger' && !active && 'text-danger')} />
                 {s.label}

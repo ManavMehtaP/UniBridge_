@@ -5,6 +5,7 @@ import {
   BookOpen,
   CalendarCheck,
   ClipboardList,
+  ShieldCheck,
   UserPlus,
   Users,
 } from 'lucide-react'
@@ -57,11 +58,11 @@ export default function DashboardPage() {
           )}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Link to="/hod/results" className="inline-flex items-center gap-1.5 rounded-sm bg-primary px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
-            <ClipboardList size={15} /> Upload Results
+          <Link to="/hod/exams" className="inline-flex items-center gap-1.5 rounded-sm bg-primary px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
+            <ShieldCheck size={15} /> Exam Panel
           </Link>
-          <Link to="/hod/students" className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-surface px-3.5 py-2 text-sm font-semibold text-text-primary hover:bg-surface-2">
-            <Users size={15} /> Students
+          <Link to="/hod/results" className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-surface px-3.5 py-2 text-sm font-semibold text-text-primary hover:bg-surface-2">
+            <ClipboardList size={15} /> Results
           </Link>
         </div>
       </div>
