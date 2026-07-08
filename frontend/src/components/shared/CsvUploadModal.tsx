@@ -52,8 +52,9 @@ export function CsvUploadModal({
       buildForm?.(form)
       const res = await onUpload(form)
       setResult(res)
-      const done = res.inserted ?? res.assigned ?? res.mapped ?? 0
-      toast.success(`${done} processed${res.updated ? `, ${res.updated} updated` : ''}`)
+      const done = res.inserted ?? res.created ?? res.assigned ?? res.mapped ?? 0
+      const errs = res.errors?.length ?? 0
+      toast.success(`${done} added${res.updated ? `, ${res.updated} updated` : ''}${errs ? ` · ${errs} skipped` : ''}`)
     } catch (err) {
       toast.error(errorMessage(err, 'Upload failed'))
     } finally {
@@ -118,7 +119,7 @@ export function CsvUploadModal({
           <div className="rounded-sm border border-border bg-surface-2 p-3 text-sm">
             <div className="flex items-center gap-2 font-semibold text-success">
               <CheckCircle2 size={16} />
-              {(result.inserted ?? result.assigned ?? result.mapped ?? 0)} added
+              {(result.inserted ?? result.created ?? result.assigned ?? result.mapped ?? 0)} added
               {result.updated ? `, ${result.updated} updated` : ''}
             </div>
             {result.errors && result.errors.length > 0 && (

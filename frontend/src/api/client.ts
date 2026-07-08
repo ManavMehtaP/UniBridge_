@@ -13,6 +13,12 @@ export const api = axios.create({
 api.interceptors.request.use((config) => {
   const token = useAuthStore.getState().accessToken
   if (token) config.headers.Authorization = `Bearer ${token}`
+  // For file uploads, drop the default application/json so the browser sets
+  // multipart/form-data with the correct boundary — otherwise multer sees no file.
+  if (config.data instanceof FormData) {
+    if (typeof config.headers.delete === 'function') config.headers.delete('Content-Type')
+    else delete (config.headers as Record<string, unknown>)['Content-Type']
+  }
   return config
 })
 

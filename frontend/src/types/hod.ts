@@ -91,9 +91,11 @@ export interface StudentJourney {
 }
 export interface CsvResult {
   inserted?: number
+  created?: number
   updated?: number
   assigned?: number
   mapped?: number
+  totalRows?: number
   errors?: { row: number; enrollmentNo?: string; reason: string }[]
 }
 
