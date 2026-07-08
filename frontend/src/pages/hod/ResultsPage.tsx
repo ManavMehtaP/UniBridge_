@@ -1,248 +1,182 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
-import { Check, FileText, Keyboard, Upload } from 'lucide-react'
+import { ClipboardList, Pencil, Search, ShieldCheck, Upload } from 'lucide-react'
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
 import { cn } from '@/lib/utils'
 import { PageShell } from '@/components/shared/PageShell'
-import { FileDrop } from '@/components/shared/FileDrop'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Select } from '@/components/ui/Select'
 import { Input } from '@/components/ui/Input'
+import { Modal } from '@/components/ui/Modal'
 import { Table, Td, Th, Tr } from '@/components/ui/Table'
 import { Spinner } from '@/components/ui/Spinner'
+import { EmptyState } from '@/components/ui/EmptyState'
+
+// Results are entered by exam checkers and pushed live by the exam coordinators
+// (see /hod/exams). This page is the HOD's browser + correction tool.
 
 interface UploadContext {
-  phases: { id: string; label: string; number: number; isActive?: boolean; isComplete?: boolean }[]
+  phases: { id: string; label: string; number: number }[]
   subjects: { id: string; code: string; name: string }[]
   batches: { id: string; code: string }[]
 }
-interface ResultsStudent { enrollmentId: string; enrollmentNo: string; name: string; existingMarks: number | null }
+interface PreviewRow {
+  resultId: string | null
+  enrollmentNo: string
+  name: string
+  marksObtained: number | null
+  maxMarks: number | null
+  grade: string | null
+  status: string
+  isPublished: boolean
+}
 interface Preview {
-  studentCount: number; avgMarks: number; belowPassCount: number; isPublished: boolean
-  results: { enrollmentNo: string; name: string; marksObtained: number; maxMarks: number; grade: string; status: string }[]
+  studentCount: number
+  avgMarks: number
+  belowPassCount: number
+  isPublished: boolean
+  results: PreviewRow[]
 }
 
-const STEPS = ['Context', 'Mode', 'Enter Marks', 'Publish']
-
 export default function ResultsPage() {
-  const qc = useQueryClient()
   const scope = useHodScope()
   const semesterId = scope.data?.activeSemester.id
 
-  const [step, setStep] = useState(0)
   const [phaseId, setPhaseId] = useState('')
   const [subjectId, setSubjectId] = useState('')
   const [batchId, setBatchId] = useState('')
-  const [mode, setMode] = useState<'csv' | 'manual'>('csv')
-  const [file, setFile] = useState<File | null>(null)
-  const [marks, setMarks] = useState<Record<string, { marksObtained: string; maxMarks: string }>>({})
+  const [editOf, setEditOf] = useState<PreviewRow | null>(null)
+  const [search, setSearch] = useState('')
 
   const ctx = useQuery({
     queryKey: ['hod', 'results', 'ctx', semesterId],
     queryFn: () => hodApi.results.uploadContext(semesterId) as Promise<UploadContext>,
     enabled: !!semesterId,
   })
-  const history = useQuery({ queryKey: ['hod', 'results', 'history'], queryFn: () => hodApi.results.uploadHistory(1, 8) as Promise<{ data: { phase: string; subjectCode: string; batchCode: string; uploadedAt: string; studentCount: number }[] }> })
-  const phaseStatus = useQuery({ queryKey: ['hod', 'results', 'phase-status', semesterId], queryFn: () => hodApi.results.phaseStatus(semesterId) as Promise<{ phases: { phase: string; subjectsTotal: number; subjectsUploaded: number; status: string }[] }>, enabled: !!semesterId })
-
-  const students = useQuery({
-    queryKey: ['hod', 'results', 'students', semesterId, batchId, subjectId],
-    queryFn: () => hodApi.results.students(semesterId!, batchId, subjectId) as Promise<{ data: ResultsStudent[] }>,
-    enabled: step === 2 && mode === 'manual' && !!semesterId && !!batchId && !!subjectId,
+  const phaseStatus = useQuery({
+    queryKey: ['hod', 'results', 'phase-status', semesterId],
+    queryFn: () => hodApi.results.phaseStatus(semesterId) as Promise<{ phases: { phase: string; subjectsTotal: number; subjectsUploaded: number; status: string }[] }>,
+    enabled: !!semesterId,
   })
+  const history = useQuery({
+    queryKey: ['hod', 'results', 'history'],
+    queryFn: () => hodApi.results.uploadHistory(1, 8) as Promise<{ data: { phase: string; subjectCode: string; batchCode: string; uploadedAt: string; studentCount: number }[] }>,
+  })
+
+  const ready = !!phaseId && !!subjectId && !!batchId
   const preview = useQuery({
     queryKey: ['hod', 'results', 'preview', phaseId, subjectId, batchId],
     queryFn: () => hodApi.results.preview(phaseId, subjectId, batchId) as Promise<Preview>,
-    enabled: step === 3 && !!phaseId && !!subjectId && !!batchId,
+    enabled: ready,
+    refetchInterval: 15_000, // live view while checkers are entering marks
   })
 
-  const uploadCsv = useMutation({
-    mutationFn: () => {
-      const form = new FormData()
-      form.append('file', file!)
-      form.append('phaseId', phaseId)
-      form.append('subjectId', subjectId)
-      form.append('batchId', batchId)
-      return hodApi.results.upload(form) as Promise<{ inserted: number; summary?: { avgMarks: number } }>
-    },
-    onSuccess: (r) => { toast.success(`${r.inserted} results uploaded`); setStep(3) },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
-  const submitManual = useMutation({
-    mutationFn: () => {
-      const results = Object.entries(marks)
-        .filter(([, v]) => v.marksObtained !== '')
-        .map(([enrollmentId, v]) => ({ enrollmentId, marksObtained: Number(v.marksObtained), maxMarks: Number(v.maxMarks || 100), grade: gradeFor(Number(v.marksObtained), Number(v.maxMarks || 100)) }))
-      return hodApi.results.manual({ phaseId, subjectId, batchId, results })
-    },
-    onSuccess: () => { toast.success('Marks submitted'); setStep(3) },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
-  const publish = useMutation({
-    mutationFn: () => hodApi.results.publish(phaseId, subjectId, batchId),
-    onSuccess: () => {
-      toast.success('Results published to students')
-      qc.invalidateQueries({ queryKey: ['hod', 'results'] })
-      reset()
-    },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
-
-  function reset() {
-    setStep(0); setPhaseId(''); setSubjectId(''); setBatchId(''); setFile(null); setMarks({}); setMode('csv')
-  }
-
-  const canNext0 = phaseId && subjectId && batchId
+  const allRows = preview.data?.results ?? []
+  const enteredCount = allRows.filter((r) => r.marksObtained != null).length
+  const q = search.trim().toLowerCase()
+  const rows = q ? allRows.filter((r) => r.name.toLowerCase().includes(q) || r.enrollmentNo.toLowerCase().includes(q)) : allRows
 
   return (
-    <PageShell title="Results" subtitle="Upload and publish exam results">
+    <PageShell
+      title="Results"
+      subtitle="Marks are entered by exam checkers and pushed live by your coordinators — browse and correct here"
+      action={
+        <Link to="/hod/exams">
+          <Button variant="outline" leftIcon={<ShieldCheck size={15} />}>Exam Panel</Button>
+        </Link>
+      }
+    >
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="space-y-4 lg:col-span-2">
+          {/* Filter bar */}
           <Card>
             <CardBody>
-              {/* Stepper */}
-              <div className="mb-6 flex items-center">
-                {STEPS.map((label, i) => (
-                  <div key={label} className="flex flex-1 items-center last:flex-none">
-                    <div className="flex flex-col items-center">
-                      <div className={cn('flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold',
-                        i < step ? 'bg-success text-white' : i === step ? 'bg-primary text-white' : 'bg-bg text-text-muted')}>
-                        {i < step ? <Check size={15} /> : i + 1}
-                      </div>
-                      <span className={cn('mt-1 text-[11px] font-medium', i === step ? 'text-primary' : 'text-text-muted')}>{label}</span>
-                    </div>
-                    {i < STEPS.length - 1 && <div className={cn('mx-2 h-0.5 flex-1', i < step ? 'bg-success' : 'bg-border')} />}
-                  </div>
-                ))}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Labeled label="Phase">
+                  <Select value={phaseId} onChange={(e) => setPhaseId(e.target.value)} placeholder="Select phase"
+                    options={ctx.data?.phases.map((p) => ({ value: p.id, label: p.label })) ?? []} />
+                </Labeled>
+                <Labeled label="Subject">
+                  <Select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} placeholder="Select subject"
+                    options={ctx.data?.subjects.map((s) => ({ value: s.id, label: s.code })) ?? []} />
+                </Labeled>
+                <Labeled label="Batch">
+                  <Select value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Select batch"
+                    options={ctx.data?.batches.map((b) => ({ value: b.id, label: b.code })) ?? []} />
+                </Labeled>
               </div>
-
-              {/* Step 0: Context */}
-              {step === 0 && (
-                <div className="space-y-4">
-                  {ctx.isLoading ? <Spinner /> : (
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                      <Labeled label="Phase">
-                        <Select value={phaseId} onChange={(e) => setPhaseId(e.target.value)} placeholder="Select phase"
-                          options={ctx.data?.phases.map((p) => ({ value: p.id, label: p.label })) ?? []} />
-                      </Labeled>
-                      <Labeled label="Subject">
-                        <Select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} placeholder="Select subject"
-                          options={ctx.data?.subjects.map((s) => ({ value: s.id, label: `${s.code}` })) ?? []} />
-                      </Labeled>
-                      <Labeled label="Batch">
-                        <Select value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Select batch"
-                          options={ctx.data?.batches.map((b) => ({ value: b.id, label: b.code })) ?? []} />
-                      </Labeled>
-                    </div>
-                  )}
-                  <div className="flex justify-end">
-                    <Button disabled={!canNext0} onClick={() => setStep(1)}>Continue</Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Step 1: Mode */}
-              {step === 1 && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    {(['csv', 'manual'] as const).map((m) => (
-                      <button key={m} onClick={() => setMode(m)}
-                        className={cn('flex flex-col items-center gap-2 rounded-card border-2 p-6 transition-colors',
-                          mode === m ? 'border-primary bg-primary-light' : 'border-border hover:bg-surface-2')}>
-                        {m === 'csv' ? <FileText size={26} className="text-primary" /> : <Keyboard size={26} className="text-purple" />}
-                        <span className="text-sm font-semibold">{m === 'csv' ? 'Upload CSV' : 'Manual Entry'}</span>
-                        <span className="text-xs text-text-muted">{m === 'csv' ? 'Bulk import from a file' : 'Type marks per student'}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex justify-between">
-                    <Button variant="outline" onClick={() => setStep(0)}>Back</Button>
-                    <Button onClick={() => setStep(2)}>Continue</Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Step 2: Enter */}
-              {step === 2 && (
-                <div className="space-y-4">
-                  {mode === 'csv' ? (
-                    <>
-                      <FileDrop accept=".csv" onFile={setFile} selectedName={file?.name}
-                        subtitle="Columns: enrollment_no, marks_obtained, max_marks, grade" />
-                      <div className="flex justify-between">
-                        <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
-                        <Button disabled={!file} loading={uploadCsv.isPending} onClick={() => uploadCsv.mutate()}>Upload & Preview</Button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      {students.isLoading ? <Spinner /> : (
-                        <div className="max-h-96 overflow-y-auto rounded-sm border border-border">
-                          <Table>
-                            <thead><tr><Th>Student</Th><Th>Marks</Th><Th>Max</Th></tr></thead>
-                            <tbody>
-                              {students.data?.data.map((st) => (
-                                <Tr key={st.enrollmentId}>
-                                  <Td><div className="font-medium">{st.name}</div><div className="font-mono text-[11px] text-text-muted">{st.enrollmentNo}</div></Td>
-                                  <Td><Input type="number" className="h-8 w-20" value={marks[st.enrollmentId]?.marksObtained ?? ''} onChange={(e) => setMarks((m) => ({ ...m, [st.enrollmentId]: { marksObtained: e.target.value, maxMarks: m[st.enrollmentId]?.maxMarks ?? '100' } }))} /></Td>
-                                  <Td><Input type="number" className="h-8 w-20" value={marks[st.enrollmentId]?.maxMarks ?? '100'} onChange={(e) => setMarks((m) => ({ ...m, [st.enrollmentId]: { marksObtained: m[st.enrollmentId]?.marksObtained ?? '', maxMarks: e.target.value } }))} /></Td>
-                                </Tr>
-                              ))}
-                            </tbody>
-                          </Table>
-                        </div>
-                      )}
-                      <div className="flex justify-between">
-                        <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
-                        <Button loading={submitManual.isPending} onClick={() => submitManual.mutate()}>Submit & Preview</Button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {/* Step 3: Publish */}
-              {step === 3 && (
-                <div className="space-y-4">
-                  {preview.isLoading || !preview.data ? <Spinner /> : (
-                    <>
-                      <div className="grid grid-cols-3 gap-3">
-                        <MiniStat label="Students" value={preview.data.studentCount} />
-                        <MiniStat label="Avg Marks" value={`${Math.round(preview.data.avgMarks)}%`} />
-                        <MiniStat label="Below Pass" value={preview.data.belowPassCount} tone="danger" />
-                      </div>
-                      <div className="max-h-72 overflow-y-auto rounded-sm border border-border">
-                        <Table>
-                          <thead><tr><Th>Student</Th><Th>Marks</Th><Th>Grade</Th><Th>Status</Th></tr></thead>
-                          <tbody>
-                            {preview.data.results.map((r) => (
-                              <Tr key={r.enrollmentNo}>
-                                <Td><div className="font-medium">{r.name}</div><div className="font-mono text-[11px] text-text-muted">{r.enrollmentNo}</div></Td>
-                                <Td>{r.marksObtained}/{r.maxMarks}</Td>
-                                <Td><Badge tone={r.grade === 'F' ? 'danger' : 'neutral'}>{r.grade}</Badge></Td>
-                                <Td><Badge tone={r.status === 'Fail' ? 'danger' : 'success'}>{r.status}</Badge></Td>
-                              </Tr>
-                            ))}
-                          </tbody>
-                        </Table>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <Button variant="outline" onClick={reset}>Cancel</Button>
-                        <Button loading={publish.isPending} disabled={preview.data.isPublished} onClick={() => publish.mutate()}>
-                          {preview.data.isPublished ? 'Already Published' : 'Publish to Students'}
-                        </Button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
             </CardBody>
           </Card>
+
+          {/* Results table */}
+          {!ready ? (
+            <Card>
+              <EmptyState icon={<ClipboardList size={22} />} title="Pick a paper" description="Select phase, subject and batch to view results." />
+            </Card>
+          ) : preview.isLoading || !preview.data ? (
+            <Card><CardBody className="flex justify-center py-10"><Spinner /></CardBody></Card>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <MiniStat label="Students" value={preview.data.studentCount} />
+                <MiniStat label="Marks Entered" value={`${enteredCount}/${preview.data.studentCount}`} />
+                <MiniStat label="Avg Marks" value={`${Math.round(preview.data.avgMarks)}%`} />
+                <MiniStat label="Below Pass" value={preview.data.belowPassCount} tone="danger" />
+              </div>
+
+              <Card className="overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+                  <span className="text-sm font-semibold text-text-primary">Marks</span>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      leftIcon={<Search size={14} />}
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search name or enrollment no…"
+                      className="h-8 w-56"
+                    />
+                    <Badge tone={preview.data.isPublished ? 'purple' : enteredCount === 0 ? 'neutral' : 'warning'}>
+                      {preview.data.isPublished ? 'Live for students' : enteredCount < preview.data.studentCount ? 'Checking in progress' : 'Awaiting coordinator push'}
+                    </Badge>
+                  </div>
+                </div>
+                <Table>
+                  <thead><tr><Th>Student</Th><Th>Marks</Th><Th>Grade</Th><Th>Status</Th><Th /></tr></thead>
+                  <tbody>
+                    {rows.length === 0 && (
+                      <Tr><Td colSpan={5} className="py-6 text-center text-text-muted">No students match “{search}”.</Td></Tr>
+                    )}
+                    {rows.map((r) => (
+                      <Tr key={r.enrollmentNo}>
+                        <Td>
+                          <div className="font-medium">{r.name}</div>
+                          <div className="font-mono text-[11px] text-text-muted">{r.enrollmentNo}</div>
+                        </Td>
+                        <Td>{r.marksObtained != null ? `${r.marksObtained}/${r.maxMarks}` : <span className="text-text-muted">—</span>}</Td>
+                        <Td>{r.grade ? <Badge tone={r.grade === 'F' ? 'danger' : 'neutral'}>{r.grade}</Badge> : '—'}</Td>
+                        <Td>
+                          <Badge tone={r.status === 'Fail' ? 'danger' : r.status === 'Pending' ? 'neutral' : 'success'}>{r.status}</Badge>
+                        </Td>
+                        <Td>
+                          {r.resultId && (
+                            <button onClick={() => setEditOf(r)} className="text-text-muted hover:text-primary" title="Correct marks">
+                              <Pencil size={14} />
+                            </button>
+                          )}
+                        </Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </Card>
+            </>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -260,7 +194,7 @@ export default function ResultsPage() {
             </CardBody>
           </Card>
           <Card>
-            <CardHeader title="Upload History" />
+            <CardHeader title="Recent Mark Entries" />
             <CardBody className="space-y-2 pt-0">
               {history.data?.data.map((h, i) => (
                 <div key={i} className="flex items-center gap-2 border-b border-border-light py-2 text-sm last:border-0">
@@ -270,12 +204,60 @@ export default function ResultsPage() {
                   <span className="ml-auto text-xs text-text-muted">{h.studentCount}</span>
                 </div>
               ))}
-              {history.data && history.data.data.length === 0 && <p className="py-4 text-center text-xs text-text-muted">No uploads yet.</p>}
+              {history.data && history.data.data.length === 0 && <p className="py-4 text-center text-xs text-text-muted">No marks entered yet.</p>}
             </CardBody>
           </Card>
         </div>
       </div>
+
+      <EditMarksModal row={editOf} onClose={() => setEditOf(null)} />
     </PageShell>
+  )
+}
+
+function EditMarksModal({ row, onClose }: { row: PreviewRow | null; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [marks, setMarks] = useState('')
+  const max = row?.maxMarks ?? 25
+
+  const save = useMutation({
+    mutationFn: () => {
+      const m = Number(marks)
+      return hodApi.results.updateOne(row!.resultId!, m, gradeFor(m, max))
+    },
+    onSuccess: () => {
+      toast.success('Marks corrected')
+      qc.invalidateQueries({ queryKey: ['hod', 'results'] })
+      onClose()
+      setMarks('')
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  const invalid = marks === '' || !Number.isFinite(Number(marks)) || Number(marks) < 0 || Number(marks) > max
+
+  return (
+    <Modal
+      open={!!row}
+      onClose={() => { onClose(); setMarks('') }}
+      title={`Correct marks — ${row?.name ?? ''}`}
+      footer={
+        <>
+          <Button variant="outline" onClick={() => { onClose(); setMarks('') }}>Cancel</Button>
+          <Button onClick={() => save.mutate()} loading={save.isPending} disabled={invalid}>Save Correction</Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <p className="text-xs text-text-muted">
+          Current: <b>{row?.marksObtained}/{row?.maxMarks}</b> ({row?.grade}){row?.isPublished ? ' · already live for the student' : ''}
+        </p>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">New marks (out of {max})</label>
+          <Input type="number" min={0} max={max} step={0.5} value={marks} onChange={(e) => setMarks(e.target.value)} placeholder={String(row?.marksObtained ?? '')} />
+        </div>
+      </div>
+    </Modal>
   )
 }
 

@@ -3376,9 +3376,9 @@ export const portalService = {
     const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId, isCurrent: true }, include: { student: true } });
     const results = await Promise.all(enrollments.map(async (e) => {
       const r = await prisma.result.findFirst({ where: { enrollmentId: e.id, phaseId, subjectId } });
-      if (!r) return { enrollmentNo: e.student.enrollmentNo, name: e.student.name, marksObtained: null, maxMarks: null, grade: null, status: "Pending", isPublished: false };
+      if (!r) return { resultId: null, enrollmentNo: e.student.enrollmentNo, name: e.student.name, marksObtained: null, maxMarks: null, grade: null, status: "Pending", isPublished: false };
       const pct = (r.marksObtained / r.maxMarks) * 100;
-      return { enrollmentNo: e.student.enrollmentNo, name: e.student.name, marksObtained: r.marksObtained, maxMarks: r.maxMarks, grade: r.grade, status: pct < 40 ? "Fail" : "Pass", isPublished: r.isPublished };
+      return { resultId: r.id, enrollmentNo: e.student.enrollmentNo, name: e.student.name, marksObtained: r.marksObtained, maxMarks: r.maxMarks, grade: r.grade, status: pct < 40 ? "Fail" : "Pass", isPublished: r.isPublished };
     }));
     const filled = results.filter((r) => r.marksObtained != null);
     const avgMarks = filled.length === 0 ? 0 : average(filled.map((r) => ((r.marksObtained ?? 0) / (r.maxMarks ?? 100)) * 100));
