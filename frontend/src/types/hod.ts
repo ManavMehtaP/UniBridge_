@@ -107,6 +107,8 @@ export interface FacultyRow {
   name: string
   email?: string
   department: string
+  yearLevel?: string | null
+  yearLevels?: string[]
   isHod: boolean
   mentorCode?: string | null
   isActive?: boolean

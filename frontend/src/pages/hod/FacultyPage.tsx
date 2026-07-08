@@ -23,6 +23,8 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { FacultyDetailModal } from './faculty/FacultyDetailModal'
 import { AddFacultyModal } from './faculty/AddFacultyModal'
 
+const YEAR_LABEL: Record<string, string> = { FY: '1st Year', SY: '2nd Year', TY: '3rd Year', FINAL: 'Final Year' }
+
 export default function FacultyPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
@@ -90,7 +92,7 @@ export default function FacultyPage() {
                 <tr>
                   <Th>Faculty</Th>
                   <Th>Employee ID</Th>
-                  <Th>Department</Th>
+                  <Th>Year</Th>
                   <Th>Mentor Code</Th>
                   <Th>Subjects</Th>
                   <Th>Mentees</Th>
@@ -111,7 +113,7 @@ export default function FacultyPage() {
                       </div>
                     </Td>
                     <Td className="font-mono text-xs text-text-secondary">{f.employeeId}</Td>
-                    <Td>{f.department}</Td>
+                    <Td>{f.yearLevel ? <Badge tone="primary">{YEAR_LABEL[f.yearLevel] ?? f.yearLevel}</Badge> : <span className="text-text-muted">—</span>}</Td>
                     <Td>{f.mentorCode ? <Badge tone="teal">{f.mentorCode}</Badge> : <span className="text-text-muted">—</span>}</Td>
                     <Td className="tabular-nums">{f.assignedSubjects ?? f.subjectCount ?? 0}</Td>
                     <Td className="tabular-nums">{f.menteeCount ?? 0}</Td>

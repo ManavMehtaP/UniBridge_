@@ -16,22 +16,24 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { CardSkeleton } from '@/components/ui/Skeleton'
 
 interface ExamAssignment {
-  id: string; phaseId: string; phaseLabel: string; subjectCode: string; batchCode: string
+  id: string; phaseId: string; phaseLabel: string; subjectCode: string
   facultyName: string; fromEnrollmentNo: string; toEnrollmentNo: string
   totalStudents: number; markedCount: number
   status: 'Pending' | 'In Progress' | 'Complete' | 'Published'
 }
 interface ExamContext {
+  activeYearLevel: string | null
   phases: { id: string; label: string; number: number; entryMax: number }[]
   subjects: { id: string; code: string; name: string }[]
-  batches: { id: string; code: string }[]
-  faculty: { id: string; name: string; employeeId: string }[]
+  faculty: { id: string; name: string; employeeId: string; yearLevel: string | null }[]
   subjectFaculty: Record<string, string[]> // subjectId → facultyIds that teach it
 }
 interface AssignmentStudents {
-  assignment: { id: string; phaseLabel: string; entryMax: number; subjectCode: string; subjectName: string; batchCode: string; isPublished: boolean }
+  assignment: { id: string; phaseLabel: string; entryMax: number; subjectCode: string; subjectName: string; isPublished: boolean }
   students: { enrollmentId: string; rollNo: string; enrollmentNo: string; name: string; enteredMarks: number | null; grade: string | null; isPublished: boolean }[]
 }
+
+const YEAR_LABEL: Record<string, string> = { FY: '1st Year', SY: '2nd Year', TY: '3rd Year', FINAL: 'Final Year' }
 
 const examApi = {
   status: () => api.get<{ isCoordinator: boolean; slot: number | null }>('/faculty/exam/status').then((r) => r.data),
@@ -70,13 +72,12 @@ export default function FacultyExamsPage() {
           <EmptyState icon={<ClipboardCheck size={22} />} title="No papers assigned" description="The exam coordinator hasn't assigned you any papers yet." />
         ) : (
           <Table>
-            <thead><tr><Th>Phase</Th><Th>Subject</Th><Th>Batch</Th><Th>Enrollment Range</Th><Th>Progress</Th><Th>Status</Th><Th /></tr></thead>
+            <thead><tr><Th>Phase</Th><Th>Subject</Th><Th>Enrollment Range</Th><Th>Progress</Th><Th>Status</Th><Th /></tr></thead>
             <tbody>
               {mine.data?.data.map((a) => (
                 <Tr key={a.id} className="cursor-pointer" onClick={() => setOpenId(a.id)}>
                   <Td>{a.phaseLabel}</Td>
                   <Td className="font-medium">{a.subjectCode}</Td>
-                  <Td>{a.batchCode}</Td>
                   <Td className="whitespace-nowrap text-xs">{a.fromEnrollmentNo} – {a.toEnrollmentNo}</Td>
                   <Td className="min-w-[130px]">
                     <div className="flex items-center gap-2">
@@ -124,7 +125,7 @@ function MarksEntry({ assignmentId, onBack }: { assignmentId: string; onBack: ()
   return (
     <PageShell
       title={a ? `${a.subjectCode} — ${a.phaseLabel}` : 'Enter Marks'}
-      subtitle={a ? `Batch ${a.batchCode} · out of ${entryMax}${entryMax === 50 ? ' (stored ÷2, max 25)' : ''}` : ''}
+      subtitle={a ? `out of ${entryMax}${entryMax === 50 ? ' (stored ÷2, max 25)' : ''}` : ''}
       action={
         <div className="flex gap-2">
           <Button variant="outline" leftIcon={<ArrowLeft size={15} />} onClick={onBack}>Back</Button>
@@ -170,7 +171,7 @@ function CoordinatorDesk() {
   const qc = useQueryClient()
   const ctx = useQuery({ queryKey: ['faculty', 'exam', 'context'], queryFn: examApi.context })
   const all = useQuery({ queryKey: ['faculty', 'exam', 'all'], queryFn: () => examApi.assignments(true), refetchInterval: 300_000 })
-  const [form, setForm] = useState({ phaseId: '', subjectId: '', batchId: '', facultyId: '', fromEnrollmentNo: '', toEnrollmentNo: '' })
+  const [form, setForm] = useState({ phaseId: '', subjectId: '', facultyId: '', fromEnrollmentNo: '', toEnrollmentNo: '' })
   const [deleteOf, setDeleteOf] = useState<ExamAssignment | null>(null)
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['faculty', 'exam'] })
@@ -192,11 +193,23 @@ function CoordinatorDesk() {
   const rows = all.data?.data ?? []
   const formReady = Object.values(form).every(Boolean)
 
-  // Checker options are limited to faculty who teach the selected subject.
+  // Checker options = faculty who teach the selected subject (university-wide),
+  // grouped by academic year with the active (HOD) year listed first.
   const subjectCheckerIds = form.subjectId ? new Set(ctx.data?.subjectFaculty?.[form.subjectId] ?? []) : null
-  const checkerOpts = (ctx.data?.faculty ?? [])
-    .filter((f) => !subjectCheckerIds || subjectCheckerIds.has(f.id))
-    .map((f) => ({ value: f.id, label: f.name }))
+  const checkers = (ctx.data?.faculty ?? []).filter((f) => !subjectCheckerIds || subjectCheckerIds.has(f.id))
+  const checkerCount = checkers.length
+  const activeYear = ctx.data?.activeYearLevel ?? null
+  const YEAR_ORDER = ['FY', 'SY', 'TY', 'FINAL']
+  const checkerGroups = [...new Set(checkers.map((f) => f.yearLevel ?? 'OTHER'))]
+    .sort((a, b) => {
+      if (a === activeYear) return -1
+      if (b === activeYear) return 1
+      return YEAR_ORDER.indexOf(a) - YEAR_ORDER.indexOf(b)
+    })
+    .map((yl) => ({
+      label: yl === activeYear ? `${YEAR_LABEL[yl] ?? yl} · your year` : (YEAR_LABEL[yl] ?? 'Other'),
+      faculty: checkers.filter((f) => (f.yearLevel ?? 'OTHER') === yl),
+    }))
 
   function pickSubject(subjectId: string) {
     setForm((f) => {
@@ -212,17 +225,20 @@ function CoordinatorDesk() {
           <ShieldCheck size={16} className="text-purple" />
           <h3 className="text-sm font-semibold text-text-primary">Coordinator Desk — Assign Papers</h3>
         </div>
-        <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-6">
+        <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-5">
           <Select value={form.phaseId} onChange={(e) => setForm((f) => ({ ...f, phaseId: e.target.value }))} placeholder="Phase"
             options={(ctx.data?.phases ?? []).map((p) => ({ value: p.id, label: `${p.label} (/${p.entryMax})` }))} />
           <Select value={form.subjectId} onChange={(e) => pickSubject(e.target.value)} placeholder="Subject"
             options={(ctx.data?.subjects ?? []).map((s) => ({ value: s.id, label: s.code }))} />
-          <Select value={form.batchId} onChange={(e) => setForm((f) => ({ ...f, batchId: e.target.value }))} placeholder="Batch"
-            options={(ctx.data?.batches ?? []).map((b) => ({ value: b.id, label: `Batch ${b.code}` }))} />
           <Select value={form.facultyId} onChange={(e) => setForm((f) => ({ ...f, facultyId: e.target.value }))}
-            placeholder={!form.subjectId ? 'Pick subject first' : checkerOpts.length ? 'Checker' : 'No faculty teach this'}
-            disabled={!form.subjectId || checkerOpts.length === 0}
-            options={checkerOpts} />
+            disabled={!form.subjectId || checkerCount === 0}>
+            <option value="">{!form.subjectId ? 'Pick subject first' : checkerCount ? 'Checker' : 'No faculty teach this'}</option>
+            {checkerGroups.map((g) => (
+              <optgroup key={g.label} label={g.label}>
+                {g.faculty.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+              </optgroup>
+            ))}
+          </Select>
           <Input placeholder="From enrollment no" value={form.fromEnrollmentNo} onChange={(e) => setForm((f) => ({ ...f, fromEnrollmentNo: e.target.value }))} />
           <Input placeholder="To enrollment no" value={form.toEnrollmentNo} onChange={(e) => setForm((f) => ({ ...f, toEnrollmentNo: e.target.value }))} />
         </div>
@@ -242,13 +258,12 @@ function CoordinatorDesk() {
           <EmptyState icon={<ClipboardCheck size={22} />} title="No assignments yet" description="Assign papers to faculty above." />
         ) : (
           <Table>
-            <thead><tr><Th>Phase</Th><Th>Subject</Th><Th>Batch</Th><Th>Range</Th><Th>Checker</Th><Th>Progress</Th><Th>Status</Th><Th /></tr></thead>
+            <thead><tr><Th>Phase</Th><Th>Subject</Th><Th>Range</Th><Th>Checker</Th><Th>Progress</Th><Th>Status</Th><Th /></tr></thead>
             <tbody>
               {rows.map((a) => (
                 <Tr key={a.id}>
                   <Td>{a.phaseLabel}</Td>
                   <Td className="font-medium">{a.subjectCode}</Td>
-                  <Td>{a.batchCode}</Td>
                   <Td className="whitespace-nowrap text-xs">{a.fromEnrollmentNo} – {a.toEnrollmentNo}</Td>
                   <Td>{a.facultyName}</Td>
                   <Td className="min-w-[130px]">

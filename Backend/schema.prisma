@@ -919,7 +919,7 @@ model PaperCheckAssignment {
   semesterId       String
   phaseId          String
   subjectId        String
-  batchId          String
+  batchId          String?  // optional — checker students are derived from the subject's batches
   facultyId        String   // the checker
   fromEnrollmentNo String
   toEnrollmentNo   String

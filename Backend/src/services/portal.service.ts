@@ -159,9 +159,15 @@ async function requireExamCoordinator(facultyId: string, universityId: string) {
 
 // ponytail: enrollment-no range is a string compare — works because a college's
 // enrollment numbers share one fixed-width format. Revisit if formats ever mix.
-async function examRangeEnrollments(batchId: string, semesterId: string, from: string, to: string) {
+// Students for a paper-check range: everyone taking the subject (across all its
+// batches) whose enrollment_no falls in [from, to]. Batch is no longer part of the key.
+async function examRangeEnrollments(semesterId: string, subjectId: string, from: string, to: string) {
+  const batchIds = [...new Set(
+    (await prisma.facultyBatchAssignment.findMany({ where: { semesterId, subjectId }, select: { batchId: true } })).map((a) => a.batchId),
+  )];
+  if (batchIds.length === 0) return [];
   const enrs = await prisma.studentEnrollment.findMany({
-    where: { batchId, semesterId, isCurrent: true },
+    where: { batchId: { in: batchIds }, semesterId, isCurrent: true },
     include: { student: { select: { enrollmentNo: true, name: true } } },
   });
   return enrs
@@ -712,14 +718,18 @@ export const portalService = {
     const semester = await getActiveSemester(scope.universityId);
     const rows = await Promise.all(
       faculties.map(async (f) => {
-        const assignments = await prisma.facultyBatchAssignment.findMany({ where: { facultyId: f.id, semesterId: semester.id }, select: { batchId: true, subjectId: true } });
+        const assignments = await prisma.facultyBatchAssignment.findMany({ where: { facultyId: f.id, semesterId: semester.id }, select: { batchId: true, subjectId: true, batch: { select: { yearLevel: true } } } });
         const menteeCount = await prisma.mentorAssignment.count({ where: { facultyId: f.id, semesterId: semester.id } });
+        // the year level(s) this faculty teaches this semester (usually one)
+        const yearLevels = [...new Set(assignments.map((a) => a.batch.yearLevel))];
         return {
           id: f.id,
           employeeId: f.employeeId,
           name: f.name,
           email: f.email,
           department: f.department,
+          yearLevel: yearLevels[0] ?? null,
+          yearLevels,
           isHod: f.isHod,
           mentorCode: f.mentorCode,
           isActive: f.isActive,
@@ -3628,20 +3638,36 @@ export const portalService = {
 
   async examContext(universityId: string) {
     const sem = await getActiveSemester(universityId);
-    if (!sem.id) return { semesterId: "", phases: [], subjects: [], batches: [], faculty: [] };
-    const [phases, subjects, batches, faculty] = await Promise.all([
+    if (!sem.id) return { semesterId: "", activeYearLevel: null, phases: [], subjects: [], batches: [], faculty: [], subjectFaculty: {} };
+    const [phases, subjects, batches, faculty, yearAssignments] = await Promise.all([
       prisma.phase.findMany({ where: { semesterId: sem.id }, orderBy: { number: "asc" } }),
       prisma.subject.findMany({ where: { semesterId: sem.id, deletedAt: null }, orderBy: { code: "asc" } }),
       prisma.batch.findMany({ where: { academicYearId: sem.academicYearId }, orderBy: { code: "asc" } }),
       prisma.faculty.findMany({ where: { universityId, isHod: false, isDean: false, isActive: true, deletedAt: null }, select: { id: true, name: true, employeeId: true }, orderBy: { name: "asc" } }),
+      // a faculty's year(s) come from the year levels of batches they teach, across all semesters
+      prisma.facultyBatchAssignment.findMany({ where: { faculty: { universityId } }, select: { facultyId: true, batch: { select: { yearLevel: true } } } }),
     ]);
     const facultyBySubject = await subjectFacultyMap(sem.id);
+    const activeYearLevel = sem.yearLevel;
+    const yearsByFaculty = new Map<string, Set<string>>();
+    for (const a of yearAssignments) {
+      const s = yearsByFaculty.get(a.facultyId) ?? new Set<string>();
+      s.add(a.batch.yearLevel);
+      yearsByFaculty.set(a.facultyId, s);
+    }
+    // one year per faculty for grouping: prefer the active year if they teach it
+    const facultyYear = (id: string): string | null => {
+      const s = yearsByFaculty.get(id);
+      if (!s || s.size === 0) return null;
+      return s.has(activeYearLevel) ? activeYearLevel : [...s][0];
+    };
     return {
       semesterId: sem.id,
+      activeYearLevel,
       phases: phases.map((p) => ({ id: p.id, label: p.label, number: p.number, entryMax: p.number === 4 ? 50 : 25 })),
       subjects: subjects.map((s) => ({ id: s.id, code: s.code, name: s.name })),
       batches: batches.map((b) => ({ id: b.id, code: b.code })),
-      faculty,
+      faculty: faculty.map((f) => ({ ...f, yearLevel: facultyYear(f.id) })),
       // subjectId → [facultyId] so the checker dropdown can filter to that subject's teachers
       subjectFaculty: Object.fromEntries([...facultyBySubject.entries()].map(([sid, fs]) => [sid, fs.map((f) => f.id)])),
     };
@@ -3655,18 +3681,16 @@ export const portalService = {
       orderBy: { createdAt: "desc" },
     });
     if (rows.length === 0) return { data: [] };
-    const [phases, subjects, batches, facs] = await Promise.all([
+    const [phases, subjects, facs] = await Promise.all([
       prisma.phase.findMany({ where: { semesterId: sem.id } }),
       prisma.subject.findMany({ where: { semesterId: sem.id } }),
-      prisma.batch.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.batchId))] } } }),
       prisma.faculty.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.facultyId))] } }, select: { id: true, name: true } }),
     ]);
     const phaseById2 = new Map(phases.map((p) => [p.id, p]));
     const subjById = new Map(subjects.map((s) => [s.id, s]));
-    const batchById2 = new Map(batches.map((b) => [b.id, b]));
     const facById = new Map(facs.map((f) => [f.id, f]));
     const data = await Promise.all(rows.map(async (r) => {
-      const enrs = await examRangeEnrollments(r.batchId, sem.id, r.fromEnrollmentNo, r.toEnrollmentNo);
+      const enrs = await examRangeEnrollments(sem.id, r.subjectId, r.fromEnrollmentNo, r.toEnrollmentNo);
       const ids = enrs.map((e) => e.id);
       const results = ids.length ? await prisma.result.findMany({ where: { enrollmentId: { in: ids }, phaseId: r.phaseId, subjectId: r.subjectId }, select: { isPublished: true } }) : [];
       const marked = results.length;
@@ -3674,7 +3698,6 @@ export const portalService = {
       return {
         id: r.id, phaseId: r.phaseId, phaseLabel: phaseById2.get(r.phaseId)?.label ?? "?",
         subjectId: r.subjectId, subjectCode: subjById.get(r.subjectId)?.code ?? "?",
-        batchId: r.batchId, batchCode: batchById2.get(r.batchId)?.code ?? "?",
         facultyId: r.facultyId, facultyName: facById.get(r.facultyId)?.name ?? "?",
         fromEnrollmentNo: r.fromEnrollmentNo, toEnrollmentNo: r.toEnrollmentNo,
         totalStudents: ids.length, markedCount: marked,
@@ -3685,22 +3708,23 @@ export const portalService = {
     return { data };
   },
 
-  async createExamAssignment(coordId: string, universityId: string, body: { phaseId: string; subjectId: string; batchId: string; facultyId: string; fromEnrollmentNo: string; toEnrollmentNo: string }) {
+  async createExamAssignment(coordId: string, universityId: string, body: { phaseId: string; subjectId: string; facultyId: string; fromEnrollmentNo: string; toEnrollmentNo: string }) {
     const { semester } = await requireExamCoordinator(coordId, universityId);
-    for (const k of ["phaseId", "subjectId", "batchId", "facultyId", "fromEnrollmentNo", "toEnrollmentNo"] as const) {
+    for (const k of ["phaseId", "subjectId", "facultyId", "fromEnrollmentNo", "toEnrollmentNo"] as const) {
       if (!body[k]) throw new ApiError(400, "VALIDATION_ERROR", `${k} is required.`);
     }
     const from = body.fromEnrollmentNo.trim().toUpperCase();
     const to = body.toEnrollmentNo.trim().toUpperCase();
     if (from > to) throw new ApiError(400, "VALIDATION_ERROR", "From-enrollment must not be greater than to-enrollment.");
-    const enrs = await examRangeEnrollments(body.batchId, semester.id, from, to);
-    if (enrs.length === 0) throw new ApiError(400, "EMPTY_RANGE", "No students found in that enrollment range for this batch.");
-    const siblings = await prisma.paperCheckAssignment.findMany({ where: { semesterId: semester.id, phaseId: body.phaseId, subjectId: body.subjectId, batchId: body.batchId } });
+    const enrs = await examRangeEnrollments(semester.id, body.subjectId, from, to);
+    if (enrs.length === 0) throw new ApiError(400, "EMPTY_RANGE", "No students found in that enrollment range for this subject.");
+    // overlap is now per (phase, subject) — batch is no longer part of the key
+    const siblings = await prisma.paperCheckAssignment.findMany({ where: { semesterId: semester.id, phaseId: body.phaseId, subjectId: body.subjectId } });
     if (siblings.some((s) => from <= s.toEnrollmentNo && to >= s.fromEnrollmentNo)) {
       throw new ApiError(409, "RANGE_OVERLAP", "This range overlaps an existing assignment for the same paper.");
     }
     const row = await prisma.paperCheckAssignment.create({
-      data: { universityId, semesterId: semester.id, phaseId: body.phaseId, subjectId: body.subjectId, batchId: body.batchId, facultyId: body.facultyId, fromEnrollmentNo: from, toEnrollmentNo: to, assignedById: coordId },
+      data: { universityId, semesterId: semester.id, phaseId: body.phaseId, subjectId: body.subjectId, facultyId: body.facultyId, fromEnrollmentNo: from, toEnrollmentNo: to, assignedById: coordId },
     });
     const [subject, phase] = await Promise.all([subjectById(body.subjectId), phaseById(body.phaseId)]);
     await this.notifyMany(universityId, [{ facultyId: body.facultyId }], "PAPER_CHECK_ASSIGNED",
@@ -3722,15 +3746,15 @@ export const portalService = {
       const coord = await prisma.examCoordinator.findFirst({ where: { semesterId: a.semesterId, facultyId } });
       if (!coord) throw new ApiError(403, "FORBIDDEN", "This paper set is not assigned to you.");
     }
-    const [phase, subject, batch] = await Promise.all([phaseById(a.phaseId), subjectById(a.subjectId), batchById(a.batchId)]);
+    const [phase, subject] = await Promise.all([phaseById(a.phaseId), subjectById(a.subjectId)]);
     const entryMax = phase.number === 4 ? 50 : 25;
-    const enrs = await examRangeEnrollments(a.batchId, a.semesterId, a.fromEnrollmentNo, a.toEnrollmentNo);
+    const enrs = await examRangeEnrollments(a.semesterId, a.subjectId, a.fromEnrollmentNo, a.toEnrollmentNo);
     const results = await prisma.result.findMany({ where: { enrollmentId: { in: enrs.map((e) => e.id) }, phaseId: a.phaseId, subjectId: a.subjectId } });
     const resByEnr = new Map(results.map((r) => [r.enrollmentId, r]));
     return {
       assignment: {
         id: a.id, phaseLabel: phase.label, phaseNumber: phase.number, entryMax,
-        subjectCode: subject.code, subjectName: subject.name, batchCode: batch.code,
+        subjectCode: subject.code, subjectName: subject.name,
         fromEnrollmentNo: a.fromEnrollmentNo, toEnrollmentNo: a.toEnrollmentNo,
         isPublished: results.length > 0 && results.every((r) => r.isPublished),
       },
@@ -3755,7 +3779,7 @@ export const portalService = {
     }
     const phase = await phaseById(a.phaseId);
     const entryMax = phase.number === 4 ? 50 : 25;
-    const allowedIds = new Set((await examRangeEnrollments(a.batchId, a.semesterId, a.fromEnrollmentNo, a.toEnrollmentNo)).map((e) => e.id));
+    const allowedIds = new Set((await examRangeEnrollments(a.semesterId, a.subjectId, a.fromEnrollmentNo, a.toEnrollmentNo)).map((e) => e.id));
     let saved = 0;
     for (const m of marks) {
       if (m.marks == null) continue;
@@ -3788,7 +3812,7 @@ export const portalService = {
     const incomplete: string[] = [];
     const enrollmentIds = new Set<string>();
     for (const a of assignments) {
-      const enrs = await examRangeEnrollments(a.batchId, semester.id, a.fromEnrollmentNo, a.toEnrollmentNo);
+      const enrs = await examRangeEnrollments(semester.id, a.subjectId, a.fromEnrollmentNo, a.toEnrollmentNo);
       const marked = await prisma.result.count({ where: { enrollmentId: { in: enrs.map((e) => e.id) }, phaseId, subjectId: a.subjectId } });
       if (marked < enrs.length) incomplete.push(`${a.fromEnrollmentNo}–${a.toEnrollmentNo} (${marked}/${enrs.length})`);
       enrs.forEach((e) => enrollmentIds.add(e.id));

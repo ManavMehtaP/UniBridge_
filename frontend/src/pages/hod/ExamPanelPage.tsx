@@ -16,7 +16,7 @@ import { CardSkeleton } from '@/components/ui/Skeleton'
 
 interface Coordinator { slot: number; facultyId: string | null; name: string | null; employeeId: string | null }
 interface ExamAssignment {
-  id: string; phaseId: string; phaseLabel: string; subjectCode: string; batchCode: string
+  id: string; phaseId: string; phaseLabel: string; subjectCode: string
   facultyName: string; fromEnrollmentNo: string; toEnrollmentNo: string
   totalStudents: number; markedCount: number
   status: 'Pending' | 'In Progress' | 'Complete' | 'Published'
@@ -104,14 +104,13 @@ export default function ExamPanelPage() {
         ) : (
           <Table>
             <thead><tr>
-              <Th>Phase</Th><Th>Subject</Th><Th>Batch</Th><Th>Enrollment Range</Th><Th>Checker</Th><Th>Progress</Th><Th>Status</Th>
+              <Th>Phase</Th><Th>Subject</Th><Th>Enrollment Range</Th><Th>Checker</Th><Th>Progress</Th><Th>Status</Th>
             </tr></thead>
             <tbody>
               {rows.map((a) => (
                 <Tr key={a.id}>
                   <Td>{a.phaseLabel}</Td>
                   <Td className="font-medium">{a.subjectCode}</Td>
-                  <Td>{a.batchCode}</Td>
                   <Td className="whitespace-nowrap text-xs">{a.fromEnrollmentNo} – {a.toEnrollmentNo}</Td>
                   <Td>{a.facultyName}</Td>
                   <Td className="min-w-[140px]">
