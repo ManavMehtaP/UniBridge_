@@ -124,6 +124,22 @@ async function phaseById(phaseId: string) {
   return p;
 }
 
+// Subject → its teaching faculty for a semester, from FacultyBatchAssignment.
+// One query, grouped. Excludes HOD/Dean/inactive so it feeds assignable-faculty dropdowns.
+async function subjectFacultyMap(semesterId: string) {
+  const assignments = await prisma.facultyBatchAssignment.findMany({
+    where: { semesterId, faculty: { isHod: false, isDean: false, isActive: true, deletedAt: null } },
+    select: { subjectId: true, faculty: { select: { id: true, name: true, employeeId: true } } },
+  });
+  const map = new Map<string, { id: string; name: string; employeeId: string }[]>();
+  for (const a of assignments) {
+    const arr = map.get(a.subjectId) ?? [];
+    if (!arr.some((x) => x.id === a.faculty.id)) arr.push(a.faculty);
+    map.set(a.subjectId, arr);
+  }
+  return map;
+}
+
 // Universal branch rule: a student's branch must be one the university offers.
 // Single guard for every student create/update path.
 async function assertBranchAllowed(universityId: string, branch: string) {
@@ -318,7 +334,8 @@ async function computeOverallAttendancePct(enrollmentId: string) {
 
 async function getScopedFaculty(scope: Scope) {
   return prisma.faculty.findMany({
-    where: { universityId: scope.universityId, deletedAt: null, NOT: { employeeId: "ADMIN001" } },
+    // Dean is a university-admin account, never part of a HOD's teaching roster.
+    where: { universityId: scope.universityId, deletedAt: null, isDean: false, NOT: { employeeId: "ADMIN001" } },
   });
 }
 
@@ -667,7 +684,7 @@ export const portalService = {
 
   async listFaculty(scope: Scope, query: Record<string, string | number | undefined>) {
     const faculties = await prisma.faculty.findMany({
-      where: { universityId: scope.universityId, deletedAt: null, NOT: { employeeId: "ADMIN001" } },
+      where: { universityId: scope.universityId, deletedAt: null, isDean: false, NOT: { employeeId: "ADMIN001" } },
     });
     const semester = await getActiveSemester(scope.universityId);
     const rows = await Promise.all(
@@ -892,11 +909,15 @@ export const portalService = {
         ...(type ? { type: type as any } : {}),
       },
     });
+    const facultyBySubject = await subjectFacultyMap(semester.id);
     const data = await Promise.all(
       subjects.map(async (subject) => {
-        const assignments = await prisma.facultyBatchAssignment.findMany({ where: { subjectId: subject.id }, include: { batch: { select: { code: true } } } });
-        const assignedFacultyId = assignments[0]?.facultyId;
-        const assignedFaculty = assignedFacultyId ? await prisma.faculty.findUnique({ where: { id: assignedFacultyId }, select: { id: true, name: true } }) : null;
+        const assignments = await prisma.facultyBatchAssignment.findMany({
+          where: { subjectId: subject.id, semesterId: semester.id },
+          include: { batch: { select: { id: true, code: true } }, faculty: { select: { id: true, name: true } } },
+          orderBy: [{ faculty: { name: "asc" } }, { batch: { code: "asc" } }],
+        });
+        const teachingFaculty = facultyBySubject.get(subject.id) ?? [];
         const pyqCount = await prisma.pYQFile.count({ where: { subjectId: subject.id } });
         return {
           id: subject.id,
@@ -904,7 +925,10 @@ export const portalService = {
           name: subject.name,
           credits: subject.credits,
           type: subject.type,
-          assignedFaculty: assignedFaculty ? { id: assignedFaculty.id, name: assignedFaculty.name } : null,
+          assignedFaculty: teachingFaculty[0] ? { id: teachingFaculty[0].id, name: teachingFaculty[0].name } : null,
+          faculty: teachingFaculty.map((f) => ({ id: f.id, name: f.name })),
+          // full many-to-many: one row per (faculty, batch) this subject is taught in
+          assignments: assignments.map((a) => ({ id: a.id, facultyId: a.faculty.id, facultyName: a.faculty.name, batchId: a.batch.id, batchCode: a.batch.code })),
           batches: [...new Set(assignments.map((a) => a.batch.code))],
           pyqUploaded: pyqCount > 0,
         };
@@ -3589,12 +3613,15 @@ export const portalService = {
       prisma.batch.findMany({ where: { academicYearId: sem.academicYearId }, orderBy: { code: "asc" } }),
       prisma.faculty.findMany({ where: { universityId, isHod: false, isDean: false, isActive: true, deletedAt: null }, select: { id: true, name: true, employeeId: true }, orderBy: { name: "asc" } }),
     ]);
+    const facultyBySubject = await subjectFacultyMap(sem.id);
     return {
       semesterId: sem.id,
       phases: phases.map((p) => ({ id: p.id, label: p.label, number: p.number, entryMax: p.number === 4 ? 50 : 25 })),
       subjects: subjects.map((s) => ({ id: s.id, code: s.code, name: s.name })),
       batches: batches.map((b) => ({ id: b.id, code: b.code })),
       faculty,
+      // subjectId → [facultyId] so the checker dropdown can filter to that subject's teachers
+      subjectFaculty: Object.fromEntries([...facultyBySubject.entries()].map(([sid, fs]) => [sid, fs.map((f) => f.id)])),
     };
   },
 
