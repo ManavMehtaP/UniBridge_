@@ -159,6 +159,19 @@ async function requireExamCoordinator(facultyId: string, universityId: string) {
 
 // ponytail: enrollment-no range is a string compare — works because a college's
 // enrollment numbers share one fixed-width format. Revisit if formats ever mix.
+// Sum of obtained/max published marks per enrollment → merit aggregate.
+async function promotionAggregates(enrollmentIds: string[]) {
+  const agg = new Map<string, { got: number; max: number }>();
+  if (enrollmentIds.length === 0) return agg;
+  const results = await prisma.result.findMany({ where: { enrollmentId: { in: enrollmentIds } }, select: { enrollmentId: true, marksObtained: true, maxMarks: true } });
+  for (const r of results) {
+    const a = agg.get(r.enrollmentId) ?? { got: 0, max: 0 };
+    a.got += r.marksObtained; a.max += r.maxMarks;
+    agg.set(r.enrollmentId, a);
+  }
+  return agg;
+}
+
 // Students for a paper-check range: everyone taking the subject (across all its
 // batches) whose enrollment_no falls in [from, to]. Batch is no longer part of the key.
 async function examRangeEnrollments(semesterId: string, subjectId: string, from: string, to: string) {
@@ -1597,6 +1610,186 @@ export const portalService = {
       mapped += 1;
     }
     return { mapped, errors };
+  },
+
+  // ════════════════════════════════════════════════════════════
+  // Promotion v2 — result-based semester + academic-year transition
+  // Merit = aggregate % of published results (no CGPA/SGPA stored yet).
+  // ════════════════════════════════════════════════════════════
+
+  async logActivity(universityId: string, facultyId: string, type: string, title: string, description: string) {
+    await prisma.activityLog.create({ data: { universityId, facultyId, type: type as any, title, description } });
+  },
+
+  async promotionContext(scope: Scope) {
+    const sem = await getActiveSemester(scope.universityId);
+    if (!sem.id) return { mode: null as null | "SEMESTER" | "YEAR" };
+    // odd semester (1,3,5,7) → next semester in same year; even (2,4,6,8) → next academic year
+    const mode: "SEMESTER" | "YEAR" = sem.number % 2 === 1 ? "SEMESTER" : "YEAR";
+    const enrs = await prisma.studentEnrollment.findMany({
+      where: { semesterId: sem.id, batchId: { in: scope.hodBatchIds }, isCurrent: true },
+      include: { student: { select: { branch: true } } },
+    });
+    const agg = await promotionAggregates(enrs.map((e) => e.id));
+    let passed = 0, failed = 0, pending = 0;
+    for (const e of enrs) {
+      const a = agg.get(e.id);
+      if (!a || a.max === 0) pending++;
+      else if ((a.got / a.max) * 100 >= 40) passed++;
+      else failed++;
+    }
+    const nextYearLevel = sem.yearLevel === "FY" ? "SY" : sem.yearLevel === "SY" ? "TY" : "FINAL";
+    const nextSemester = mode === "SEMESTER"
+      ? await prisma.semester.findFirst({ where: { academicYearId: sem.academicYearId, number: sem.number + 1 }, select: { id: true, label: true, number: true } })
+      : null;
+    const nextYear = mode === "YEAR"
+      ? await prisma.academicYear.findFirst({ where: { universityId: scope.universityId, label: { gt: (await getAcademicYear(sem.academicYearId)).label } }, orderBy: { label: "asc" }, select: { id: true, label: true } })
+      : null;
+    const [hods, branches] = await Promise.all([
+      prisma.faculty.findMany({ where: { universityId: scope.universityId, isHod: true, deletedAt: null }, select: { id: true, name: true, employeeId: true }, orderBy: { name: "asc" } }),
+      prisma.universityBranch.findMany({ where: { universityId: scope.universityId }, orderBy: { code: "asc" }, select: { code: true, name: true } }),
+    ]);
+    return {
+      mode,
+      activeSemester: { id: sem.id, label: sem.label, number: sem.number, yearLevel: sem.yearLevel },
+      nextSemester, nextYear, nextYearLevel,
+      currentStudentCount: enrs.length,
+      passedCount: passed, failedCount: failed, pendingCount: pending,
+      branchesInScope: [...new Set(enrs.map((e) => e.student.branch))].sort(),
+      hods, branches,
+    };
+  },
+
+  // Merit leaderboard for the current cohort (optionally one branch), ranked by aggregate %.
+  async promotionLeaderboard(scope: Scope, branch?: string) {
+    const sem = await getActiveSemester(scope.universityId);
+    if (!sem.id) return { data: [], total: 0 };
+    const enrs = await prisma.studentEnrollment.findMany({
+      where: { semesterId: sem.id, batchId: { in: scope.hodBatchIds }, isCurrent: true, ...(branch ? { student: { branch } } : {}) },
+      include: { student: { select: { enrollmentNo: true, name: true, branch: true } }, batch: { select: { code: true } } },
+    });
+    const agg = await promotionAggregates(enrs.map((e) => e.id));
+    const rows = enrs.map((e) => {
+      const a = agg.get(e.id);
+      const pct = a && a.max > 0 ? (a.got / a.max) * 100 : null;
+      return {
+        enrollmentId: e.id, enrollmentNo: e.student.enrollmentNo, name: e.student.name,
+        branch: e.student.branch, batchCode: e.batch.code, rollNo: e.rollNo,
+        aggregatePct: pct === null ? null : Math.round(pct * 10) / 10,
+        status: pct === null ? "Pending" : pct >= 40 ? "Pass" : "Fail",
+      };
+    });
+    // merit order: highest % first, ungraded last, then enrollment no
+    rows.sort((a, b) => {
+      if (a.aggregatePct === null && b.aggregatePct === null) return a.enrollmentNo.localeCompare(b.enrollmentNo);
+      if (a.aggregatePct === null) return 1;
+      if (b.aggregatePct === null) return -1;
+      return b.aggregatePct - a.aggregatePct || a.enrollmentNo.localeCompare(b.enrollmentNo);
+    });
+    return { data: rows.map((r, i) => ({ rank: i + 1, ...r })), total: rows.length };
+  },
+
+  // Preview auto-generated batches + capacity fit for the year-promotion wizard.
+  async promotionYearPreview(scope: Scope, opts: { branch: string; batchCount: number; capacity: number; batchInitial?: string }) {
+    const { data } = await this.promotionLeaderboard(scope, opts.branch);
+    const initial = (opts.batchInitial || "C").toUpperCase().slice(0, 1);
+    const promotable = data.filter((r) => r.status !== "Fail"); // failing students are detained by default
+    const batches = Array.from({ length: opts.batchCount }, (_, i) => {
+      const start = i * opts.capacity;
+      const slice = promotable.slice(start, start + opts.capacity);
+      return { code: `${initial}${i + 1}`, assigned: slice.length, capacity: opts.capacity };
+    });
+    return {
+      totalStudents: data.length,
+      promotable: promotable.length,
+      detained: data.length - promotable.length,
+      seats: opts.batchCount * opts.capacity,
+      overflow: Math.max(0, promotable.length - opts.batchCount * opts.capacity),
+      batches,
+    };
+  },
+
+  async promotionExecuteSemester(scope: Scope, opts: { detainEnrollmentIds?: string[] } = {}) {
+    const sem = await getActiveSemester(scope.universityId);
+    if (!sem.id) throw new ApiError(400, "NO_ACTIVE_SEMESTER", "No active semester.");
+    if (sem.number % 2 !== 1) throw new ApiError(400, "NOT_SEMESTER_POINT", "This is a year-end semester — use year promotion.");
+    // create the next semester (same year, same year level) if it doesn't exist yet
+    let next = await prisma.semester.findFirst({ where: { academicYearId: sem.academicYearId, number: sem.number + 1 } });
+    if (!next) {
+      const start = new Date(sem.endDate);
+      const end = new Date(start.getTime() + 1000 * 60 * 60 * 24 * 120);
+      next = await prisma.semester.create({
+        data: { universityId: scope.universityId, academicYearId: sem.academicYearId, number: sem.number + 1, label: `Semester ${sem.number + 1}`, yearLevel: sem.yearLevel, status: "UPCOMING", startDate: start, endDate: end },
+      });
+      const span = (end.getTime() - start.getTime()) / 4;
+      await prisma.phase.createMany({ data: [1, 2, 3, 4].map((i) => ({ semesterId: next!.id, label: `T${i}`, number: i, startDate: new Date(start.getTime() + span * (i - 1)), endDate: new Date(start.getTime() + span * i) })) });
+    }
+    const detain = new Set(opts.detainEnrollmentIds ?? []);
+    const enrs = await prisma.studentEnrollment.findMany({ where: { semesterId: sem.id, batchId: { in: scope.hodBatchIds }, isCurrent: true } });
+    let promoted = 0;
+    for (const e of enrs) {
+      if (detain.has(e.id)) continue;
+      await prisma.studentEnrollment.update({ where: { id: e.id }, data: { isCurrent: false } });
+      await prisma.studentEnrollment.create({
+        data: { studentId: e.studentId, semesterId: next.id, batchId: e.batchId, rollNo: e.rollNo, yearLevel: next.yearLevel, isCurrent: true, promotedFromId: e.id },
+      });
+      promoted++;
+    }
+    // flip active semester forward
+    await prisma.semester.update({ where: { id: sem.id }, data: { status: "COMPLETE" } });
+    await prisma.semester.update({ where: { id: next.id }, data: { status: "ACTIVE" } });
+    await this.logActivity(scope.universityId, scope.userId, "PROMOTION_EXECUTED", `Promoted to ${next.label}`, `${promoted} students promoted from ${sem.label} to ${next.label}. Detained: ${detain.size}.`);
+    return { mode: "SEMESTER", promoted, detained: detain.size, fromSemester: sem.label, toSemester: next.label };
+  },
+
+  async promotionExecuteYear(scope: Scope, body: { destinationHodId: string; branch: string; batchCount: number; capacity: number; batchInitial?: string; detainEnrollmentIds?: string[] }) {
+    const sem = await getActiveSemester(scope.universityId);
+    if (!sem.id) throw new ApiError(400, "NO_ACTIVE_SEMESTER", "No active semester.");
+    if (sem.number % 2 !== 0) throw new ApiError(400, "NOT_YEAR_POINT", "This is a mid-year semester — use semester promotion.");
+    const curYear = await getAcademicYear(sem.academicYearId);
+    const nextYear = await prisma.academicYear.findFirst({ where: { universityId: scope.universityId, label: { gt: curYear.label } }, orderBy: { label: "asc" } });
+    if (!nextYear) throw new ApiError(400, "NO_NEXT_YEAR", "Create the next academic year first (University portal).");
+    const nextYL = sem.yearLevel === "FY" ? "SY" : sem.yearLevel === "SY" ? "TY" : "FINAL";
+    const nextSem = await prisma.semester.findFirst({ where: { academicYearId: nextYear.id, yearLevel: nextYL as any }, orderBy: { number: "asc" } });
+    if (!nextSem) throw new ApiError(400, "NO_NEXT_SEMESTER", `Create the first ${nextYL} semester in ${nextYear.label} first.`);
+    const hod = await prisma.faculty.findFirst({ where: { id: body.destinationHodId, universityId: scope.universityId, isHod: true, deletedAt: null } });
+    if (!hod) throw new ApiError(404, "HOD_NOT_FOUND", "Destination HOD not found.");
+
+    const { data } = await this.promotionLeaderboard(scope, body.branch);
+    const detain = new Set(body.detainEnrollmentIds ?? []);
+    const promotable = data.filter((r) => r.status !== "Fail" && !detain.has(r.enrollmentId));
+    if (promotable.length > body.batchCount * body.capacity) {
+      throw new ApiError(400, "INSUFFICIENT_CAPACITY", `${promotable.length} students but only ${body.batchCount * body.capacity} seats. Add batches or capacity.`);
+    }
+    const initial = (body.batchInitial || "C").toUpperCase().slice(0, 1);
+    let promoted = 0;
+    const createdBatches: { code: string; count: number }[] = [];
+    for (let i = 0; i < body.batchCount; i++) {
+      const code = `${initial}${i + 1}`;
+      const existing = await prisma.batch.findFirst({ where: { academicYearId: nextYear.id, code } });
+      const batch = existing ?? await prisma.batch.create({ data: { universityId: scope.universityId, academicYearId: nextYear.id, code, yearLevel: nextYL as any } });
+      await prisma.hodBatchScope.upsert({
+        where: { batchId: batch.id },
+        update: { facultyId: hod.id, semesterId: nextSem.id, academicYearId: nextYear.id },
+        create: { facultyId: hod.id, batchId: batch.id, semesterId: nextSem.id, academicYearId: nextYear.id },
+      });
+      const slice = promotable.slice(i * body.capacity, i * body.capacity + body.capacity);
+      let seq = 1;
+      for (const r of slice) {
+        const from = await prisma.studentEnrollment.findUnique({ where: { id: r.enrollmentId }, select: { studentId: true } });
+        if (!from) continue;
+        await prisma.studentEnrollment.update({ where: { id: r.enrollmentId }, data: { isCurrent: false } });
+        await prisma.studentEnrollment.create({
+          data: { studentId: from.studentId, semesterId: nextSem.id, batchId: batch.id, rollNo: `${code}-${String(seq).padStart(3, "0")}`, yearLevel: nextYL as any, isCurrent: true, promotedFromId: r.enrollmentId },
+        });
+        seq++; promoted++;
+      }
+      createdBatches.push({ code, count: slice.length });
+    }
+    await this.logActivity(scope.universityId, scope.userId, "PROMOTION_EXECUTED",
+      `Year promotion → ${hod.name}`,
+      `${promoted} ${body.branch} students promoted from ${curYear.label} (${sem.yearLevel}) to ${nextYear.label} (${nextYL}) under ${hod.name}. Detained/failed: ${data.length - promoted}.`);
+    return { mode: "YEAR", promoted, detained: data.length - promoted, destinationHod: hod.name, toYear: nextYear.label, batches: createdBatches };
   },
 
   // ── Calendar Events ───────────────────────────────────────

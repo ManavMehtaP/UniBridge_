@@ -186,6 +186,13 @@ export const hodApi = {
 
   // ── Promotion ──
   promotion: {
+    // v2 — result-based
+    context: () => api.get('/hod/promotion/context').then((r) => r.data),
+    leaderboard: (branch?: string) => api.get('/hod/promotion/leaderboard', { params: { branch: branch || undefined } }).then((r) => r.data),
+    yearPreview: (body: Record<string, unknown>) => api.post('/hod/promotion/year-preview', body).then((r) => r.data),
+    executeSemester: (body: Record<string, unknown>) => api.post('/hod/promotion/execute-semester', body).then((r) => r.data),
+    executeYear: (body: Record<string, unknown>) => api.post('/hod/promotion/execute-year', body).then((r) => r.data),
+
     years: () => api.get('/hod/promotion/years').then((r) => r.data),
     preview: (fromAcademicYearId: string, toAcademicYearId: string) =>
       api.get('/hod/promotion/preview', { params: { fromAcademicYearId, toAcademicYearId } }).then((r) => r.data),

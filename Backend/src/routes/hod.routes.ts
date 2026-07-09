@@ -157,6 +157,13 @@ hodRouter.post("/analytics/at-risk/notify-mentor", asyncHandler(async (req, res)
 hodRouter.get("/analytics/year-comparison", asyncHandler(async (_req, res) => res.json(await portalService.analyticsYearComparison())));
 hodRouter.get("/analytics/export", asyncHandler(async (_req, res) => sendPdf(res, "analytics-report.pdf", await portalService.analyticsExport())));
 
+// Promotion v2 — result-based
+hodRouter.get("/promotion/context", asyncHandler(async (req, res) => res.json(await portalService.promotionContext(scopeFrom(req)))));
+hodRouter.get("/promotion/leaderboard", asyncHandler(async (req, res) => res.json(await portalService.promotionLeaderboard(scopeFrom(req), req.query.branch as string | undefined))));
+hodRouter.post("/promotion/year-preview", asyncHandler(async (req, res) => res.json(await portalService.promotionYearPreview(scopeFrom(req), req.body))));
+hodRouter.post("/promotion/execute-semester", asyncHandler(async (req, res) => res.json(await portalService.promotionExecuteSemester(scopeFrom(req), req.body ?? {}))));
+hodRouter.post("/promotion/execute-year", asyncHandler(async (req, res) => res.json(await portalService.promotionExecuteYear(scopeFrom(req), req.body))));
+
 hodRouter.get("/promotion/years", asyncHandler(async (_req, res) => res.json(await portalService.promotionYears())));
 hodRouter.get("/promotion/preview", asyncHandler(async (req, res) => res.json(await portalService.promotionPreview(String(req.query.fromAcademicYearId), String(req.query.toAcademicYearId)))));
 hodRouter.post("/promotion/mapping/csv", upload.single("file"), asyncHandler(async (req, res) => {
