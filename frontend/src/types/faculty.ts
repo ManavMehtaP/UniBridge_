@@ -14,7 +14,7 @@ export interface FacultyScope {
 }
 
 export interface FacultyDashboardStats {
-  faculty: { id: string; name: string; mentorCode?: string | null; department: string }
+  faculty: { id: string; name: string; mentorCode?: string | null; year: string }
   activeSemester: { id: string; label: string; number: number }
   stats: {
     totalStudents: number

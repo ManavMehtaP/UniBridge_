@@ -51,16 +51,17 @@ export default function UniversityStudentsPage() {
       ) : (
         <Card className="overflow-hidden">
           <Table>
-            <thead><tr><Th>Enrollment No</Th><Th>Name</Th><Th>Branch</Th><Th>Batch</Th><Th>Semester</Th><Th>Roll No</Th><Th>Status</Th><Th /></tr></thead>
+            <thead><tr><Th>Enrollment No</Th><Th>Name</Th><Th>Branch</Th><Th>Academic Year</Th><Th>Semester</Th><Th>Batch</Th><Th>Roll No</Th><Th>Status</Th><Th /></tr></thead>
             <tbody>
               {q.data?.data.map((s) => (
                 <Tr key={s.id}>
-                  <Td className="whitespace-nowrap text-xs">{s.enrollmentNo}</Td>
+                  <Td className="whitespace-nowrap font-mono text-xs">{s.enrollmentNo}</Td>
                   <Td className="font-medium">{s.name}</Td>
-                  <Td>{s.branch}</Td>
-                  <Td>{s.batchCode ?? '—'}</Td>
+                  <Td><Badge tone="primary">{s.branch}</Badge></Td>
+                  <Td className="whitespace-nowrap">{s.academicYearLabel ?? '—'}</Td>
                   <Td>{s.semesterLabel ?? '—'}</Td>
-                  <Td>{s.rollNo ?? '—'}</Td>
+                  <Td>{s.batchCode ?? '—'}</Td>
+                  <Td className="font-mono text-xs">{s.rollNo ?? '—'}</Td>
                   <Td><Badge tone={s.isActive ? 'success' : 'danger'}>{s.isActive ? 'Active' : 'Inactive'}</Badge></Td>
                   <Td>
                     <Button size="sm" variant="outline" onClick={() => toggle.mutate({ id: s.id, isActive: !s.isActive })}>

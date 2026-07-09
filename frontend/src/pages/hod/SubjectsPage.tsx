@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { BookOpen, FileText, Pencil, Plus, Trash2, UserPlus, Users, X } from 'lucide-react'
+import { BookOpen, FileText, Plus, UserPlus, Users, X } from 'lucide-react'
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
@@ -19,8 +19,6 @@ import { Select } from '@/components/ui/Select'
 import { Modal } from '@/components/ui/Modal'
 import { CardSkeleton, StatCardSkeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
-import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
-import { SubjectFormModal } from './subjects/SubjectFormModal'
 
 type FacultyGroup = { facultyId: string; name: string; batches: string[] }
 
@@ -41,8 +39,6 @@ export default function SubjectsPage() {
 
   const [search, setSearch] = useState('')
   const [type, setType] = useState('')
-  const [editing, setEditing] = useState<SubjectRow | 'new' | null>(null)
-  const [deleteOf, setDeleteOf] = useState<SubjectRow | null>(null)
   const [manageOf, setManageOf] = useState<string | null>(null)
 
   const debouncedSearch = useDebounce(search)
@@ -59,12 +55,6 @@ export default function SubjectsPage() {
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['hod', 'subjects'] })
 
-  const del = useMutation({
-    mutationFn: (id: string) => hodApi.subjects.remove(id),
-    onSuccess: () => { toast.success('Subject deleted'); invalidate(); setDeleteOf(null) },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
-
   const summary = list.data?.summary
   const subjects = list.data?.data ?? []
   const manageSubject = manageOf ? subjects.find((s) => s.id === manageOf) ?? null : null
@@ -73,7 +63,7 @@ export default function SubjectsPage() {
     <PageShell
       title="Subjects"
       subtitle={scope.data ? scope.data.activeSemester.label : 'Manage subjects & faculty'}
-      action={<Button leftIcon={<Plus size={15} />} onClick={() => setEditing('new')}>Add Subject</Button>}
+      action={<p className="text-xs text-text-muted">Subjects are managed by the Dean · you can assign faculty</p>}
     >
       <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-4">
         {list.isLoading ? (
@@ -146,30 +136,15 @@ export default function SubjectsPage() {
                   )}
                 </div>
 
-                <div className="mt-3 flex items-center gap-2 border-t border-border-light pt-3">
-                  <Button size="sm" variant="outline" leftIcon={<UserPlus size={14} />} onClick={() => setManageOf(s.id)} className="flex-1">
+                <div className="mt-3 border-t border-border-light pt-3">
+                  <Button size="sm" variant="outline" leftIcon={<UserPlus size={14} />} onClick={() => setManageOf(s.id)} className="w-full">
                     Manage Faculty
                   </Button>
-                  <button onClick={() => setEditing(s)} className="flex h-8 w-8 items-center justify-center rounded-sm text-text-secondary hover:bg-primary-light hover:text-primary" title="Edit subject">
-                    <Pencil size={15} />
-                  </button>
-                  <button onClick={() => setDeleteOf(s)} className="flex h-8 w-8 items-center justify-center rounded-sm text-text-secondary hover:bg-danger-light hover:text-danger" title="Delete subject">
-                    <Trash2 size={15} />
-                  </button>
                 </div>
               </Card>
             )
           })}
         </div>
-      )}
-
-      {editing && semesterId && (
-        <SubjectFormModal
-          semesterId={semesterId}
-          subject={editing === 'new' ? null : editing}
-          onClose={() => setEditing(null)}
-          onSaved={invalidate}
-        />
       )}
 
       {manageSubject && semesterId && (
@@ -181,16 +156,6 @@ export default function SubjectsPage() {
         />
       )}
 
-      <ConfirmDialog
-        open={!!deleteOf}
-        title="Delete subject?"
-        message={<>Delete <b>{deleteOf?.code}</b>? Blocked if it has results or attendance recorded.</>}
-        destructive
-        confirmLabel="Delete"
-        loading={del.isPending}
-        onConfirm={() => deleteOf && del.mutate(deleteOf.id)}
-        onCancel={() => setDeleteOf(null)}
-      />
     </PageShell>
   )
 }

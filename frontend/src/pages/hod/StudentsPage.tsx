@@ -25,7 +25,6 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { StudentProfileModal } from './students/StudentProfileModal'
 import { AddStudentModal } from './students/AddStudentModal'
 
-const YEAR_LEVELS = ['FY', 'SY', 'TY', 'FINAL']
 const STATUSES = ['ACTIVE', 'AT_RISK', 'INACTIVE']
 
 const statusTone = { ACTIVE: 'success', AT_RISK: 'danger', INACTIVE: 'neutral' } as const
@@ -35,7 +34,7 @@ export default function StudentsPage() {
   const scope = useHodScope()
 
   const [search, setSearch] = useState('')
-  const [yearLevel, setYearLevel] = useState('')
+  const [branch, setBranch] = useState('')
   const [batchId, setBatchId] = useState('')
   const [status, setStatus] = useState('')
   const [page, setPage] = useState(1)
@@ -49,13 +48,13 @@ export default function StudentsPage() {
   const filters = useMemo(
     () => ({
       search: debouncedSearch || undefined,
-      yearLevel: yearLevel || undefined,
+      branch: branch || undefined,
       batchId: batchId || undefined,
       status: status || undefined,
       page,
       limit: 20,
     }),
-    [debouncedSearch, yearLevel, batchId, status, page],
+    [debouncedSearch, branch, batchId, status, page],
   )
 
   const list = useQuery({
@@ -104,8 +103,8 @@ export default function StudentsPage() {
         <div className="w-64 max-w-full">
           <SearchInput value={search} onChange={resetPage(setSearch)} placeholder="Search name or enrollment no." />
         </div>
-        <Select className="w-36" value={yearLevel} onChange={(e) => resetPage(setYearLevel)(e.target.value)} placeholder="All Years">
-          {YEAR_LEVELS.map((y) => <option key={y} value={y}>{y}</option>)}
+        <Select className="w-36" value={branch} onChange={(e) => resetPage(setBranch)(e.target.value)} placeholder="All Branches">
+          {[...new Set((list.data?.data ?? []).map((s) => s.branch).filter(Boolean))].sort().map((b) => <option key={b} value={b}>{b}</option>)}
         </Select>
         <Select className="w-36" value={batchId} onChange={(e) => resetPage(setBatchId)(e.target.value)} placeholder="All Batches" options={batchOptions} />
         <Select className="w-40" value={status} onChange={(e) => resetPage(setStatus)(e.target.value)} placeholder="All Status">

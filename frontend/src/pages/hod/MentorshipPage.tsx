@@ -100,7 +100,7 @@ export default function MentorshipPage() {
             <Card key={m.facultyId}>
               <CardHeader
                 title={<span className="flex items-center gap-2">{m.name} {m.mentorCode && <Badge tone="teal">{m.mentorCode}</Badge>}</span>}
-                subtitle={`${m.department} · ${m.menteeCount} mentees`}
+                subtitle={`${m.year} · ${m.menteeCount} mentees`}
               />
               <CardBody className="pt-0">
                 <div className="max-h-40 space-y-1 overflow-y-auto">

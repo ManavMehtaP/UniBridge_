@@ -19,7 +19,7 @@ export function CalendarGrid({
   onDayClick,
   onEventClick,
   readonly,
-  lecturesByDow,
+  lectureDows,
 }: {
   events: HodCalendarEvent[]
   year: number

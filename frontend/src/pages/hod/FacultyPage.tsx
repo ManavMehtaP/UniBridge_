@@ -113,7 +113,7 @@ export default function FacultyPage() {
                       </div>
                     </Td>
                     <Td className="font-mono text-xs text-text-secondary">{f.employeeId}</Td>
-                    <Td>{f.yearLevel ? <Badge tone="primary">{YEAR_LABEL[f.yearLevel] ?? f.yearLevel}</Badge> : <span className="text-text-muted">—</span>}</Td>
+                    <Td>{(f.year || f.yearLevel) ? <Badge tone="primary">{YEAR_LABEL[f.year || f.yearLevel!] ?? f.year}</Badge> : <span className="text-text-muted">—</span>}</Td>
                     <Td>{f.mentorCode ? <Badge tone="teal">{f.mentorCode}</Badge> : <span className="text-text-muted">—</span>}</Td>
                     <Td className="tabular-nums">{f.assignedSubjects ?? f.subjectCount ?? 0}</Td>
                     <Td className="tabular-nums">{f.menteeCount ?? 0}</Td>
@@ -148,7 +148,7 @@ export default function FacultyPage() {
         onClose={() => setShowUpload(false)}
         title="Upload Faculty"
         onUpload={hodApi.faculty.uploadCsv}
-        requiredColumns={['employee_id', 'name', 'email', 'department']}
+        requiredColumns={['employee_id', 'name', 'email', 'year']}
       />
 
       <ConfirmDialog

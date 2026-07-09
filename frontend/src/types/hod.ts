@@ -2,7 +2,7 @@ import type { YearLevel } from './common'
 
 // ── Scope ──────────────────────────────────────────────
 export interface HodScope {
-  hod: { id: string; name: string; department?: string | null; employeeId?: string | null }
+  hod: { id: string; name: string; year?: string | null; employeeId?: string | null }
   activeSemester: { id: string; label: string; number: number }
   batches: { id: string; code: string; yearLevel: YearLevel; studentCount: number }[]
   totalStudents: number
@@ -100,13 +100,13 @@ export interface CsvResult {
 }
 
 // ── Faculty ────────────────────────────────────────────
-// Backend returns: { id, employeeId, name, email, department, isHod, mentorCode, isActive, assignedBatches, assignedSubjects, menteeCount }
+// Backend returns: { id, employeeId, name, email, year, isHod, mentorCode, isActive, assignedBatches, assignedSubjects, menteeCount }
 export interface FacultyRow {
   id: string
   employeeId: string
   name: string
   email?: string
-  department: string
+  year: string
   yearLevel?: string | null
   yearLevels?: string[]
   isHod: boolean
@@ -123,7 +123,7 @@ export interface FacultyDetail {
   name: string
   email: string
   phone?: string
-  department: string
+  year: string
   isHod: boolean
   mentorCode?: string | null
   menteeCount?: number
@@ -181,7 +181,7 @@ export interface MentorshipSummary {
 export interface MentorCard {
   facultyId: string
   name: string
-  department: string
+  year: string
   mentorCode?: string | null
   menteeCount: number
   mentees: { enrollmentNo: string; name: string }[]
@@ -228,7 +228,7 @@ export interface HodProfile {
   name: string
   email: string
   phone?: string
-  department: string
+  year: string
   profilePhotoUrl?: string | null
 }
 export interface AcademicYearWithSemesters {

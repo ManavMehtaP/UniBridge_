@@ -23,7 +23,7 @@ export default function FacultyDashboardPage() {
       <div>
         <h1 className="text-2xl font-bold text-text-primary">Welcome, {user?.name?.split(' ').slice(0, 2).join(' ')} 👋</h1>
         <p className="mt-0.5 text-sm text-text-secondary">
-          {summary.data ? `${summary.data.faculty.department} · ${summary.data.activeSemester.label}` : 'Faculty Portal'}
+          {summary.data ? `${summary.data.faculty.year} · ${summary.data.activeSemester.label}` : 'Faculty Portal'}
         </p>
         {summary.data?.faculty.mentorCode && (
           <Badge tone="teal" className="mt-2">Mentor Code: {summary.data.faculty.mentorCode}</Badge>

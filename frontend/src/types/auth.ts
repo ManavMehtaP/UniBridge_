@@ -13,7 +13,7 @@ export interface AuthUser {
   isHod: boolean
   universityId: string
   // Faculty / HOD only
-  department?: string | null
+  year?: string | null
   mentorCode?: string | null
   employeeId?: string | null
   // Student only

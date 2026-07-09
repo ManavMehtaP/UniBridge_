@@ -45,6 +45,7 @@ import UniBranches from '@/pages/university/BranchesPage'
 import UniHods from '@/pages/university/HodsPage'
 import UniFaculty from '@/pages/university/FacultyPage'
 import UniStudents from '@/pages/university/StudentsPage'
+import UniSubjects from '@/pages/university/SubjectsPage'
 import UniSettings from '@/pages/university/SettingsPage'
 
 // Student portal pages
@@ -116,6 +117,7 @@ export const router = createBrowserRouter([
           { path: '/university/hods', element: <UniHods /> },
           { path: '/university/faculty', element: <UniFaculty /> },
           { path: '/university/students', element: <UniStudents /> },
+          { path: '/university/subjects', element: <UniSubjects /> },
           { path: '/university/settings', element: <UniSettings /> },
 
           // ── Student ─────────────────────────

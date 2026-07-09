@@ -7,6 +7,14 @@ import { errorMessage } from '@/api/client'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { Select } from '@/components/ui/Select'
+
+const YEAR_OPTIONS = [
+  { value: 'FY', label: '1st Year (FY)' },
+  { value: 'SY', label: '2nd Year (SY)' },
+  { value: 'TY', label: '3rd Year (TY)' },
+  { value: 'FINAL', label: 'Final Year' },
+]
 
 export function AddFacultyModal({
   open,
@@ -17,7 +25,7 @@ export function AddFacultyModal({
   onClose: () => void
   onCreated: () => void
 }) {
-  const [form, setForm] = useState({ employeeId: '', name: '', email: '', department: 'IT', phone: '', isHod: false })
+  const [form, setForm] = useState({ employeeId: '', name: '', email: '', year: 'FY', phone: '', isHod: false })
   const [tempPassword, setTempPassword] = useState<string | null>(null)
 
   const create = useMutation({
@@ -28,7 +36,7 @@ export function AddFacultyModal({
 
   function close() {
     setTempPassword(null)
-    setForm({ employeeId: '', name: '', email: '', department: 'IT', phone: '', isHod: false })
+    setForm({ employeeId: '', name: '', email: '', year: 'FY', phone: '', isHod: false })
     onClose()
   }
 
@@ -67,7 +75,9 @@ export function AddFacultyModal({
           <Labeled label="Full Name *"><Input value={form.name} onChange={set('name')} /></Labeled>
           <Labeled label="Email *"><Input type="email" value={form.email} onChange={set('email')} /></Labeled>
           <Labeled label="Phone"><Input value={form.phone} onChange={set('phone')} /></Labeled>
-          <Labeled label="Department"><Input value={form.department} onChange={set('department')} /></Labeled>
+          <Labeled label="Year">
+            <Select value={form.year} onChange={(e) => setForm((f) => ({ ...f, year: e.target.value }))} options={YEAR_OPTIONS} />
+          </Labeled>
           <label className="flex items-end gap-2 pb-2.5 text-sm text-text-secondary">
             <input type="checkbox" checked={form.isHod} onChange={(e) => setForm((f) => ({ ...f, isHod: e.target.checked }))} className="h-4 w-4 accent-primary" />
             Is HOD

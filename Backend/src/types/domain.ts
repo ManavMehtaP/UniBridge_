@@ -36,7 +36,7 @@ export interface Faculty {
   universityId: string;
   name: string;
   email: string;
-  department: string;
+  year: string;
   employeeId: string;
   isHod: boolean;
   isActive: boolean;

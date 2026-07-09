@@ -36,7 +36,7 @@ export default function MentorChatPage() {
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages.data?.data.length])
   useEffect(() => { studentApi.markMentorRead().catch(() => {}) }, [])
 
-  const mentorData = (mentor.data as { mentor?: { name?: string; mentorCode?: string; department?: string } } | undefined)?.mentor
+  const mentorData = (mentor.data as { mentor?: { name?: string; mentorCode?: string; year?: string } } | undefined)?.mentor
   const msgs = messages.data?.data ?? []
 
   return (
@@ -52,7 +52,7 @@ export default function MentorChatPage() {
                 <h3 className="text-sm font-semibold text-text-primary">{mentorData.name}</h3>
                 {mentorData.mentorCode && <Badge tone="teal">{mentorData.mentorCode}</Badge>}
               </div>
-              <div className="text-xs text-text-muted">{mentorData.department ?? 'Faculty'} · Your mentor</div>
+              <div className="text-xs text-text-muted">{mentorData.year ?? 'Faculty'} · Your mentor</div>
             </div>
           </div>
           <div className="scrollbar-thin h-[440px] overflow-y-auto p-4">

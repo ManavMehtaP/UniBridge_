@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { CalendarDays, CalendarRange, LayoutList, MapPin, Plus, Upload } from 'lucide-react'
+import { CalendarDays, CalendarRange, LayoutList, MapPin, Plus, Trash2, Upload } from 'lucide-react'
 import { addDays, format, startOfWeek } from 'date-fns'
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
@@ -43,6 +43,8 @@ export default function HodTimetablePage() {
   const [editing, setEditing] = useState<HodTimetableSlot | { dayOfWeek: number; slotStart?: string; slotEnd?: string } | null>(null)
   const [deleteOf, setDeleteOf] = useState<HodTimetableSlot | null>(null)
   const [showUpload, setShowUpload] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [replaceExisting, setReplaceExisting] = useState(false)
 
   const batches = scope.data?.batches ?? []
   // default to the first owned batch once scope loads
@@ -60,6 +62,14 @@ export default function HodTimetablePage() {
     mutationFn: (id: string) => hodApi.timetable.remove(id),
     onSuccess: () => { toast.success('Lecture removed'); qc.invalidateQueries({ queryKey: ['hod', 'timetable'] }); setDeleteOf(null) },
     onError: (e) => toast.error(errorMessage(e)),
+  })
+  const clearBatch = useMutation({
+    mutationFn: async () => {
+      // fire deletes in parallel — dozens of slots max per batch, well under any limit
+      await Promise.all((list.data?.slots ?? []).map((s) => hodApi.timetable.remove(s.id)))
+    },
+    onSuccess: () => { toast.success('Timetable cleared for this batch'); qc.invalidateQueries({ queryKey: ['hod', 'timetable'] }); setConfirmClear(false) },
+    onError: (e) => { toast.error(errorMessage(e)); setConfirmClear(false) },
   })
 
   const slots = list.data?.slots ?? []
@@ -97,26 +107,22 @@ export default function HodTimetablePage() {
   const daysUsed = [...new Set(slots.map((s) => s.dayOfWeek))].sort((a, b) => a - b)
   const workingDays = daysUsed.length ? `${DAYS[daysUsed[0] - 1]} – ${DAYS[daysUsed[daysUsed.length - 1] - 1]}` : '—'
 
-  const batchOpts = batches.map((b) => ({ value: b.id, label: b.code }))
-
   return (
     <PageShell
       title="Timetable"
       subtitle="Manage and view class schedules for all batches"
       action={
         <div className="flex flex-wrap gap-2">
+          <Button variant="outline" leftIcon={<Trash2 size={15} />} onClick={() => setConfirmClear(true)} disabled={!batchId || slots.length === 0}>Delete Timetable</Button>
           <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload CSV</Button>
           <Button leftIcon={<Plus size={15} />} onClick={() => setEditing({ dayOfWeek: 1 })} disabled={!batchId}>Add Lecture</Button>
         </div>
       }
     >
-      {/* Controls */}
+      {/* Controls — batches you manage are shown as pills; timetable auto-loads for the selected one */}
       <Card className="mb-4 p-3">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Batch</span>
-            <Select className="w-40" value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Select batch" options={batchOpts} />
-          </div>
+          <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Batch</span>
           <div className="flex flex-wrap gap-1 rounded-sm bg-surface-2 p-1">
             {batches.map((b) => (
               <button
@@ -201,16 +207,39 @@ export default function HodTimetablePage() {
         onCancel={() => setDeleteOf(null)}
       />
 
+      <ConfirmDialog
+        open={confirmClear}
+        title="Delete this batch's timetable?"
+        message={<>Remove <b>all {slots.length} lectures</b> from this batch's schedule? Cannot be undone.</>}
+        destructive confirmLabel="Delete All"
+        loading={clearBatch.isPending}
+        onConfirm={() => clearBatch.mutate()}
+        onCancel={() => setConfirmClear(false)}
+      />
+
       <CsvUploadModal
         open={showUpload}
-        onClose={() => setShowUpload(false)}
+        onClose={() => { setShowUpload(false); setReplaceExisting(false) }}
         title="Upload Timetable"
         onUpload={hodApi.timetable.uploadCsv}
         onDownloadTemplate={hodApi.timetable.downloadTemplate}
         requiredColumns={['batch', 'day', 'start', 'end', 'subject']}
-        optionalColumns={['room', 'faculty']}
-        buildForm={(form) => { if (scope.data?.activeSemester.id) form.append('semesterId', scope.data.activeSemester.id) }}
-        extraFields={<p className="text-xs text-text-muted">Rows are added to your existing timetable. <b>day</b> = Mon–Sat or 1–6 · <b>faculty</b> = employee ID.</p>}
+        optionalColumns={['room', 'mentor_code']}
+        buildForm={(form) => {
+          if (scope.data?.activeSemester.id) form.append('semesterId', scope.data.activeSemester.id)
+          if (replaceExisting) form.append('replaceExisting', '1')
+        }}
+        extraFields={
+          <div className="space-y-2">
+            <label className="flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-warning-light/30 px-3 py-2">
+              <input type="checkbox" checked={replaceExisting} onChange={(e) => setReplaceExisting(e.target.checked)} className="h-4 w-4 accent-warning" />
+              <span className="text-xs font-medium text-text-primary">
+                Replace existing timetable — delete every current lecture in the CSV's batches before importing.
+              </span>
+            </label>
+            <p className="text-xs text-text-muted"><b>day</b> = Mon–Sat or 1–6 · <b>mentor_code</b> = the faculty's 3-char code.</p>
+          </div>
+        }
       />
     </PageShell>
   )

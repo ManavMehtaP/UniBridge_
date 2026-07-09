@@ -351,6 +351,7 @@ model Subject {
   name         String      // "Computer Organization & Architecture"
   credits      Int         @default(4)
   type         SubjectType @default(THEORY)
+  branch       String?     // "IT", "CSE" — subjects belong to a year+semester+branch
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
   deletedAt    DateTime?   // soft delete — blocked if has results/attendance
@@ -382,7 +383,7 @@ model Faculty {
   name            String
   email           String    @unique
   passwordHash    String
-  department      String    // "IT", "CSE"
+  year            String?   // FY / SY / TY / FINAL — the year this faculty teaches (null for Dean)
   isHod           Boolean   @default(false)
   isDean          Boolean   @default(false)  // University (Dean) portal access
   mentorCode      String?   // 3-char, e.g. "SYD" — null for HOD

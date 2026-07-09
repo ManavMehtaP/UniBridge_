@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { CalendarPlus, ChevronLeft, ChevronRight, Download, Trash2 } from 'lucide-react'
@@ -57,7 +57,9 @@ export default function CalendarPage() {
 
   const save = useMutation({
     mutationFn: (e: Partial<HodCalendarEvent>) => {
-      const body = { title: e.title, type: e.type, startDate: e.date, endDate: e.date, description: e.description, visibleTo: 'ALL', semesterId }
+      const start = (e.startDate ?? e.date ?? '').slice(0, 10)
+      const end = (e.endDate ?? e.date ?? start).slice(0, 10)
+      const body = { title: e.title, type: e.type, startDate: start, endDate: end, description: e.description, visibleTo: 'ALL', semesterId }
       return e.id ? hodApi.calendar.update(e.id, body) : hodApi.calendar.create(body)
     },
     onSuccess: () => { toast.success('Event saved'); invalidate(); setEditing(null) },
@@ -89,14 +91,10 @@ export default function CalendarPage() {
             <CardHeader
               title={`${MONTHS[month]} ${year}`}
               action={
-                <div className="flex flex-wrap items-center gap-2">
-                  <Select className="h-8 w-32" value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Batch"
-                    options={batches.map((b) => ({ value: b.id, label: `Batch ${b.code}` }))} />
-                  <div className="flex gap-1">
-                    <button onClick={prevMonth} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronLeft size={16} /></button>
-                    <button onClick={() => { setMonth(now.getMonth()); setYear(now.getFullYear()) }} className="rounded-sm border border-border px-3 text-xs font-medium hover:bg-surface-2">Today</button>
-                    <button onClick={nextMonth} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronRight size={16} /></button>
-                  </div>
+                <div className="flex gap-1">
+                  <button onClick={prevMonth} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronLeft size={16} /></button>
+                  <button onClick={() => { setMonth(now.getMonth()); setYear(now.getFullYear()) }} className="rounded-sm border border-border px-3 text-xs font-medium hover:bg-surface-2">Today</button>
+                  <button onClick={nextMonth} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronRight size={16} /></button>
                 </div>
               }
             />
@@ -105,8 +103,8 @@ export default function CalendarPage() {
                 events={events.data?.data ?? []}
                 year={year}
                 month={month}
-                lecturesByDow={lecturesByDow}
-                onDayClick={(date) => setEditing({ date, type: 'OTHER' })}
+                lectureDows={lectureDows}
+                onDayClick={(date) => setEditing({ date, startDate: date, endDate: date, type: 'OTHER' })}
                 onEventClick={(e) => setEditing(e)}
               />
               {/* legend */}
@@ -167,13 +165,25 @@ export default function CalendarPage() {
                 <Button variant="danger" leftIcon={<Trash2 size={15} />} onClick={() => del.mutate(editing.id!)} loading={del.isPending} className="mr-auto">Delete</Button>
               )}
               <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-              <Button onClick={() => save.mutate(editing)} loading={save.isPending} disabled={!editing.title || !editing.date}>Save</Button>
+              <Button onClick={() => save.mutate(editing)} loading={save.isPending} disabled={!editing.title || !(editing.startDate ?? editing.date)}>Save</Button>
             </>
           }
         >
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <Labeled label="Date *"><Input type="date" value={editing.date?.slice(0, 10) ?? ''} onChange={(e) => setEditing((s) => ({ ...s, date: e.target.value }))} /></Labeled>
+            <div className="grid grid-cols-3 gap-3">
+              <Labeled label="Start Date *">
+                <Input type="date" value={(editing.startDate ?? editing.date ?? '').slice(0, 10)}
+                  onChange={(e) => setEditing((s) => {
+                    const v = e.target.value
+                    const end = s?.endDate && s.endDate >= v ? s.endDate : v
+                    return { ...s, startDate: v, endDate: end, date: v }
+                  })} />
+              </Labeled>
+              <Labeled label="End Date *">
+                <Input type="date" value={(editing.endDate ?? editing.startDate ?? editing.date ?? '').slice(0, 10)}
+                  min={(editing.startDate ?? editing.date ?? '').slice(0, 10)}
+                  onChange={(e) => setEditing((s) => ({ ...s, endDate: e.target.value }))} />
+              </Labeled>
               <Labeled label="Type">
                 <Select value={editing.type ?? 'OTHER'} onChange={(e) => setEditing((s) => ({ ...s, type: e.target.value as HodCalendarEvent['type'] }))} options={TYPES.map((t) => ({ value: t, label: TYPE_LABEL[t] }))} />
               </Labeled>

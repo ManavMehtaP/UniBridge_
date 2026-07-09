@@ -65,7 +65,7 @@ function ProfileSection() {
           <Labeled label="Email"><Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Labeled>
           <Labeled label="Phone"><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Labeled>
           <Labeled label="Employee ID"><Input value={profile.data?.employeeId ?? ''} readOnly className="bg-surface-2" /></Labeled>
-          <Labeled label="Department"><Input value={profile.data?.department ?? ''} readOnly className="bg-surface-2" /></Labeled>
+          <Labeled label="Year"><Input value={profile.data?.year ?? ''} readOnly className="bg-surface-2" /></Labeled>
           {profile.data?.mentorCode && <Labeled label="Mentor Code"><Input value={profile.data.mentorCode} readOnly className="bg-surface-2" /></Labeled>}
         </div>
         <div className="mt-4">

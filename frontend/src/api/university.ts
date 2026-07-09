@@ -21,28 +21,50 @@ export interface UniYear {
 }
 
 export interface UniHod {
-  id: string; name: string; email: string; employeeId: string; department: string; isActive: boolean
+  id: string; name: string; email: string; employeeId: string; year: string; isActive: boolean
   scopes: { batchId: string; batchCode: string; semesterLabel: string }[]
 }
 export interface UniHodsResponse {
   activeSemester: { id: string; label: string } | null
   hods: UniHod[]
   batches: { id: string; code: string; yearLevel: string; ownedBy: string | null }[]
-  facultyOptions: { id: string; name: string; employeeId: string; department: string }[]
+  facultyOptions: { id: string; name: string; employeeId: string; year: string }[]
 }
 
 export interface UniFacultyRow {
-  id: string; name: string; email: string; employeeId: string; department: string
+  id: string; name: string; email: string; employeeId: string; year: string | null
   isHod: boolean; mentorCode: string | null; isActive: boolean
+  yearLevels?: string[]
 }
 export interface UniStudentRow {
   id: string; enrollmentNo: string; name: string; email: string; branch: string; admissionYear: number
-  isActive: boolean; batchCode: string | null; semesterLabel: string | null; rollNo: string | null
+  isActive: boolean; batchCode: string | null; semesterLabel: string | null; semesterNumber: number | null
+  yearLevel: string | null; academicYearLabel: string | null; rollNo: string | null
 }
 export interface Paged<T> { data: T[]; total: number; page: number; totalPages: number }
 
+export interface UniSubject {
+  id: string; code: string; name: string; credits: number; type: string; branch: string | null
+  semesterId: string; semesterLabel: string; semesterNumber: number
+  academicYearId: string; academicYearLabel: string
+}
+
+async function downloadBlob(path: string, filename: string) {
+  const res = await api.get(path, { responseType: 'blob' })
+  const url = URL.createObjectURL(res.data as Blob)
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url)
+}
+
 export const universityApi = {
   overview: () => api.get<UniOverview>('/admin/overview').then((r) => r.data),
+
+  subjects: (params: { academicYearId?: string; semesterId?: string; branch?: string }) =>
+    api.get<{ data: UniSubject[] }>('/admin/subjects', { params }).then((r) => r.data),
+  createSubject: (body: Record<string, unknown>) => api.post('/admin/subjects', body).then((r) => r.data),
+  updateSubject: (id: string, body: Record<string, unknown>) => api.put(`/admin/subjects/${id}`, body).then((r) => r.data),
+  deleteSubject: (id: string) => api.delete(`/admin/subjects/${id}`).then((r) => r.data),
+  uploadSubjectsCsv: (form: FormData) => api.post('/admin/subjects/csv', form).then((r) => r.data),
+  downloadSubjectsTemplate: () => downloadBlob('/admin/subjects/csv/template', 'subjects-template.csv'),
 
   years: () => api.get<{ data: UniYear[] }>('/admin/years').then((r) => r.data),
   createYear: (body: { label: string; startDate: string; endDate: string }) => api.post('/admin/years', body).then((r) => r.data),
@@ -54,11 +76,18 @@ export const universityApi = {
   hods: () => api.get<UniHodsResponse>('/admin/hods').then((r) => r.data),
   setHod: (facultyId: string, isHod: boolean) => api.post(`/admin/hods/${facultyId}/toggle`, { isHod }).then((r) => r.data),
   assignScope: (facultyId: string, batchId: string) => api.post('/admin/hod-scope', { facultyId, batchId }).then((r) => r.data),
+  bulkCreateBatches: (body: { academicYearId: string; hodId: string; initial: string; count: number; yearLevel: string }) =>
+    api.post<{ created: { id: string; code: string }[]; initial: string; count: number }>('/admin/batches/bulk', body).then((r) => r.data),
   removeScope: (batchId: string) => api.delete(`/admin/hod-scope/${batchId}`).then((r) => r.data),
 
   faculty: (params: { search?: string; page?: number }) => api.get<Paged<UniFacultyRow>>('/admin/faculty', { params }).then((r) => r.data),
   createFaculty: (body: Record<string, unknown>) => api.post('/admin/faculty', body).then((r) => r.data),
   setFacultyActive: (id: string, isActive: boolean) => api.patch(`/admin/faculty/${id}/active`, { isActive }).then((r) => r.data),
+  updateFaculty: (id: string, body: Record<string, unknown>) => api.put(`/admin/faculty/${id}`, body).then((r) => r.data),
+  deleteFaculty: (id: string) => api.delete(`/admin/faculty/${id}`).then((r) => r.data),
+  promoteToHod: (id: string) => api.post(`/admin/faculty/${id}/promote-to-hod`).then((r) => r.data),
+  uploadFacultyCsv: (form: FormData) => api.post('/admin/faculty/csv', form).then((r) => r.data),
+  downloadFacultyTemplate: () => downloadBlob('/admin/faculty/csv/template', 'faculty-template.csv'),
 
   students: (params: { search?: string; branch?: string; page?: number }) => api.get<Paged<UniStudentRow>>('/admin/students', { params }).then((r) => r.data),
   setStudentActive: (id: string, isActive: boolean) => api.patch(`/admin/students/${id}/active`, { isActive }).then((r) => r.data),

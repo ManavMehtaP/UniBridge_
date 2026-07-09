@@ -92,7 +92,7 @@ function ProfileSection() {
         <Field label="Email"><Input value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} /></Field>
         <Field label="Phone"><Input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} /></Field>
         <Field label="Employee ID"><Input value={q.data?.employeeId ?? ''} disabled /></Field>
-        <Field label="Department"><Input value={q.data?.department ?? ''} disabled /></Field>
+        <Field label="Year"><Input value={q.data?.year ?? ''} disabled /></Field>
       </div>
       <div className="mt-5"><Button onClick={() => save.mutate()} loading={save.isPending}>Save Changes</Button></div>
     </SectionCard>

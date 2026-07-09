@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Building2,
   CalendarRange,
   GitBranch,
@@ -19,6 +20,7 @@ export const universityNavItems: NavSection[] = [
       { id: 'hods', label: 'HODs', path: '/university/hods', icon: UserCheck },
       { id: 'faculty', label: 'Faculty', path: '/university/faculty', icon: Users },
       { id: 'students', label: 'Students', path: '/university/students', icon: GraduationCap },
+      { id: 'subjects', label: 'Subjects', path: '/university/subjects', icon: BookOpen },
       { id: 'settings', label: 'Settings', path: '/university/settings', icon: Building2 },
     ],
   },

@@ -218,7 +218,7 @@ hodRouter.get("/settings/danger/archive-status/:jobId", asyncHandler(async (req,
 // ── Timetable CRUD (HOD) ────────────────────────────────
 hodRouter.get("/timetable", asyncHandler(async (req, res) => res.json(await portalService.listTimetable(scopeFrom(req), req.query.batchId as string | undefined, req.query.semesterId as string | undefined))));
 hodRouter.get("/timetable/csv/template", asyncHandler(async (_req, res) => sendCsv(res, "timetable-template.csv", portalService.timetableCsvTemplate())));
-hodRouter.post("/timetable/csv", upload.single("file"), asyncHandler(async (req, res) => res.json(await portalService.uploadTimetableCsv(scopeFrom(req), req.file?.buffer, { semesterId: str(req.body.semesterId) || undefined }))));
+hodRouter.post("/timetable/csv", upload.single("file"), asyncHandler(async (req, res) => res.json(await portalService.uploadTimetableCsv(scopeFrom(req), req.file?.buffer, { semesterId: str(req.body.semesterId) || undefined, replaceExisting: req.body.replaceExisting === "1" || req.body.replaceExisting === "true" }))));
 hodRouter.post("/timetable", asyncHandler(async (req, res) => res.status(201).json(await portalService.createTimetableSlot(scopeFrom(req), req.body))));
 hodRouter.put("/timetable/:slotId", asyncHandler(async (req, res) => res.json(await portalService.updateTimetableSlot(str(req.params.slotId), req.body))));
 hodRouter.delete("/timetable/:slotId", asyncHandler(async (req, res) => {
