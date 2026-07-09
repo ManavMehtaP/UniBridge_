@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { CalendarPlus, ChevronLeft, ChevronRight, Download, Trash2 } from 'lucide-react'
@@ -18,7 +18,16 @@ import { Textarea } from '@/components/ui/Textarea'
 import { format } from 'date-fns'
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-const TYPES = ['HOLIDAY', 'EXAM', 'CULTURAL', 'PHASE', 'OTHER']
+const TYPES = ['HOLIDAY', 'READING_HOLIDAY', 'EXAM', 'CULTURAL', 'PHASE', 'OTHER']
+const TYPE_LABEL: Record<string, string> = { HOLIDAY: 'Holiday', READING_HOLIDAY: 'Reading Holiday', EXAM: 'Exam', CULTURAL: 'Cultural', PHASE: 'Phase', OTHER: 'Other' }
+const LEGEND = [
+  { key: 'LECTURE', label: 'Lecture', cls: 'bg-primary' },
+  { key: 'HOLIDAY', label: 'Holiday', cls: 'bg-danger' },
+  { key: 'READING_HOLIDAY', label: 'Reading Holiday', cls: 'bg-teal' },
+  { key: 'EXAM', label: 'Exam', cls: 'bg-warning' },
+  { key: 'CULTURAL', label: 'Cultural', cls: 'bg-purple' },
+  { key: 'PHASE', label: 'Phase', cls: 'bg-primary' },
+]
 
 export default function CalendarPage() {
   const qc = useQueryClient()
@@ -35,6 +44,12 @@ export default function CalendarPage() {
   })
   const upcoming = useQuery({ queryKey: ['hod', 'calendar', 'upcoming'], queryFn: () => hodApi.calendar.upcoming(6) })
   const timeline = useQuery({ queryKey: ['hod', 'calendar', 'timeline', semesterId], queryFn: () => hodApi.calendar.phaseTimeline(semesterId), enabled: !!semesterId })
+  // regular lectures are the same for all batches — a weekday has lectures if any slot exists
+  const timetable = useQuery({ queryKey: ['hod', 'timetable', 'all'], queryFn: () => hodApi.timetable.list({}) })
+  const subjects = useQuery({ queryKey: ['hod', 'subjects', semesterId], queryFn: () => hodApi.subjects.list({ semesterId }), enabled: !!semesterId })
+
+  // weekdays (JS getDay, 1=Mon..6=Sat) that have any regular lecture
+  const lectureDows = useMemo(() => [...new Set((timetable.data?.slots ?? []).map((s) => s.dayOfWeek))], [timetable.data])
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['hod', 'calendar'] })
@@ -74,10 +89,14 @@ export default function CalendarPage() {
             <CardHeader
               title={`${MONTHS[month]} ${year}`}
               action={
-                <div className="flex gap-1">
-                  <button onClick={prevMonth} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronLeft size={16} /></button>
-                  <button onClick={() => { setMonth(now.getMonth()); setYear(now.getFullYear()) }} className="rounded-sm border border-border px-3 text-xs font-medium hover:bg-surface-2">Today</button>
-                  <button onClick={nextMonth} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronRight size={16} /></button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select className="h-8 w-32" value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Batch"
+                    options={batches.map((b) => ({ value: b.id, label: `Batch ${b.code}` }))} />
+                  <div className="flex gap-1">
+                    <button onClick={prevMonth} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronLeft size={16} /></button>
+                    <button onClick={() => { setMonth(now.getMonth()); setYear(now.getFullYear()) }} className="rounded-sm border border-border px-3 text-xs font-medium hover:bg-surface-2">Today</button>
+                    <button onClick={nextMonth} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronRight size={16} /></button>
+                  </div>
                 </div>
               }
             />
@@ -86,9 +105,18 @@ export default function CalendarPage() {
                 events={events.data?.data ?? []}
                 year={year}
                 month={month}
+                lecturesByDow={lecturesByDow}
                 onDayClick={(date) => setEditing({ date, type: 'OTHER' })}
                 onEventClick={(e) => setEditing(e)}
               />
+              {/* legend */}
+              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 border-t border-border-light pt-3">
+                {LEGEND.map((l) => (
+                  <div key={l.key} className="flex items-center gap-1.5 text-[11px] text-text-secondary">
+                    <span className={`h-2.5 w-2.5 rounded-full ${l.cls}`} /> {l.label}
+                  </div>
+                ))}
+              </div>
             </CardBody>
           </Card>
         </div>
@@ -144,13 +172,23 @@ export default function CalendarPage() {
           }
         >
           <div className="space-y-4">
-            <Labeled label="Title *"><Input value={editing.title ?? ''} onChange={(e) => setEditing((s) => ({ ...s, title: e.target.value }))} /></Labeled>
             <div className="grid grid-cols-2 gap-3">
               <Labeled label="Date *"><Input type="date" value={editing.date?.slice(0, 10) ?? ''} onChange={(e) => setEditing((s) => ({ ...s, date: e.target.value }))} /></Labeled>
               <Labeled label="Type">
-                <Select value={editing.type ?? 'OTHER'} onChange={(e) => setEditing((s) => ({ ...s, type: e.target.value as HodCalendarEvent['type'] }))} options={TYPES.map((t) => ({ value: t, label: t }))} />
+                <Select value={editing.type ?? 'OTHER'} onChange={(e) => setEditing((s) => ({ ...s, type: e.target.value as HodCalendarEvent['type'] }))} options={TYPES.map((t) => ({ value: t, label: TYPE_LABEL[t] }))} />
               </Labeled>
             </div>
+            {editing.type === 'EXAM' && (
+              <Labeled label="Subject">
+                <Select
+                  value=""
+                  onChange={(e) => { const code = subjects.data?.data.find((s) => s.id === e.target.value)?.code; if (code) setEditing((s) => ({ ...s, title: `${code} Exam` })) }}
+                  placeholder="Pick subject → sets title"
+                  options={(subjects.data?.data ?? []).map((s) => ({ value: s.id, label: `${s.code} — ${s.name}` }))}
+                />
+              </Labeled>
+            )}
+            <Labeled label="Title *"><Input value={editing.title ?? ''} onChange={(e) => setEditing((s) => ({ ...s, title: e.target.value }))} placeholder={editing.type === 'READING_HOLIDAY' ? 'Reading Holiday' : 'Event title'} /></Labeled>
             <Labeled label="Description"><Textarea value={editing.description ?? ''} onChange={(e) => setEditing((s) => ({ ...s, description: e.target.value }))} /></Labeled>
           </div>
         </Modal>

@@ -53,6 +53,7 @@ enum AnnouncementScope {
 
 enum EventType {
   HOLIDAY
+  READING_HOLIDAY   // study/reading day before exams
   EXAM
   CULTURAL
   PHASE       // T1 start, T2 end, etc.

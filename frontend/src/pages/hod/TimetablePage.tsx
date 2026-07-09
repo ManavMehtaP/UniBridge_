@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { CalendarDays, CalendarRange, LayoutList, MapPin, Plus } from 'lucide-react'
+import { CalendarDays, CalendarRange, LayoutList, MapPin, Plus, Upload } from 'lucide-react'
 import { addDays, format, startOfWeek } from 'date-fns'
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
@@ -15,6 +15,7 @@ import { Select } from '@/components/ui/Select'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { CsvUploadModal } from '@/components/shared/CsvUploadModal'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { CardSkeleton } from '@/components/ui/Skeleton'
 
@@ -41,6 +42,7 @@ export default function HodTimetablePage() {
   const [view, setView] = useState<'week' | 'list'>('week')
   const [editing, setEditing] = useState<HodTimetableSlot | { dayOfWeek: number; slotStart?: string; slotEnd?: string } | null>(null)
   const [deleteOf, setDeleteOf] = useState<HodTimetableSlot | null>(null)
+  const [showUpload, setShowUpload] = useState(false)
 
   const batches = scope.data?.batches ?? []
   // default to the first owned batch once scope loads
@@ -101,7 +103,12 @@ export default function HodTimetablePage() {
     <PageShell
       title="Timetable"
       subtitle="Manage and view class schedules for all batches"
-      action={<Button leftIcon={<Plus size={15} />} onClick={() => setEditing({ dayOfWeek: 1 })} disabled={!batchId}>Add Lecture</Button>}
+      action={
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload CSV</Button>
+          <Button leftIcon={<Plus size={15} />} onClick={() => setEditing({ dayOfWeek: 1 })} disabled={!batchId}>Add Lecture</Button>
+        </div>
+      }
     >
       {/* Controls */}
       <Card className="mb-4 p-3">
@@ -192,6 +199,18 @@ export default function HodTimetablePage() {
         loading={del.isPending}
         onConfirm={() => deleteOf && del.mutate(deleteOf.id)}
         onCancel={() => setDeleteOf(null)}
+      />
+
+      <CsvUploadModal
+        open={showUpload}
+        onClose={() => setShowUpload(false)}
+        title="Upload Timetable"
+        onUpload={hodApi.timetable.uploadCsv}
+        onDownloadTemplate={hodApi.timetable.downloadTemplate}
+        requiredColumns={['batch', 'day', 'start', 'end', 'subject']}
+        optionalColumns={['room', 'faculty']}
+        buildForm={(form) => { if (scope.data?.activeSemester.id) form.append('semesterId', scope.data.activeSemester.id) }}
+        extraFields={<p className="text-xs text-text-muted">Rows are added to your existing timetable. <b>day</b> = Mon–Sat or 1–6 · <b>faculty</b> = employee ID.</p>}
       />
     </PageShell>
   )

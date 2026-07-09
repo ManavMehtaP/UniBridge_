@@ -208,8 +208,10 @@ export interface AnalyticsKpi {
 export interface HodCalendarEvent {
   id: string
   date: string
+  startDate?: string
+  endDate?: string
   title: string
-  type: 'HOLIDAY' | 'EXAM' | 'CULTURAL' | 'PHASE' | 'OTHER'
+  type: 'HOLIDAY' | 'READING_HOLIDAY' | 'EXAM' | 'CULTURAL' | 'PHASE' | 'OTHER'
   description?: string
 }
 export interface PhaseTimelineItem {

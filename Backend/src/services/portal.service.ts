@@ -1055,9 +1055,9 @@ export const portalService = {
   },
 
   async attendanceHeatmap(scope: Scope, batchId: string, semesterId: string) {
-    await ensureBatchInScope(batchId, scope);
+    if (batchId) await ensureBatchInScope(batchId, scope);
     const subjects = await prisma.subject.findMany({ where: { semesterId } });
-    const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId, semesterId, isCurrent: true }, include: { student: true } });
+    const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId: batchId || { in: scope.hodBatchIds }, semesterId, isCurrent: true }, include: { student: true } });
     const students = await Promise.all(
       enrollments.map(async (e) => {
         const perSubjectPct = await Promise.all(subjects.map((s) => computeAttendancePct(e.id, s.id)));
@@ -1068,9 +1068,9 @@ export const portalService = {
   },
 
   async attendanceTable(scope: Scope, batchId: string, semesterId: string, search?: string, page = 1, limit = 20) {
-    await ensureBatchInScope(batchId, scope);
+    if (batchId) await ensureBatchInScope(batchId, scope);
     const subjects = await prisma.subject.findMany({ where: { semesterId } });
-    const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId, semesterId, isCurrent: true }, include: { student: true } });
+    const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId: batchId || { in: scope.hodBatchIds }, semesterId, isCurrent: true }, include: { student: true, batch: { select: { code: true } } } });
     const rules = await getAttendanceRules(scope.universityId);
     const rows = await Promise.all(
       enrollments.map(async (e) => {
@@ -1082,6 +1082,7 @@ export const portalService = {
         return {
           enrollmentNo: e.student.enrollmentNo,
           name: e.student.name,
+          batchCode: e.batch.code,
           perSubject: Object.fromEntries(perSubjectEntries),
           avgPct,
           status: avgPct < rules.minThresholdPct ? "AT_RISK" : "ACTIVE",
@@ -1094,9 +1095,9 @@ export const portalService = {
   },
 
   async attendanceBySubject(scope: Scope, batchId: string, semesterId: string) {
-    await ensureBatchInScope(batchId, scope);
+    if (batchId) await ensureBatchInScope(batchId, scope);
     const subjects = await prisma.subject.findMany({ where: { semesterId } });
-    const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId, semesterId, isCurrent: true } });
+    const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId: batchId || { in: scope.hodBatchIds }, semesterId, isCurrent: true } });
     const result = await Promise.all(
       subjects.map(async (subject) => {
         const pcts = await Promise.all(enrollments.map((e) => computeAttendancePct(e.id, subject.id)));
@@ -1806,7 +1807,7 @@ export const portalService = {
       where.endDate = { lte: new Date(String(query.endDate)) };
     }
     const rows = await prisma.calendarEvent.findMany({ where, orderBy: { startDate: "asc" } });
-    return { data: rows.map((e) => ({ id: e.id, date: e.startDate, title: e.title, type: e.eventType })) };
+    return { data: rows.map((e) => ({ id: e.id, date: e.startDate, startDate: e.startDate, endDate: e.endDate, title: e.title, type: e.eventType, description: e.description })) };
   },
 
   async upcomingEvents(universityId: string, limit = 6) {
@@ -1815,7 +1816,7 @@ export const portalService = {
       orderBy: { startDate: "asc" },
       take: limit,
     });
-    return { data: rows.map((e) => ({ id: e.id, date: e.startDate, title: e.title, type: e.eventType })) };
+    return { data: rows.map((e) => ({ id: e.id, date: e.startDate, startDate: e.startDate, endDate: e.endDate, title: e.title, type: e.eventType, description: e.description })) };
   },
 
   async getEvent(eventId: string) {
@@ -4357,6 +4358,51 @@ export const portalService = {
 
   async deleteTimetableSlot(id: string) {
     await prisma.timetableSlot.delete({ where: { id } });
+  },
+
+  timetableCsvTemplate() {
+    return "batch,day,start,end,subject,room,faculty\nC2,Mon,09:00,10:00,TOC,L3,EMP204\n";
+  },
+
+  // CSV columns: batch, day, start, end, subject, room, faculty (room/faculty optional).
+  async uploadTimetableCsv(scope: Scope, buffer: Buffer | undefined, opts: { semesterId?: string }) {
+    if (!buffer) throw new ApiError(400, "VALIDATION_ERROR", "CSV file is required.");
+    const rows = parseCsvRecords(buffer, ["batch", "day", "start", "end", "subject"]);
+    const semId = opts.semesterId || (await getActiveSemester(scope.universityId)).id;
+    const [batches, subjects, faculty] = await Promise.all([
+      prisma.batch.findMany({ where: { id: { in: scope.hodBatchIds } } }),
+      prisma.subject.findMany({ where: { semesterId: semId, deletedAt: null } }),
+      prisma.faculty.findMany({ where: { universityId: scope.universityId, deletedAt: null }, select: { id: true, employeeId: true } }),
+    ]);
+    const batchByCode = new Map(batches.map((b) => [b.code.toUpperCase(), b]));
+    const subjByCode = new Map(subjects.map((s) => [s.code.toUpperCase(), s]));
+    const facByEmp = new Map(faculty.map((f) => [f.employeeId.toUpperCase(), f.id]));
+    const DAYS: Record<string, number> = { MON: 1, MONDAY: 1, TUE: 2, TUESDAY: 2, WED: 3, WEDNESDAY: 3, THU: 4, THURSDAY: 4, FRI: 5, FRIDAY: 5, SAT: 6, SATURDAY: 6 };
+    let created = 0;
+    const errors: { row: number; enrollmentNo: string; reason: string }[] = [];
+    for (const { row, record } of rows) {
+      const ref = `${record.batch}/${record.day}/${record.start}`;
+      try {
+        const batch = batchByCode.get(String(record.batch ?? "").trim().toUpperCase());
+        if (!batch) { errors.push({ row, enrollmentNo: ref, reason: `Batch "${record.batch}" not in your scope.` }); continue; }
+        const subject = subjByCode.get(String(record.subject ?? "").trim().toUpperCase());
+        if (!subject) { errors.push({ row, enrollmentNo: ref, reason: `Subject "${record.subject}" not found.` }); continue; }
+        const dayRaw = String(record.day ?? "").trim().toUpperCase();
+        const dayOfWeek = /^[1-6]$/.test(dayRaw) ? Number(dayRaw) : DAYS[dayRaw];
+        if (!dayOfWeek) { errors.push({ row, enrollmentNo: ref, reason: `Invalid day "${record.day}" (use Mon–Sat or 1–6).` }); continue; }
+        const start = String(record.start ?? "").trim();
+        const end = String(record.end ?? "").trim();
+        if (!/^\d{1,2}:\d{2}$/.test(start) || !/^\d{1,2}:\d{2}$/.test(end)) { errors.push({ row, enrollmentNo: ref, reason: "start/end must be HH:MM." }); continue; }
+        const facultyId = record.faculty ? facByEmp.get(String(record.faculty).trim().toUpperCase()) ?? null : null;
+        await prisma.timetableSlot.create({
+          data: { semesterId: semId, batchId: batch.id, subjectId: subject.id, facultyId, dayOfWeek, slotStart: start, slotEnd: end, room: record.room ? String(record.room).trim() : null },
+        });
+        created++;
+      } catch {
+        errors.push({ row, enrollmentNo: ref, reason: "Failed to import row." });
+      }
+    }
+    return { created, errors, totalRows: rows.length };
   },
 
   // ─── Faculty: batches under HOD (all in dept) ──────────────

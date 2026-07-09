@@ -8,6 +8,7 @@ import { useHodScope } from '@/hooks/hod/useHodScope'
 import { attendanceTone } from '@/lib/utils'
 import { PageShell } from '@/components/shared/PageShell'
 import { AttendancePctCell } from '@/components/shared/AttendancePctCell'
+import { Avatar } from '@/components/ui/Avatar'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { Button } from '@/components/ui/Button'
@@ -16,8 +17,9 @@ import { Select } from '@/components/ui/Select'
 import { Tabs } from '@/components/ui/Tabs'
 import { Table, Td, Th, Tr } from '@/components/ui/Table'
 import { Pagination } from '@/components/ui/Pagination'
-import { StatCardSkeleton, TableSkeleton } from '@/components/ui/Skeleton'
-import { SimpleBarChart } from '@/components/charts'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { StatCardSkeleton, TableSkeleton, ChartSkeleton } from '@/components/ui/Skeleton'
+import { SimpleBarChart, MultiLineChart, DonutChart } from '@/components/charts'
 
 const cellBg = { success: 'bg-success-light text-success', warning: 'bg-warning-light text-warning', danger: 'bg-danger-light text-danger' }
 
@@ -26,7 +28,7 @@ export default function AttendancePage() {
   const scope = useHodScope()
   const semesterId = scope.data?.activeSemester.id
   const [batchId, setBatchId] = useState('')
-  const [tab, setTab] = useState('table')
+  const [tab, setTab] = useState('overview')
   const [page, setPage] = useState(1)
 
   useEffect(() => {
@@ -53,7 +55,23 @@ export default function AttendancePage() {
   const bySubject = useQuery({
     queryKey: ['hod', 'att', 'bysub', batchId, semesterId],
     queryFn: () => hodApi.attendance.bySubject(batchId, semesterId!) as Promise<{ subjects: { code: string; avgPct: number }[] }>,
-    enabled: ready && tab === 'bysubject',
+    enabled: ready && (tab === 'bysubject' || tab === 'overview'),
+  })
+  // ── Analytical overview (reuses the analytics endpoints) ──
+  const trend = useQuery({
+    queryKey: ['hod', 'att', 'trend'],
+    queryFn: () => hodApi.analytics.attendanceTrend(6) as Promise<{ labels: string[]; series: { batchCode: string; data: number[] }[] }>,
+    enabled: tab === 'overview',
+  })
+  const dist = useQuery({
+    queryKey: ['hod', 'att', 'dist', batchId],
+    queryFn: () => hodApi.analytics.attendanceDistribution(batchId || undefined) as Promise<{ buckets: { range: string; count: number }[] }>,
+    enabled: tab === 'overview' && ready,
+  })
+  const atRisk = useQuery({
+    queryKey: ['hod', 'att', 'atrisk', batchId],
+    queryFn: () => hodApi.analytics.atRisk({ batchId: batchId || undefined, limit: 8 }) as Promise<{ data: { enrollmentNo: string; name: string; batchCode: string; avgAttendancePct: number; riskFactor: string }[] }>,
+    enabled: tab === 'overview' && ready,
   })
 
   const lockAll = useMutation({
@@ -101,10 +119,56 @@ export default function AttendancePage() {
       </div>
 
       <Tabs className="mb-4" value={tab} onChange={setTab} tabs={[
+        { key: 'overview', label: 'Overview' },
         { key: 'table', label: 'Table' },
         { key: 'heatmap', label: 'Heatmap' },
         { key: 'bysubject', label: 'By Subject' },
       ]} />
+
+      {tab === 'overview' && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card className="lg:col-span-2">
+            <CardHeader title="Attendance Trend" subtitle="Average % per batch · last 6 months" />
+            <CardBody>
+              {trend.data ? <MultiLineChart labels={trend.data.labels} series={trend.data.series.map((s) => ({ name: s.batchCode, data: s.data }))} /> : <ChartSkeleton height={240} />}
+            </CardBody>
+          </Card>
+          <Card>
+            <CardHeader title="Distribution" subtitle="Students by attendance band" />
+            <CardBody>
+              {dist.data ? <DonutChart data={dist.data.buckets.map((b) => ({ label: b.range, value: b.count }))} /> : <ChartSkeleton />}
+            </CardBody>
+          </Card>
+          <Card className="lg:col-span-2">
+            <CardHeader title="Subject-wise Attendance" subtitle="Average % per subject" />
+            <CardBody>
+              {bySubject.data ? <SimpleBarChart data={bySubject.data.subjects.map((x) => ({ label: x.code, value: x.avgPct }))} color="#0891B2" /> : <ChartSkeleton />}
+            </CardBody>
+          </Card>
+          <Card className="overflow-hidden">
+            <CardHeader title={<span className="flex items-center gap-2"><AlertTriangle size={15} className="text-danger" /> At-Risk Students</span>}
+              subtitle={atRisk.data ? `${atRisk.data.data.length} below threshold` : undefined} />
+            <CardBody className="pt-0">
+              {atRisk.isLoading ? <TableSkeleton rows={5} cols={2} /> : (atRisk.data?.data ?? []).length === 0 ? (
+                <EmptyState title="All above threshold" description="No at-risk students. 🎉" className="border-0" />
+              ) : (
+                <div className="divide-y divide-border-light">
+                  {atRisk.data?.data.map((r) => (
+                    <div key={r.enrollmentNo} className="flex items-center gap-2.5 py-2">
+                      <Avatar name={r.name} size={30} />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[13px] font-semibold">{r.name}</div>
+                        <div className="text-[11px] text-text-muted">{r.enrollmentNo} · {r.batchCode}</div>
+                      </div>
+                      <span className="text-sm font-bold text-danger">{Math.round(r.avgAttendancePct)}%</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        </div>
+      )}
 
       {tab === 'table' && (
         <Card className="overflow-hidden">

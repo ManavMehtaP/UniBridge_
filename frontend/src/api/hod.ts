@@ -233,6 +233,8 @@ export const hodApi = {
     create: (body: Record<string, unknown>) => api.post('/hod/timetable', body).then((r) => r.data),
     update: (slotId: string, body: Record<string, unknown>) => api.put(`/hod/timetable/${slotId}`, body).then((r) => r.data),
     remove: (slotId: string) => api.delete(`/hod/timetable/${slotId}`).then((r) => r.data),
+    uploadCsv: (form: FormData) => api.post<T.CsvResult>('/hod/timetable/csv', form).then((r) => r.data),
+    downloadTemplate: () => download('/hod/timetable/csv/template', 'timetable-template.csv'),
   },
 
   // ── Settings ──
