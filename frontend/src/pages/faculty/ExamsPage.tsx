@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { ArrowLeft, ClipboardCheck, Plus, ShieldCheck, Trash2 } from 'lucide-react'
+import { ArrowLeft, ClipboardCheck, Plus, ShieldCheck, Trash2, UsersRound } from 'lucide-react'
 import { api, errorMessage } from '@/api/client'
 import { PageShell } from '@/components/shared/PageShell'
 import { Card } from '@/components/ui/Card'
@@ -172,6 +172,7 @@ function CoordinatorDesk() {
   const ctx = useQuery({ queryKey: ['faculty', 'exam', 'context'], queryFn: examApi.context })
   const all = useQuery({ queryKey: ['faculty', 'exam', 'all'], queryFn: () => examApi.assignments(true), refetchInterval: 300_000 })
   const [form, setForm] = useState({ phaseId: '', subjectId: '', facultyId: '', fromEnrollmentNo: '', toEnrollmentNo: '' })
+  const [showAllFaculty, setShowAllFaculty] = useState(false)
   const [deleteOf, setDeleteOf] = useState<ExamAssignment | null>(null)
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['faculty', 'exam'] })
@@ -193,10 +194,10 @@ function CoordinatorDesk() {
   const rows = all.data?.data ?? []
   const formReady = Object.values(form).every(Boolean)
 
-  // Checker options = faculty who teach the selected subject (university-wide),
-  // grouped by academic year with the active (HOD) year listed first.
+  // Start with teachers of the selected subject. The coordinator can explicitly
+  // widen the list to active faculty from other years when paper volume is high.
   const subjectCheckerIds = form.subjectId ? new Set(ctx.data?.subjectFaculty?.[form.subjectId] ?? []) : null
-  const checkers = (ctx.data?.faculty ?? []).filter((f) => !subjectCheckerIds || subjectCheckerIds.has(f.id))
+  const checkers = (ctx.data?.faculty ?? []).filter((f) => !subjectCheckerIds || showAllFaculty || subjectCheckerIds.has(f.id))
   const checkerCount = checkers.length
   const activeYear = ctx.data?.activeYearLevel ?? null
   const YEAR_ORDER = ['FY', 'SY', 'TY', 'FINAL']
@@ -218,6 +219,14 @@ function CoordinatorDesk() {
     })
   }
 
+  function toggleAllFaculty(enabled: boolean) {
+    setShowAllFaculty(enabled)
+    if (!enabled && form.subjectId) {
+      const allowed = new Set(ctx.data?.subjectFaculty?.[form.subjectId] ?? [])
+      if (!allowed.has(form.facultyId)) setForm((f) => ({ ...f, facultyId: '' }))
+    }
+  }
+
   return (
     <>
       <Card className="mt-5 p-4">
@@ -225,6 +234,11 @@ function CoordinatorDesk() {
           <ShieldCheck size={16} className="text-purple" />
           <h3 className="text-sm font-semibold text-text-primary">Coordinator Desk — Assign Papers</h3>
         </div>
+        <label className="mb-3 flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-surface-2 px-3 py-2 text-xs text-text-secondary">
+          <input type="checkbox" checked={showAllFaculty} onChange={(event) => toggleAllFaculty(event.target.checked)} className="accent-primary" />
+          <UsersRound size={14} className="text-primary" />
+          <span><b className="text-text-primary">Use faculty from other years</b> — show all active faculty when subject teachers need support.</span>
+        </label>
         <div className="grid gap-3 md:grid-cols-3 lg:grid-cols-5">
           <Select value={form.phaseId} onChange={(e) => setForm((f) => ({ ...f, phaseId: e.target.value }))} placeholder="Phase"
             options={(ctx.data?.phases ?? []).map((p) => ({ value: p.id, label: `${p.label} (/${p.entryMax})` }))} />
@@ -232,7 +246,7 @@ function CoordinatorDesk() {
             options={(ctx.data?.subjects ?? []).map((s) => ({ value: s.id, label: s.code }))} />
           <Select value={form.facultyId} onChange={(e) => setForm((f) => ({ ...f, facultyId: e.target.value }))}
             disabled={!form.subjectId || checkerCount === 0}>
-            <option value="">{!form.subjectId ? 'Pick subject first' : checkerCount ? 'Checker' : 'No faculty teach this'}</option>
+            <option value="">{!form.subjectId ? 'Pick subject first' : checkerCount ? 'Checker' : showAllFaculty ? 'No active faculty found' : 'No faculty teach this'}</option>
             {checkerGroups.map((g) => (
               <optgroup key={g.label} label={g.label}>
                 {g.faculty.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}

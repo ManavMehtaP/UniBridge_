@@ -4,6 +4,7 @@ import { Avatar } from '@/components/ui/Avatar'
 import { useAuthStore, useUser } from '@/stores/authStore'
 import { authApi } from '@/api/auth'
 import { SidebarNavItem } from './SidebarNavItem'
+import { SemesterHistorySelector } from './SemesterHistorySelector'
 import type { NavSection } from './navItems/types'
 
 const roleLabel: Record<string, string> = {
@@ -55,6 +56,9 @@ export function Sidebar({
           <div className="text-[11px] font-medium text-text-muted">{roleLabel[role]}</div>
         </div>
       </div>
+
+      {/* Semester history (HOD only — under the logo) */}
+      {role === 'HOD' && <SemesterHistorySelector />}
 
       {/* Nav */}
       <nav className="scrollbar-thin flex-1 overflow-y-auto px-3 py-4">

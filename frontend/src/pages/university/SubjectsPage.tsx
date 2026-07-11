@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { BookOpen, Download, Pencil, Plus, Trash2, Upload } from 'lucide-react'
@@ -19,24 +19,22 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 const TYPES = ['THEORY', 'PRACTICAL', 'LAB', 'TUTORIAL']
+const SEMS = [1, 2, 3, 4, 5, 6, 7, 8]
 
 export default function UniSubjectsPage() {
   const qc = useQueryClient()
-  const [academicYearId, setAcademicYearId] = useState('')
-  const [semesterId, setSemesterId] = useState('')
+  const [semesterNumber, setSemesterNumber] = useState('')
   const [branch, setBranch] = useState('')
   const [editing, setEditing] = useState<UniSubject | 'new' | null>(null)
   const [showUpload, setShowUpload] = useState(false)
   const [deleteOf, setDeleteOf] = useState<UniSubject | null>(null)
 
-  const years = useQuery({ queryKey: ['uni', 'years'], queryFn: universityApi.years })
   const branches = useQuery({ queryKey: ['uni', 'branches'], queryFn: universityApi.branches })
   const list = useQuery({
-    queryKey: ['uni', 'subjects', academicYearId, semesterId, branch],
-    queryFn: () => universityApi.subjects({ academicYearId: academicYearId || undefined, semesterId: semesterId || undefined, branch: branch || undefined }),
+    queryKey: ['uni', 'subjects', semesterNumber, branch],
+    queryFn: () => universityApi.subjects({ semesterNumber: semesterNumber ? Number(semesterNumber) : undefined, branch: branch || undefined }),
   })
 
-  const yearSemesters = useMemo(() => years.data?.data.find((y) => y.id === academicYearId)?.semesters ?? [], [years.data, academicYearId])
   const invalidate = () => qc.invalidateQueries({ queryKey: ['uni', 'subjects'] })
 
   const del = useMutation({
@@ -48,7 +46,7 @@ export default function UniSubjectsPage() {
   return (
     <PageShell
       title="Subjects"
-      subtitle="Manage all subjects by year, semester, and branch"
+      subtitle="One global catalog — added once per semester (1–8), shared across all batches & years"
       action={
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" leftIcon={<Download size={15} />} onClick={() => universityApi.downloadSubjectsTemplate()}>Template</Button>
@@ -58,32 +56,29 @@ export default function UniSubjectsPage() {
       }
     >
       <FilterBar>
-        <Select className="w-40" value={academicYearId} onChange={(e) => { setAcademicYearId(e.target.value); setSemesterId('') }} placeholder="All Years"
-          options={(years.data?.data ?? []).map((y) => ({ value: y.id, label: y.label }))} />
-        <Select className="w-40" value={semesterId} onChange={(e) => setSemesterId(e.target.value)} placeholder="All Semesters" disabled={!academicYearId}
-          options={yearSemesters.map((s) => ({ value: s.id, label: s.label }))} />
+        <Select className="w-40" value={semesterNumber} onChange={(e) => setSemesterNumber(e.target.value)} placeholder="All Semesters"
+          options={SEMS.map((n) => ({ value: String(n), label: `Semester ${n}` }))} />
         <Select className="w-40" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="All Branches"
           options={(branches.data?.data ?? []).map((b) => ({ value: b.code, label: b.code }))} />
       </FilterBar>
 
       <Card className="overflow-hidden">
         {list.isLoading ? (
-          <div className="p-4"><TableSkeleton rows={6} cols={7} /></div>
+          <div className="p-4"><TableSkeleton rows={6} cols={6} /></div>
         ) : (list.data?.data ?? []).length === 0 ? (
           <EmptyState icon={<BookOpen size={22} />} title="No subjects" description="Add a subject or upload a CSV." className="border-0" />
         ) : (
           <Table>
             <thead><tr>
-              <Th>Code</Th><Th>Name</Th><Th>Year</Th><Th>Semester</Th><Th>Branch</Th><Th>Credits</Th><Th>Type</Th><Th className="text-right">Actions</Th>
+              <Th>Code</Th><Th>Name</Th><Th>Semester</Th><Th>Branch</Th><Th>Credits</Th><Th>Type</Th><Th className="text-right">Actions</Th>
             </tr></thead>
             <tbody>
               {list.data?.data.map((s) => (
                 <Tr key={s.id}>
                   <Td className="font-semibold">{s.code}</Td>
                   <Td>{s.name}</Td>
-                  <Td>{s.academicYearLabel}</Td>
-                  <Td>Sem {s.semesterNumber}</Td>
-                  <Td>{s.branch ? <Badge tone="primary">{s.branch}</Badge> : <span className="text-text-muted">—</span>}</Td>
+                  <Td><Badge tone="primary">Sem {s.semesterNumber}</Badge></Td>
+                  <Td>{s.branch ? <Badge tone="teal">{s.branch}</Badge> : <span className="text-text-muted">—</span>}</Td>
                   <Td className="tabular-nums">{s.credits}</Td>
                   <Td><Badge tone="neutral">{s.type}</Badge></Td>
                   <Td>
@@ -102,7 +97,6 @@ export default function UniSubjectsPage() {
       {editing && (
         <SubjectFormModal
           subject={editing === 'new' ? null : editing}
-          years={years.data?.data ?? []}
           branches={(branches.data?.data ?? []).map((b) => b.code)}
           onClose={() => setEditing(null)}
           onSaved={invalidate}
@@ -115,15 +109,15 @@ export default function UniSubjectsPage() {
         title="Upload Subjects"
         onUpload={universityApi.uploadSubjectsCsv}
         onDownloadTemplate={universityApi.downloadSubjectsTemplate}
-        requiredColumns={['academic_year', 'semester_number', 'branch', 'code', 'name']}
-        optionalColumns={['credits', 'type']}
+        requiredColumns={['semester_number', 'code', 'name']}
+        optionalColumns={['branch', 'credits', 'type']}
         extraFields={<p className="text-xs text-text-muted">Existing subjects (same semester + code) are updated in place.</p>}
       />
 
       <ConfirmDialog
         open={!!deleteOf}
         title="Delete subject?"
-        message={<>Delete <b>{deleteOf?.code}</b>? Blocked if it has results or attendance.</>}
+        message={<>Soft-delete <b>{deleteOf?.code}</b>? Past results & attendance stay linked to it.</>}
         destructive confirmLabel="Delete"
         loading={del.isPending}
         onConfirm={() => deleteOf && del.mutate(deleteOf.id)}
@@ -133,56 +127,47 @@ export default function UniSubjectsPage() {
   )
 }
 
-function SubjectFormModal({ subject, years, branches, onClose, onSaved }: {
+function SubjectFormModal({ subject, branches, onClose, onSaved }: {
   subject: UniSubject | null
-  years: { id: string; label: string; semesters: { id: string; number: number; label: string }[] }[]
   branches: string[]
   onClose: () => void
   onSaved: () => void
 }) {
-  const [academicYearId, setAcademicYearId] = useState(subject?.academicYearId ?? '')
-  const [semesterId, setSemesterId] = useState(subject?.semesterId ?? '')
+  const [semesterNumber, setSemesterNumber] = useState(subject ? String(subject.semesterNumber) : '')
   const [branch, setBranch] = useState(subject?.branch ?? '')
   const [code, setCode] = useState(subject?.code ?? '')
   const [name, setName] = useState(subject?.name ?? '')
   const [credits, setCredits] = useState(subject?.credits ?? 4)
   const [type, setType] = useState(subject?.type ?? 'THEORY')
 
-  const yearSemesters = years.find((y) => y.id === academicYearId)?.semesters ?? []
-
   const save = useMutation({
     mutationFn: () => subject
-      ? universityApi.updateSubject(subject.id, { code, name, credits, type, branch })
-      : universityApi.createSubject({ semesterId, code, name, credits, type, branch }),
+      ? universityApi.updateSubject(subject.id, { code, name, credits, type, branch: branch || null })
+      : universityApi.createSubject({ semesterNumber: Number(semesterNumber), code, name, credits, type, branch: branch || null }),
     onSuccess: () => { toast.success('Subject saved'); onSaved(); onClose() },
     onError: (e) => toast.error(errorMessage(e)),
   })
 
-  const canSave = !!(code && name && (subject || (semesterId && branch)))
+  const canSave = !!(code && name && (subject || semesterNumber))
 
   return (
     <Modal open onClose={onClose} title={subject ? 'Edit Subject' : 'Add Subject'}
       footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => save.mutate()} loading={save.isPending} disabled={!canSave}>Save</Button></>}>
       <div className="space-y-3">
-        {!subject && (
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Academic Year *">
-              <Select value={academicYearId} onChange={(e) => { setAcademicYearId(e.target.value); setSemesterId('') }} placeholder="Select"
-                options={years.map((y) => ({ value: y.id, label: y.label }))} />
-            </Field>
-            <Field label="Semester *">
-              <Select value={semesterId} onChange={(e) => setSemesterId(e.target.value)} placeholder="Select" disabled={!academicYearId}
-                options={yearSemesters.map((s) => ({ value: s.id, label: s.label }))} />
-            </Field>
-          </div>
-        )}
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Branch *"><Select value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="Select" options={branches.map((b) => ({ value: b, label: b }))} /></Field>
+          <Field label="Semester *">
+            <Select value={semesterNumber} onChange={(e) => setSemesterNumber(e.target.value)} placeholder="Select" disabled={!!subject}
+              options={SEMS.map((n) => ({ value: String(n), label: `Semester ${n}` }))} />
+          </Field>
           <Field label="Type"><Select value={type} onChange={(e) => setType(e.target.value)} options={TYPES.map((t) => ({ value: t, label: t }))} /></Field>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Code *"><Input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="TOC" /></Field>
           <Field label="Credits"><Input type="number" min={1} max={10} value={credits} onChange={(e) => setCredits(Number(e.target.value))} /></Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Branch (optional)"><Select value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="All branches" options={branches.map((b) => ({ value: b, label: b }))} /></Field>
+          <div />
         </div>
         <Field label="Name *"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Theory of Computation" /></Field>
       </div>

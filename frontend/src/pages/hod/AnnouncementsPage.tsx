@@ -22,7 +22,7 @@ interface HodAnnouncement {
   id: string
   title: string
   body: string
-  scope: 'ALL' | 'BATCH' | 'YEAR_LEVEL'
+  scope: 'ALL' | 'BATCH' | 'YEAR_LEVEL' | 'FACULTY_ONLY'
   scopeLabel: string
   senderName: string
   senderRole: 'HOD' | 'FACULTY'
@@ -65,7 +65,7 @@ export default function HodAnnouncementsPage() {
                 <div className="flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-sm font-semibold text-text-primary">{a.title}</h3>
-                    <Badge tone={a.scope === 'ALL' ? 'primary' : a.scope === 'BATCH' ? 'teal' : 'purple'}>{a.scopeLabel}</Badge>
+                    <Badge tone={a.scope === 'ALL' ? 'primary' : a.scope === 'BATCH' ? 'teal' : a.scope === 'FACULTY_ONLY' ? 'warning' : 'purple'}>{a.scope === 'FACULTY_ONLY' ? 'Faculty Only' : a.scopeLabel}</Badge>
                     <Badge tone={a.senderRole === 'HOD' ? 'purple' : 'neutral'}>{a.senderRole}</Badge>
                   </div>
                   <p className="mt-1.5 whitespace-pre-wrap text-sm text-text-secondary">{a.body}</p>
@@ -101,11 +101,11 @@ function CreateModal({ open, onClose, onSuccess }: { open: boolean; onClose: () 
   const scope = useHodScope()
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
-  const [scopeType, setScopeType] = useState<'ALL' | 'BATCH' | 'YEAR_LEVEL'>('ALL')
+  const [scopeType, setScopeType] = useState<'ALL' | 'BATCH' | 'YEAR_LEVEL' | 'FACULTY_ONLY'>('ALL')
   const [scopeValue, setScopeValue] = useState('')
 
   const create = useMutation({
-    mutationFn: () => hodAnnApi.create({ title, body, scope: scopeType, scopeValue: scopeType === 'ALL' ? undefined : scopeValue }),
+    mutationFn: () => hodAnnApi.create({ title, body, scope: scopeType, scopeValue: (scopeType === 'ALL' || scopeType === 'FACULTY_ONLY') ? undefined : scopeValue }),
     onSuccess: () => { toast.success('Posted — students are being notified'); onSuccess(); close() },
     onError: (e) => toast.error(errorMessage(e)),
   })
@@ -126,7 +126,7 @@ function CreateModal({ open, onClose, onSuccess }: { open: boolean; onClose: () 
       footer={
         <>
           <Button variant="outline" onClick={close}>Cancel</Button>
-          <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!title || !body || (scopeType !== 'ALL' && !scopeValue)}>Post</Button>
+          <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!title || !body || (scopeType !== 'ALL' && scopeType !== 'FACULTY_ONLY' && !scopeValue)}>Post</Button>
         </>
       }
     >
@@ -142,10 +142,11 @@ function CreateModal({ open, onClose, onSuccess }: { open: boolean; onClose: () 
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Audience</label>
-            <Select value={scopeType} onChange={(e) => { setScopeType(e.target.value as 'ALL' | 'BATCH' | 'YEAR_LEVEL'); setScopeValue('') }}>
+            <Select value={scopeType} onChange={(e) => { setScopeType(e.target.value as 'ALL' | 'BATCH' | 'YEAR_LEVEL' | 'FACULTY_ONLY'); setScopeValue('') }}>
               <option value="ALL">All students</option>
               <option value="YEAR_LEVEL">Year level</option>
               <option value="BATCH">Specific batch</option>
+              <option value="FACULTY_ONLY">Faculty only (my pool)</option>
             </Select>
           </div>
           {scopeType === 'BATCH' && (

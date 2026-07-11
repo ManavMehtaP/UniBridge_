@@ -9,6 +9,8 @@ import { useHodScope } from '@/hooks/hod/useHodScope'
 import type { HodTimetableSlot } from '@/types/hod'
 import { cn } from '@/lib/utils'
 import { PageShell } from '@/components/shared/PageShell'
+import { HistoryBanner } from '@/components/hod/HistoryBanner'
+import { useHistoryStore } from '@/stores/historyStore'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
@@ -38,6 +40,8 @@ const isOther = (s: { subjectCode: string; subjectName: string }) => /seminar|ac
 export default function HodTimetablePage() {
   const qc = useQueryClient()
   const scope = useHodScope()
+  const history = useHistoryStore()
+  const readOnly = !!history.semesterId
   const [batchId, setBatchId] = useState('')
   const [view, setView] = useState<'week' | 'list'>('week')
   const [editing, setEditing] = useState<HodTimetableSlot | { dayOfWeek: number; slotStart?: string; slotEnd?: string } | null>(null)
@@ -53,8 +57,8 @@ export default function HodTimetablePage() {
   }, [batches, batchId])
 
   const list = useQuery({
-    queryKey: ['hod', 'timetable', batchId],
-    queryFn: () => hodApi.timetable.list({ batchId }),
+    queryKey: ['hod', 'timetable', batchId, history.semesterId],
+    queryFn: () => hodApi.timetable.list({ batchId, semesterId: history.semesterId || undefined }),
     enabled: !!batchId,
   })
 
@@ -112,13 +116,16 @@ export default function HodTimetablePage() {
       title="Timetable"
       subtitle="Manage and view class schedules for all batches"
       action={
+        readOnly ? undefined : (
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" leftIcon={<Trash2 size={15} />} onClick={() => setConfirmClear(true)} disabled={!batchId || slots.length === 0}>Delete Timetable</Button>
           <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload CSV</Button>
           <Button leftIcon={<Plus size={15} />} onClick={() => setEditing({ dayOfWeek: 1 })} disabled={!batchId}>Add Lecture</Button>
         </div>
+        )
       }
     >
+      <HistoryBanner />
       {/* Controls — batches you manage are shown as pills; timetable auto-loads for the selected one */}
       <Card className="mb-4 p-3">
         <div className="flex flex-wrap items-center gap-3">

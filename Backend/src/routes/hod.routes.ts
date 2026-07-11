@@ -35,6 +35,15 @@ function str(value: unknown) {
 export const hodRouter = Router();
 
 hodRouter.get("/my-scope", asyncHandler(async (req, res) => res.json(await portalService.myScope(scopeFrom(req)))));
+hodRouter.post("/onboarding/complete", asyncHandler(async (req, res) => res.json(await portalService.hodOnboardingComplete(scopeFrom(req), req.body))));
+hodRouter.get("/onboarding/branches", asyncHandler(async (req, res) => res.json(await portalService.uniBranches(req.user!.universityId))));
+hodRouter.get("/onboarding/faculty", asyncHandler(async (req, res) => res.json(await portalService.hodOnboardingFaculty(scopeFrom(req)))));
+hodRouter.post("/faculty/pool", asyncHandler(async (req, res) => res.json(await portalService.hodSaveFacultyPool(scopeFrom(req), req.body))));
+hodRouter.get("/faculty/pool", asyncHandler(async (req, res) => res.json(await portalService.hodFacultyPool(scopeFrom(req)))));
+hodRouter.get("/batches/history", asyncHandler(async (req, res) => res.json(await portalService.hodBatchHistory(scopeFrom(req)))));
+hodRouter.get("/history/semesters", asyncHandler(async (req, res) => res.json(await portalService.hodHistorySemesters(scopeFrom(req)))));
+hodRouter.post("/reset-semester", asyncHandler(async (req, res) => res.json(await portalService.hodResetSemester(scopeFrom(req)))));
+hodRouter.post("/graduate", asyncHandler(async (req, res) => res.json(await portalService.graduateFinalYear(scopeFrom(req), req.body ?? {}))));
 
 hodRouter.get("/dashboard/summary", asyncHandler(async (req, res) => res.json(await portalService.dashboardSummary(scopeFrom(req)))));
 hodRouter.get("/dashboard/attendance-trend", asyncHandler(async (req, res) => res.json(await portalService.dashboardAttendanceTrend(scopeFrom(req), Number(req.query.months ?? 6)))));
@@ -118,15 +127,15 @@ hodRouter.patch("/attendance/lock-all", asyncHandler(async (req, res) => res.jso
 hodRouter.get("/attendance/export", asyncHandler(async (req, res) => sendCsv(res, "attendance.csv", await portalService.attendanceExport(scopeFrom(req), String(req.query.batchId), String(req.query.semesterId)))));
 
 hodRouter.get("/subjects", asyncHandler(async (req, res) => res.json(await portalService.listSubjects(scopeFrom(req), req.query.semesterId as string | undefined, req.query.search as string | undefined, req.query.type as string | undefined))));
+hodRouter.get("/subjects/:subjectId/config", asyncHandler(async (req, res) => res.json(await portalService.getSubjectConfig(str(req.params.subjectId)))));
+hodRouter.put("/subjects/:subjectId/config", asyncHandler(async (req, res) => res.json(await portalService.saveSubjectConfig(str(req.params.subjectId), req.body))));
 hodRouter.get("/subjects/:subjectId", asyncHandler(async (req, res) => res.json(await portalService.getSubject(str(req.params.subjectId)))));
-hodRouter.post("/subjects", asyncHandler(async (req, res) => res.status(201).json(await portalService.createSubject(req.body))));
+hodRouter.post("/subjects", asyncHandler(async (req, res) => res.status(201).json(await portalService.createSubject({ ...req.body, universityId: req.user!.universityId }))));
 hodRouter.put("/subjects/:subjectId", asyncHandler(async (req, res) => res.json(await portalService.updateSubject(str(req.params.subjectId), req.body))));
 hodRouter.delete("/subjects/:subjectId", asyncHandler(async (req, res) => {
   await portalService.deleteSubject(str(req.params.subjectId));
   res.status(204).send();
 }));
-hodRouter.post("/subjects/copy", asyncHandler(async (req, res) => res.json(await portalService.copySubjects(String(req.body.fromSemesterId), String(req.body.toSemesterId)))));
-hodRouter.post("/subjects/:subjectId/pyq", upload.array("files"), asyncHandler(async (req, res) => res.json(await portalService.uploadPyq(str(req.params.subjectId)))));
 
 hodRouter.get("/mentorship/summary", asyncHandler(async (req, res) => res.json(await portalService.mentorshipSummary(scopeFrom(req), req.query.semesterId as string | undefined))));
 hodRouter.get("/mentorship/mentors", asyncHandler(async (req, res) => res.json(await portalService.mentorshipMentors(scopeFrom(req), req.query.semesterId as string | undefined))));

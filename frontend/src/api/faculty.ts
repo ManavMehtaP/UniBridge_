@@ -26,6 +26,8 @@ export const facultyApi = {
     api.get<PaginatedResponse<T.FacultyStudentRow>>('/faculty/students', { params }).then((r) => r.data),
   studentDetail: (enrollmentNo: string) =>
     api.get(`/faculty/students/${enrollmentNo}`).then((r) => r.data),
+  studentHistory: (enrollmentNo: string) =>
+    api.get<{ enrollmentNo: string; journey: { semesterNumber: number; semesterLabel: string; yearLevel: string; batchCode: string; rollNo: string; academicYear: string; isCurrent: boolean }[] }>(`/faculty/students/${enrollmentNo}/history`).then((r) => r.data),
   studentAttendance: (enrollmentNo: string) =>
     api.get(`/faculty/students/${enrollmentNo}/attendance`).then((r) => r.data),
   studentResults: (enrollmentNo: string) =>
@@ -44,7 +46,13 @@ export const facultyApi = {
     api.post('/faculty/attendance/day', body).then((r) => r.data),
 
   attendancePending: () => api.get('/faculty/attendance/pending').then((r) => r.data),
-  attendanceSummary: () => api.get('/faculty/attendance/summary').then((r) => r.data),
+  attendanceSummary: () => api.get<{
+    semesterLabel: string
+    bySubjectAndBatch: { subjectCode: string; batchCode: string; totalStudents: number; avgAttendancePct: number; belowThresholdCount: number; totalLecturesMarked: number }[]
+    daily: { date: string; pct: number; lectures: number }[]
+    weekly: { weekStart: string; pct: number; lectures: number }[]
+    overall: { totalLectures: number; avgAttendancePct: number }
+  }>('/faculty/attendance/summary').then((r) => r.data),
   attendanceSession: (params: Params) =>
     api.get<{ students: T.AttendanceSessionRow[]; alreadyMarked?: boolean }>('/faculty/attendance/session', { params }).then((r) => r.data),
   postAttendance: (body: Record<string, unknown>) =>

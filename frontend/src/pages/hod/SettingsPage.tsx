@@ -253,23 +253,42 @@ function AttendanceRulesSection() {
 }
 
 function DangerSection() {
+  const qc = useQueryClient()
   const scope = useQuery({ queryKey: ['hod', 'scope', 'active'], queryFn: () => hodApi.scope() })
   const [confirm, setConfirm] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
   const reset = useMutation({
     mutationFn: () => hodApi.settings.resetMentorAssignments(scope.data!.activeSemester.id),
     onSuccess: (r: { clearedCount?: number }) => { toast.success(`Cleared ${r.clearedCount ?? 0} assignments`); setConfirm(false) },
     onError: (e) => { toast.error(errorMessage(e)); setConfirm(false) },
   })
+  const resetSemester = useMutation({
+    mutationFn: () => hodApi.resetSemester(),
+    onSuccess: (r: { batchesRemoved: number; studentsRemoved: number }) => {
+      toast.success(`Reset done — removed ${r.batchesRemoved} batches, ${r.studentsRemoved} students`)
+      setConfirmReset(false)
+      // refresh everything so onboarding reappears immediately
+      qc.invalidateQueries({ queryKey: ['hod'] })
+    },
+    onError: (e) => { toast.error(errorMessage(e)); setConfirmReset(false) },
+  })
   return (
     <Card className="border-danger/30">
       <CardHeader title="Danger Zone" />
-      <CardBody className="pt-0">
+      <CardBody className="space-y-3 pt-0">
         <div className="flex items-center justify-between rounded-sm border border-danger/30 bg-danger-light/30 p-4">
           <div>
             <div className="text-sm font-semibold text-text-primary">Reset Mentor Assignments</div>
             <div className="text-xs text-text-muted">Clears all mentor-student links for the active semester.</div>
           </div>
           <Button variant="danger" onClick={() => setConfirm(true)} disabled={!scope.data}>Reset</Button>
+        </div>
+        <div className="flex items-center justify-between rounded-sm border border-danger/30 bg-danger-light/30 p-4">
+          <div>
+            <div className="text-sm font-semibold text-text-primary">Reset Semester Data</div>
+            <div className="text-xs text-text-muted">Deletes your batches, students, timetable & assignments — the onboarding wizard reappears so you can start fresh.</div>
+          </div>
+          <Button variant="danger" onClick={() => setConfirmReset(true)} disabled={!scope.data || scope.data.batches.length === 0}>Reset & Re-onboard</Button>
         </div>
       </CardBody>
       <ConfirmDialog
@@ -281,6 +300,16 @@ function DangerSection() {
         loading={reset.isPending}
         onConfirm={() => reset.mutate()}
         onCancel={() => setConfirm(false)}
+      />
+      <ConfirmDialog
+        open={confirmReset}
+        title="Reset all semester data?"
+        message={<>This permanently deletes <b>all your batches, their students, timetable and faculty assignments</b>. You'll be taken back through onboarding. This cannot be undone.</>}
+        destructive
+        confirmLabel="Yes, reset everything"
+        loading={resetSemester.isPending}
+        onConfirm={() => resetSemester.mutate()}
+        onCancel={() => setConfirmReset(false)}
       />
     </Card>
   )

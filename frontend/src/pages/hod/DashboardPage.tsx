@@ -45,7 +45,11 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-2xl font-bold text-text-primary">Good day, {firstName} 👋</h1>
           <p className="mt-0.5 text-sm text-text-secondary">
-            {scope.data?.hod.year ? `HOD — ${scope.data.hod.year}` : 'HOD Portal'}
+            {scope.data?.hod.sectionTag
+              ? `HOD — ${scope.data.hod.sectionTag}`
+              : scope.data?.hod.year
+                ? `HOD — ${scope.data.hod.year}`
+                : 'HOD Portal'}
           </p>
           {scope.data?.activeSemester && (
             <div className="mt-2 flex flex-wrap items-center gap-2">

@@ -26,6 +26,7 @@ adminRouter.post("/batches/bulk", asyncHandler(async (req, res) => res.json(awai
 
 // HODs
 adminRouter.get("/hods", asyncHandler(async (req, res) => res.json(await portalService.uniHods(req.user!.universityId))));
+adminRouter.get("/promotion-dashboard", asyncHandler(async (req, res) => res.json(await portalService.promotionDashboard(req.user!.universityId))));
 adminRouter.post("/hods/:facultyId/toggle", asyncHandler(async (req, res) => res.json(await portalService.uniSetHod(req.user!.universityId, str(req.params.facultyId), Boolean(req.body.isHod)))));
 adminRouter.post("/hod-scope", asyncHandler(async (req, res) => res.json(await portalService.uniAssignHodScope(req.user!.universityId, String(req.body.facultyId), String(req.body.batchId)))));
 adminRouter.delete("/hod-scope/:batchId", asyncHandler(async (req, res) => res.json(await portalService.uniRemoveHodScope(req.user!.universityId, str(req.params.batchId)))));
@@ -48,9 +49,11 @@ adminRouter.post("/faculty/csv", upload.single("file"), asyncHandler(async (req,
 adminRouter.get("/students", asyncHandler(async (req, res) => res.json(await portalService.uniStudents(req.user!.universityId, { search: req.query.search as string | undefined, branch: req.query.branch as string | undefined, page: Number(req.query.page ?? 1), limit: Number(req.query.limit ?? 20) }))));
 adminRouter.post("/students", asyncHandler(async (req, res) => res.json(await portalService.register({ ...req.body, role: "STUDENT" }, req.user!.universityId))));
 adminRouter.patch("/students/:id/active", asyncHandler(async (req, res) => res.json(await portalService.uniSetStudentActive(req.user!.universityId, str(req.params.id), Boolean(req.body.isActive)))));
+adminRouter.get("/students/:enrollmentNo/history", asyncHandler(async (req, res) => res.json(await portalService.getStudentHistory({ universityId: req.user!.universityId, userId: req.user!.id, role: req.user!.role, isHod: false, hodBatchIds: [] } as any, str(req.params.enrollmentNo)))));
+adminRouter.get("/students/:enrollmentNo", asyncHandler(async (req, res) => res.json(await portalService.getStudent({ universityId: req.user!.universityId, userId: req.user!.id, role: req.user!.role, isHod: false, hodBatchIds: [] } as any, str(req.params.enrollmentNo)))));
 
 // Subjects (Dean CRUD)
-adminRouter.get("/subjects", asyncHandler(async (req, res) => res.json(await portalService.uniSubjectList(req.user!.universityId, { academicYearId: req.query.academicYearId as string | undefined, semesterId: req.query.semesterId as string | undefined, branch: req.query.branch as string | undefined }))));
+adminRouter.get("/subjects", asyncHandler(async (req, res) => res.json(await portalService.uniSubjectList(req.user!.universityId, { semesterNumber: req.query.semesterNumber ? Number(req.query.semesterNumber) : undefined, branch: req.query.branch as string | undefined }))));
 adminRouter.post("/subjects", asyncHandler(async (req, res) => res.status(201).json(await portalService.createSubject({ ...req.body, universityId: req.user!.universityId }))));
 adminRouter.put("/subjects/:id", asyncHandler(async (req, res) => res.json(await portalService.updateSubject(str(req.params.id), req.body))));
 adminRouter.delete("/subjects/:id", asyncHandler(async (req, res) => { await portalService.deleteSubject(str(req.params.id)); res.status(204).send(); }));

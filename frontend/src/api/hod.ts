@@ -5,6 +5,17 @@ import type { HodTimetableSlot } from '@/types/hod'
 
 type Params = Record<string, string | number | boolean | undefined>
 
+export interface SubjectComponentCfg { key: string; label: string; weightagePct: number; isEnabled: boolean; marks?: number }
+export interface SubjectConfig {
+  id: string; code: string; name: string; semesterNumber: number; credits: number; type: string; branch: string | null
+  totalMarks: number; passingMarks: number; theoryRule: string; isActive: boolean
+  components: SubjectComponentCfg[]; totalWeightage: number; catalog: { key: string; label: string }[]
+}
+export interface SubjectConfigInput {
+  totalMarks?: number; passingMarks?: number; theoryRule?: string; isActive?: boolean
+  components?: { key: string; label: string; weightagePct: number; isEnabled: boolean }[]
+}
+
 /** Trigger a browser download for a blob endpoint (CSV/PDF). */
 async function download(path: string, filename: string, params?: Params) {
   const res = await api.get(path, { params, responseType: 'blob' })
@@ -19,6 +30,33 @@ async function download(path: string, filename: string, params?: Params) {
 export const hodApi = {
   scope: (semesterId?: string) =>
     api.get<T.HodScope>('/hod/my-scope', { params: { semesterId } }).then((r) => r.data),
+
+  onboarding: {
+    branches: () =>
+      api.get<{ data: { id: string; code: string; name: string }[] }>('/hod/onboarding/branches').then((r) => r.data),
+    faculty: () =>
+      api.get<{ data: { id: string; name: string; employeeId: string; mentorCode: string | null; year: string | null; inPool: boolean; takenByHod: boolean }[]; year: string | null }>('/hod/onboarding/faculty').then((r) => r.data),
+    complete: (body: { initial: string; branches: string[]; batchCount: number }) =>
+      api.post<{ batches: { id: string; code: string }[]; branches: string[]; initial: string; semester: string }>('/hod/onboarding/complete', body).then((r) => r.data),
+  },
+
+  batchHistory: () =>
+    api.get<{ data: { batchId: string; batchCode: string; yearLevel: string; sectionTag: string | null; semesterLabel: string; semesterNumber: number; academicYear: string; isActive: boolean; studentCount: number }[] }>('/hod/batches/history').then((r) => r.data),
+
+  resetSemester: () =>
+    api.post<{ batchesRemoved: number; studentsRemoved: number }>('/hod/reset-semester').then((r) => r.data),
+
+  graduateFinalYear: (detainEnrollmentNos?: string[]) =>
+    api.post<{ graduated: number; detained: number; semester: string }>('/hod/graduate', { detainEnrollmentNos }).then((r) => r.data),
+
+  historySemesters: () =>
+    api.get<{ currentSemesterId: string | null; data: { semesterId: string; number: number; label: string; yearLevel: string; academicYear: string; studentCount: number; isCurrent: boolean }[] }>('/hod/history/semesters').then((r) => r.data),
+
+  facultyPool: {
+    get: () => api.get<{ data: { id: string; name: string; employeeId: string; mentorCode: string | null; year: string | null; isActive: boolean }[] }>('/hod/faculty/pool').then((r) => r.data),
+    save: (body: { facultyIds: string[]; reclaim?: boolean }) =>
+      api.post<{ pooled: number; released: number }>('/hod/faculty/pool', body).then((r) => r.data),
+  },
 
   // ── Dashboard ──
   dashboard: {
@@ -124,6 +162,10 @@ export const hodApi = {
     list: (params: Params) =>
       api.get<T.SubjectsResponse>('/hod/subjects', { params }).then((r) => r.data),
     get: (subjectId: string) => api.get(`/hod/subjects/${subjectId}`).then((r) => r.data),
+    getConfig: (subjectId: string) =>
+      api.get<SubjectConfig>(`/hod/subjects/${subjectId}/config`).then((r) => r.data),
+    saveConfig: (subjectId: string, body: SubjectConfigInput) =>
+      api.put<SubjectConfig>(`/hod/subjects/${subjectId}/config`, body).then((r) => r.data),
     create: (body: Record<string, unknown>) => api.post('/hod/subjects', body).then((r) => r.data),
     update: (subjectId: string, body: Record<string, unknown>) =>
       api.put(`/hod/subjects/${subjectId}`, body).then((r) => r.data),

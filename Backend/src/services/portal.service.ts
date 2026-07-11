@@ -1,4 +1,5 @@
 import prisma from "../config/prisma.js";
+import { env } from "../config/env.js";
 import type { Role, YearLevel } from "../types/domain.js";
 import { ApiError, buildPagination } from "../utils/http.js";
 
@@ -72,6 +73,33 @@ function gradeFromPct(pct: number): string {
 
 const DAY_LABELS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+// ponytail: identity tag from batch initial + year level, e.g. batch "C2" in SY → "SY-3"
+// (A→1, B→2, C→3…). Lets the Dean read a person's year+section at a glance.
+function sectionTag(yearLevel: string | null | undefined, batchCode: string | null | undefined): string | null {
+  if (!yearLevel) return null;
+  const initial = batchCode?.trim()?.[0]?.toUpperCase();
+  if (!initial || initial < "A" || initial > "Z") return yearLevel;
+  return `${yearLevel}-${initial.charCodeAt(0) - 64}`;
+}
+
+function parseBatchIds(value: unknown): string[] {
+  if (Array.isArray(value)) return [...new Set(value.map(String).map((id) => id.trim()).filter(Boolean))];
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return [...new Set(parsed.map(String).map((id) => id.trim()).filter(Boolean))];
+  } catch {
+    // Accept a simple comma-separated fallback for non-browser clients.
+  }
+  return [...new Set(value.split(",").map((id) => id.trim()).filter(Boolean))];
+}
+
+function objectUrl(fileKey: string) {
+  return env.STORAGE_BUCKET_URL
+    ? `${env.STORAGE_BUCKET_URL.replace(/\/$/, "")}/${fileKey}`
+    : `/mock/${fileKey}`;
+}
+
 // ─────────────────────────────────────────────────────────────
 // DB Helper functions (async, Prisma-backed)
 // ─────────────────────────────────────────────────────────────
@@ -82,12 +110,31 @@ async function getUniversity(universityId: string) {
   return u;
 }
 
-async function getActiveSemester(universityId: string) {
+// ponytail: preferSemesterId lets HOD-scoped calls target THEIR active sem
+// when multiple year levels are ACTIVE at the same time.
+async function getActiveSemester(universityId: string, preferSemesterId?: string) {
+  if (preferSemesterId) {
+    const preferred = await prisma.semester.findUnique({ where: { id: preferSemesterId } });
+    if (preferred && preferred.universityId === universityId) return preferred;
+  }
   const s = await prisma.semester.findFirst({ where: { universityId, status: "ACTIVE" } });
   if (s) return s;
-  // ponytail: no-op placeholder so scope/dashboard endpoints render empty state
-  // instead of 404 when the tenant hasn't seeded semesters yet.
   return { id: "", universityId, label: "No active semester", number: 0, status: "ACTIVE" as const, yearLevel: "FY" as const, academicYearId: "", startDate: new Date(), endDate: new Date(), createdAt: new Date(), updatedAt: new Date() };
+}
+
+// ponytail: the active semester THIS HOD works in. Prefer their scoped semester;
+// before onboarding (no scopes) fall back to the ACTIVE semester of their year level
+// (each batch/year runs one active sem; year levels FY/SY/TY/FINAL run in parallel batches).
+async function hodActiveSemester(universityId: string, hodYear: string | null | undefined, hodSemesterIds: string[]) {
+  if (hodSemesterIds[0]) {
+    const s = await prisma.semester.findUnique({ where: { id: hodSemesterIds[0] } });
+    if (s && s.universityId === universityId) return s;
+  }
+  if (hodYear) {
+    const s = await prisma.semester.findFirst({ where: { universityId, status: "ACTIVE", yearLevel: hodYear as any } });
+    if (s) return s;
+  }
+  return getActiveSemester(universityId);
 }
 
 async function getSemester(semesterId?: string, universityId?: string) {
@@ -98,6 +145,61 @@ async function getSemester(semesterId?: string, universityId?: string) {
   }
   if (universityId) return getActiveSemester(universityId);
   throw new ApiError(400, "SEMESTER_REQUIRED", "Semester or university ID required.");
+}
+
+// ponytail: the active semester THIS faculty teaches in. With several year levels active at once,
+// getActiveSemester(uni) is ambiguous — prefer the ACTIVE semester where they have assignments,
+// then their year level, then any active. Mirrors hodActiveSemester so HOD & faculty agree.
+async function facultyActiveSemester(facultyId: string, universityId: string, explicitSemesterId?: string) {
+  if (explicitSemesterId) return getSemester(explicitSemesterId);
+  const asg = await prisma.facultyBatchAssignment.findFirst({
+    where: { facultyId, semester: { status: "ACTIVE", universityId } },
+    include: { semester: true },
+    orderBy: { semester: { number: "desc" } },
+  });
+  if (asg?.semester) return asg.semester;
+  const fac = await prisma.faculty.findUnique({ where: { id: facultyId }, select: { year: true } });
+  if (fac?.year) {
+    const s = await prisma.semester.findFirst({ where: { universityId, status: "ACTIVE", yearLevel: fac.year as any } });
+    if (s) return s;
+  }
+  return getActiveSemester(universityId);
+}
+
+// Content can only target batches that the uploading faculty teaches for the
+// same subject and active semester. This keeps an arbitrary batch id from
+// becoming a cross-division visibility bypass.
+async function validateFacultyContentTargets(
+  facultyId: string,
+  universityId: string,
+  subjectId: string,
+  semesterId: string,
+  requestedBatchIds: string[],
+) {
+  if (requestedBatchIds.length === 0) {
+    throw new ApiError(400, "BATCH_REQUIRED", "Select at least one assigned batch.");
+  }
+  const assignments = await prisma.facultyBatchAssignment.findMany({
+    where: { facultyId, subjectId, semesterId, faculty: { universityId } },
+    select: { batchId: true },
+  });
+  const allowed = new Set(assignments.map((assignment) => assignment.batchId));
+  const invalid = requestedBatchIds.filter((batchId) => !allowed.has(batchId));
+  if (invalid.length > 0) {
+    throw new ApiError(403, "BATCH_NOT_ASSIGNED", "Content can only be shared with your assigned batches for this subject.");
+  }
+  return requestedBatchIds;
+}
+
+// ponytail: the semester an HOD-scoped call operates on. With multiple batches active at once,
+// getActiveSemester(uni) is ambiguous — resolve to the HOD's OWN scoped semester instead.
+async function scopeSemester(scope: Scope, explicitSemesterId?: string) {
+  if (explicitSemesterId) return getSemester(explicitSemesterId);
+  if (scope.hodSemesterIds?.[0]) {
+    const s = await prisma.semester.findUnique({ where: { id: scope.hodSemesterIds[0] } });
+    if (s && s.universityId === scope.universityId) return s;
+  }
+  return scopeSemester(scope);
 }
 
 async function getAcademicYear(academicYearId: string) {
@@ -116,6 +218,14 @@ async function subjectById(subjectId: string) {
   const s = await prisma.subject.findUnique({ where: { id: subjectId } });
   if (!s) throw new ApiError(404, "SUBJECT_NOT_FOUND", "Subject not found.");
   return s;
+}
+
+// ponytail: subjects are global-by-semester-number. Resolve "subjects for this semester (row)"
+// to the catalog entries for that semester's NUMBER within the university.
+async function subjectsBySemester(semesterId: string) {
+  const sem = await prisma.semester.findUnique({ where: { id: semesterId }, select: { universityId: true, number: true } });
+  if (!sem) return [];
+  return prisma.subject.findMany({ where: { universityId: sem.universityId, semesterNumber: sem.number, deletedAt: null }, orderBy: { code: "asc" } });
 }
 
 async function phaseById(phaseId: string) {
@@ -149,7 +259,8 @@ async function assertBranchAllowed(universityId: string, branch: string) {
 }
 
 async function requireExamCoordinator(facultyId: string, universityId: string) {
-  const semester = await getActiveSemester(universityId);
+  // ponytail: with multi-active-sem, resolve to the semester this faculty actually teaches in.
+  const semester = await facultyActiveSemester(facultyId, universityId);
   const coordinator = semester.id
     ? await prisma.examCoordinator.findFirst({ where: { semesterId: semester.id, facultyId } })
     : null;
@@ -232,13 +343,18 @@ async function currentEnrollmentForStudent(studentId: string, semesterId?: strin
   });
 }
 
+// ponytail: enrollments for a HOD view. No semesterId → live (isCurrent in current batches).
+// With semesterId → the students the HOD MANAGED that semester: enrollments at that semester in
+// ANY batch the HOD has ever owned (works for both the active semester and past ones — history).
 async function scopedCurrentEnrollments(scope: Scope, semesterId?: string) {
+  if (semesterId) {
+    const allBatchIds = await hodAllBatchIds(scope.userId);
+    return prisma.studentEnrollment.findMany({
+      where: { semesterId, batchId: { in: allBatchIds.length ? allBatchIds : scope.hodBatchIds } },
+    });
+  }
   return prisma.studentEnrollment.findMany({
-    where: {
-      isCurrent: true,
-      batchId: { in: scope.hodBatchIds },
-      ...(semesterId ? { semesterId } : {}),
-    },
+    where: { isCurrent: true, batchId: { in: scope.hodBatchIds } },
   });
 }
 
@@ -253,7 +369,7 @@ async function getFacultyAssignments(facultyId: string, semesterId?: string) {
 }
 
 async function getFacultyScopeData(facultyId: string, universityId: string, semesterId?: string) {
-  const semester = await getSemester(semesterId, universityId);
+  const semester = await facultyActiveSemester(facultyId, universityId, semesterId);
   const assignments = await getFacultyAssignments(facultyId, semester.id);
   const assignedBatchIds = [...new Set(assignments.map((a) => a.batchId))];
   const assignedSubjectIds = [...new Set(assignments.map((a) => a.subjectId).filter((id): id is string => Boolean(id)))];
@@ -352,9 +468,21 @@ async function computeOverallAttendancePct(enrollmentId: string) {
 }
 
 async function getScopedFaculty(scope: Scope) {
+  // ponytail: pool-first — an HOD sees their claimed pool. Fallback to year-strict for
+  // pre-onboarded HODs so the roster isn't empty before they save a pool.
+  const hod = await prisma.faculty.findFirst({ where: { id: scope.userId }, select: { year: true } });
+  const hodYear = hod?.year || null;
+  const pool = await prisma.faculty.findMany({
+    where: {
+      universityId: scope.universityId, deletedAt: null, isDean: false, hodId: scope.userId, NOT: { employeeId: "ADMIN001" },
+    },
+  });
+  if (pool.length > 0) return pool;
   return prisma.faculty.findMany({
-    // Dean is a university-admin account, never part of a HOD's teaching roster.
-    where: { universityId: scope.universityId, deletedAt: null, isDean: false, NOT: { employeeId: "ADMIN001" } },
+    where: {
+      universityId: scope.universityId, deletedAt: null, isDean: false, NOT: { employeeId: "ADMIN001" },
+      ...(hodYear ? { year: hodYear } : {}),
+    },
   });
 }
 
@@ -362,6 +490,23 @@ async function ensureBatchInScope(batchId: string, scope: Scope) {
   if (!scope.hodBatchIds.includes(batchId)) {
     throw new ApiError(403, "BATCH_NOT_IN_SCOPE", "Requested batch is not in this HOD's scope.");
   }
+}
+
+// Every batch this HOD has EVER owned (across all years/semesters) — used for historical views.
+async function hodAllBatchIds(hodId: string) {
+  const scopes = await prisma.hodBatchScope.findMany({ where: { facultyId: hodId }, select: { batchId: true } });
+  return scopes.map((s) => s.batchId);
+}
+
+// A Prisma StudentEnrollment `where` for a HOD view. No explicit semester → live (isCurrent in the
+// HOD's current batches). Explicit semester → the students managed then (that semester, in ANY batch
+// the HOD ever owned). One source of truth for every HOD list so history works everywhere.
+async function hodEnrollmentWhere(scope: Scope, explicitSemesterId?: string, batchId?: string) {
+  if (explicitSemesterId) {
+    const allBatchIds = await hodAllBatchIds(scope.userId);
+    return { semesterId: explicitSemesterId, batchId: batchId ?? { in: allBatchIds.length ? allBatchIds : scope.hodBatchIds } };
+  }
+  return { isCurrent: true, batchId: batchId ?? { in: scope.hodBatchIds } };
 }
 
 async function studentAnnouncementVisible(
@@ -495,7 +640,7 @@ export const portalService = {
 
   async myScope(scope: Scope) {
     const faculty = await facultyById(scope.userId);
-    const activeSemester = await getActiveSemester(scope.universityId);
+    const activeSemester = await hodActiveSemester(scope.universityId, faculty.year, scope.hodSemesterIds ?? []);
     const allFaculty = await getScopedFaculty(scope);
     const assignedFacultyIds = new Set(
       (await prisma.facultyBatchAssignment.findMany({ where: { batchId: { in: scope.hodBatchIds } }, select: { facultyId: true } })).map((a) => a.facultyId),
@@ -503,23 +648,235 @@ export const portalService = {
     const batches = await Promise.all(
       scope.hodBatchIds.map(async (batchId) => {
         const batch = await batchById(batchId);
-        const studentCount = await prisma.studentEnrollment.count({ where: { batchId, semesterId: activeSemester.id, isCurrent: true } });
+        // current students in the batch — isCurrent is the source of truth (survives promotion).
+        const studentCount = await prisma.studentEnrollment.count({ where: { batchId, isCurrent: true } });
         return { id: batch.id, code: batch.code, yearLevel: batch.yearLevel, studentCount };
       }),
     );
+    // ponytail: onboarding trigger — first login into a new year-start sem (1/3/5/7) with no batches yet.
+    const isYearStartSem = activeSemester.number > 0 && activeSemester.number % 2 === 1;
     return {
-      hod: { id: faculty.id, name: faculty.name, year: faculty.year, employeeId: faculty.employeeId },
+      hod: { id: faculty.id, name: faculty.name, year: faculty.year, employeeId: faculty.employeeId, sectionTag: sectionTag(faculty.year, batches[0]?.code) },
       activeSemester: { id: activeSemester.id, label: activeSemester.label, number: activeSemester.number },
       batches,
       totalStudents: batches.reduce((s, b) => s + b.studentCount, 0),
       totalFaculty: assignedFacultyIds.size,
+      needsOnboarding: isYearStartSem && batches.length === 0,
     };
+  },
+
+  // ponytail: HOD chooses initial + branches + count → we create batches, scope them, and mark ready.
+  async hodOnboardingComplete(scope: Scope, body: { initial: string; branches: string[]; batchCount: number }) {
+    const initial = (body.initial || "").toUpperCase();
+    if (!/^[A-Z]$/.test(initial)) throw new ApiError(400, "VALIDATION_ERROR", "initial must be a single A–Z letter.");
+    if (!Array.isArray(body.branches) || body.branches.length === 0) throw new ApiError(400, "VALIDATION_ERROR", "Select at least one branch.");
+    const count = Math.max(1, Math.min(20, Number(body.batchCount || 1)));
+    const faculty = await facultyById(scope.userId);
+    const activeSem = await hodActiveSemester(scope.universityId, faculty.year, scope.hodSemesterIds ?? []);
+    if (!activeSem.id) throw new ApiError(400, "NO_ACTIVE_SEMESTER", "No active semester.");
+    for (const branch of body.branches) {
+      await assertBranchAllowed(scope.universityId, branch.toUpperCase());
+    }
+    const created: { id: string; code: string }[] = [];
+    for (let i = 1; i <= count; i++) {
+      const code = `${initial}${i}`;
+      let batch = await prisma.batch.findFirst({ where: { academicYearId: activeSem.academicYearId, code } });
+      if (!batch) {
+        batch = await prisma.batch.create({
+          data: { universityId: scope.universityId, academicYearId: activeSem.academicYearId, code, yearLevel: activeSem.yearLevel },
+        });
+      }
+      await prisma.hodBatchScope.upsert({
+        where: { batchId: batch.id },
+        update: { facultyId: scope.userId, semesterId: activeSem.id, academicYearId: activeSem.academicYearId },
+        create: { facultyId: scope.userId, batchId: batch.id, semesterId: activeSem.id, academicYearId: activeSem.academicYearId },
+      });
+      created.push({ id: batch.id, code });
+    }
+    await this.logActivity(scope.universityId, scope.userId, "BATCH_CREATED", `${faculty.name} onboarded ${created.length} batches`, `Initial ${initial}, branches ${body.branches.join(", ")} in ${activeSem.label}.`);
+    return { batches: created, branches: body.branches, initial, semester: activeSem.label };
+  },
+
+  // Roster for the onboarding "choose faculty" step: **strictly same year as the HOD**.
+  // Also returns `inPool` flag so the UI can preselect already-linked faculty, and `takenByHod`
+  // so the HOD sees which faculty are already claimed by a sibling HOD in the same year.
+  async hodOnboardingFaculty(scope: Scope) {
+    const hod = await facultyById(scope.userId);
+    if (!hod.year) throw new ApiError(400, "HOD_YEAR_MISSING", "HOD must have a year level set.");
+    const roster = await prisma.faculty.findMany({
+      where: {
+        universityId: scope.universityId, deletedAt: null, isDean: false, isHod: false,
+        NOT: { employeeId: "ADMIN001" },
+        year: hod.year,   // strict same-year gate — no cross-year picking
+      },
+      select: { id: true, name: true, employeeId: true, mentorCode: true, year: true, hodId: true },
+      orderBy: { name: "asc" },
+    });
+    return {
+      year: hod.year,
+      data: roster.map((f) => ({
+        id: f.id, name: f.name, employeeId: f.employeeId, mentorCode: f.mentorCode, year: f.year,
+        inPool: f.hodId === scope.userId,
+        takenByHod: !!f.hodId && f.hodId !== scope.userId,
+      })),
+    };
+  },
+
+  // Save the HOD's chosen faculty pool. The selection can ONLY include faculty of the same year;
+  // faculty already claimed by another HOD are rejected unless explicitly reclaimed.
+  async hodSaveFacultyPool(scope: Scope, body: { facultyIds: string[]; reclaim?: boolean }) {
+    const hod = await facultyById(scope.userId);
+    if (!hod.year) throw new ApiError(400, "HOD_YEAR_MISSING", "HOD must have a year level set.");
+    const ids = Array.isArray(body.facultyIds) ? [...new Set(body.facultyIds)] : [];
+    if (ids.length === 0) return { pooled: 0, released: 0 };
+    const rows = await prisma.faculty.findMany({
+      where: { id: { in: ids }, universityId: scope.universityId, isHod: false, isDean: false, deletedAt: null },
+      select: { id: true, year: true, hodId: true, name: true },
+    });
+    // gate: strict same-year
+    const wrongYear = rows.filter((f) => f.year !== hod.year);
+    if (wrongYear.length > 0) throw new ApiError(400, "CROSS_YEAR_PICK", `Faculty must be ${hod.year}: ${wrongYear.map((f) => f.name).join(", ")}.`);
+    // gate: don't steal from another HOD unless caller opts in
+    if (!body.reclaim) {
+      const claimed = rows.filter((f) => f.hodId && f.hodId !== scope.userId);
+      if (claimed.length > 0) throw new ApiError(409, "ALREADY_CLAIMED", `Already in another HOD's pool: ${claimed.map((f) => f.name).join(", ")}.`);
+    }
+    // release faculty previously in this HOD's pool but not in the new set (to keep pool exact)
+    const released = await prisma.faculty.updateMany({
+      where: { hodId: scope.userId, id: { notIn: ids } },
+      data: { hodId: null },
+    });
+    await prisma.faculty.updateMany({
+      where: { id: { in: ids } },
+      data: { hodId: scope.userId },
+    });
+    return { pooled: ids.length, released: released.count };
+  },
+
+  // Read the current pool (used by the HOD Faculty page + Announcements FACULTY_ONLY audience).
+  async hodFacultyPool(scope: Scope) {
+    const rows = await prisma.faculty.findMany({
+      where: { hodId: scope.userId, deletedAt: null },
+      select: { id: true, name: true, employeeId: true, mentorCode: true, year: true, isActive: true },
+      orderBy: { name: "asc" },
+    });
+    return { data: rows };
+  },
+
+  // Every batch this HOD has ever owned, across all years/semesters (their history record).
+  async hodBatchHistory(scope: Scope) {
+    const scopes = await prisma.hodBatchScope.findMany({
+      where: { facultyId: scope.userId },
+      include: { batch: true, semester: { include: { academicYear: { select: { label: true } } } } },
+      orderBy: [{ semester: { number: "desc" } }, { batch: { code: "asc" } }],
+    });
+    const rows = await Promise.all(scopes.map(async (s) => ({
+      batchId: s.batch.id, batchCode: s.batch.code, yearLevel: s.batch.yearLevel,
+      sectionTag: sectionTag(s.batch.yearLevel, s.batch.code),
+      semesterLabel: s.semester.label, semesterNumber: s.semester.number,
+      academicYear: s.semester.academicYear.label,
+      isActive: s.semester.status === "ACTIVE",
+      studentCount: await prisma.studentEnrollment.count({ where: { batchId: s.batch.id, semesterId: s.semester.id } }),
+    })));
+    return { data: rows };
+  },
+
+  // The semesters THIS HOD has data for — every semester that has enrollments in a batch the HOD
+  // has ever owned. Powers the sidebar "Semester History" selector. The active one is `isCurrent`.
+  async hodHistorySemesters(scope: Scope) {
+    const batchIds = await hodAllBatchIds(scope.userId);
+    if (batchIds.length === 0) return { data: [], currentSemesterId: null };
+    const current = await hodActiveSemester(scope.universityId, (await facultyById(scope.userId)).year, scope.hodSemesterIds ?? []);
+    // distinct semesters that hold this HOD's students
+    const grouped = await prisma.studentEnrollment.groupBy({
+      by: ["semesterId"],
+      where: { batchId: { in: batchIds } },
+      _count: { _all: true },
+    });
+    const semesters = await prisma.semester.findMany({
+      where: { id: { in: grouped.map((g) => g.semesterId) } },
+      include: { academicYear: { select: { label: true } } },
+      orderBy: { number: "asc" },
+    });
+    const countById = new Map(grouped.map((g) => [g.semesterId, g._count._all]));
+    return {
+      currentSemesterId: current.id || null,
+      data: semesters.map((s) => ({
+        semesterId: s.id,
+        number: s.number,
+        label: s.label,
+        yearLevel: s.yearLevel,
+        academicYear: s.academicYear.label,
+        studentCount: countById.get(s.id) ?? 0,
+        isCurrent: s.id === current.id,
+      })),
+    };
+  },
+
+  // Reset — wipe THIS HOD's batches + students + timetable + assignments for their owned batches,
+  // atomically, so the semester onboarding wizard reappears. Students exclusive to this HOD are
+  // hard-deleted (no orphans); students shared with other batches keep their other enrollments.
+  async hodResetSemester(scope: Scope) {
+    const batchIds = scope.hodBatchIds;
+    if (!batchIds.length) return { batchesRemoved: 0, studentsRemoved: 0, message: "Nothing to reset — no batches owned." };
+    const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId: { in: batchIds } }, select: { id: true, studentId: true } });
+    const enrollmentIds = enrollments.map((e) => e.id);
+    const studentIds = [...new Set(enrollments.map((e) => e.studentId))];
+    // students whose ONLY enrollments are in these batches → safe to remove entirely
+    const orphanIds: string[] = [];
+    for (const sid of studentIds) {
+      const other = await prisma.studentEnrollment.count({ where: { studentId: sid, batchId: { notIn: batchIds } } });
+      if (other === 0) orphanIds.push(sid);
+    }
+    await prisma.$transaction([
+      prisma.attendanceRecord.deleteMany({ where: { enrollmentId: { in: enrollmentIds } } }),
+      prisma.result.deleteMany({ where: { enrollmentId: { in: enrollmentIds } } }),
+      prisma.mentorAssignment.deleteMany({ where: { studentId: { in: studentIds } } }),
+      prisma.studentEnrollment.deleteMany({ where: { id: { in: enrollmentIds } } }),
+      prisma.facultyBatchAssignment.deleteMany({ where: { batchId: { in: batchIds } } }),
+      prisma.timetableSlot.deleteMany({ where: { batchId: { in: batchIds } } }),
+      // ponytail: batch-audience targets (notes/quizzes) FK to batch with no cascade — clear them
+      // before the batch delete or Postgres raises a foreign-key violation.
+      prisma.noteBatchTarget.deleteMany({ where: { batchId: { in: batchIds } } }),
+      prisma.quizBatchTarget.deleteMany({ where: { batchId: { in: batchIds } } }),
+      prisma.hodBatchScope.deleteMany({ where: { batchId: { in: batchIds } } }),
+      // clear orphan students' dependent rows, then the students themselves
+      prisma.quizAttempt.deleteMany({ where: { studentId: { in: orphanIds } } }),
+      prisma.selfNote.deleteMany({ where: { studentId: { in: orphanIds } } }),
+      prisma.announcementRead.deleteMany({ where: { studentId: { in: orphanIds } } }),
+      prisma.notification.deleteMany({ where: { studentId: { in: orphanIds } } }),
+      prisma.aIConversation.deleteMany({ where: { studentId: { in: orphanIds } } }),
+      prisma.refreshToken.deleteMany({ where: { studentId: { in: orphanIds } } }),
+      prisma.student.deleteMany({ where: { id: { in: orphanIds } } }),
+      prisma.batch.deleteMany({ where: { id: { in: batchIds } } }),
+    ]);
+    return { batchesRemoved: batchIds.length, studentsRemoved: orphanIds.length };
+  },
+
+  // Graduation: mark the HOD's current final-semester students PASS_OUT. Never deletes/archives —
+  // it's a status flip, so all history stays accessible and searchable. Optional detain list marks
+  // students who haven't cleared as DETAINED instead. Atomic.
+  async graduateFinalYear(scope: Scope, opts: { detainEnrollmentNos?: string[] } = {}) {
+    const sem = await scopeSemester(scope);
+    if (sem.number !== 8) throw new ApiError(400, "NOT_FINAL_SEMESTER", "Graduation is only available at Semester 8.");
+    const enrs = await prisma.studentEnrollment.findMany({
+      where: { batchId: { in: scope.hodBatchIds }, isCurrent: true },
+      include: { student: { select: { id: true, enrollmentNo: true } } },
+    });
+    const detain = new Set(opts.detainEnrollmentNos ?? []);
+    const passIds = enrs.filter((e) => !detain.has(e.student.enrollmentNo)).map((e) => e.student.id);
+    const detainIds = enrs.filter((e) => detain.has(e.student.enrollmentNo)).map((e) => e.student.id);
+    const [passed, detained] = await prisma.$transaction([
+      prisma.student.updateMany({ where: { id: { in: passIds } }, data: { graduationStatus: "PASS_OUT", graduatedAt: new Date() } }),
+      prisma.student.updateMany({ where: { id: { in: detainIds } }, data: { graduationStatus: "DETAINED" } }),
+    ]);
+    return { graduated: passed.count, detained: detained.count, semester: sem.label };
   },
 
   async dashboardSummary(scope: Scope) {
     const enrollments = await scopedCurrentEnrollments(scope);
     const allFaculty = await getScopedFaculty(scope);
-    const activeSemester = await getActiveSemester(scope.universityId);
+    const activeSemester = await scopeSemester(scope);
     const attendancePcts = await Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)));
     const avgAttendance = average(attendancePcts);
     const results = await prisma.result.findMany({ where: { enrollment: { batchId: { in: scope.hodBatchIds }, isCurrent: true } } });
@@ -616,13 +973,23 @@ export const portalService = {
   // ── Student list / management ─────────────────────────────
 
   async listStudents(scope: Scope, query: Record<string, string | number | undefined>) {
-    const semester = await getSemester(query.semesterId as string | undefined, scope.universityId);
+    // ponytail: current view → whoever is isCurrent in the HOD's active-year batches.
+    // Historical view (query.semesterId set) → the students this HOD MANAGED in that semester:
+    // enrollments at that semester in ANY batch the HOD has ever owned. This is how an SY HOD
+    // still sees a student's Sem-4 data after the student moved to Sem-5 under a different HOD.
+    const historySemesterId = query.semesterId as string | undefined;
     const enrollments = await prisma.studentEnrollment.findMany({
-      where: {
-        isCurrent: true, semesterId: semester.id,
-        batchId: query.batchId ? (query.batchId as string) : { in: scope.hodBatchIds },
-        ...(query.branch ? { student: { branch: query.branch as string } } : {}),
-      },
+      where: historySemesterId
+        ? {
+            semesterId: historySemesterId,
+            batchId: query.batchId ? (query.batchId as string) : { in: await hodAllBatchIds(scope.userId) },
+            ...(query.branch ? { student: { branch: query.branch as string } } : {}),
+          }
+        : {
+            isCurrent: true,
+            batchId: query.batchId ? (query.batchId as string) : { in: scope.hodBatchIds },
+            ...(query.branch ? { student: { branch: query.branch as string } } : {}),
+          },
       include: { student: true, batch: true },
     });
     const rules = await getAttendanceRules(scope.universityId);
@@ -642,6 +1009,7 @@ export const portalService = {
           attendancePct,
           avgMarksPct,
           status,
+          graduationStatus: (e.student as any).graduationStatus ?? "ACTIVE",
         };
       }),
     );
@@ -649,7 +1017,8 @@ export const portalService = {
     const filtered = rows
       .filter((r) => !search || r.name.toLowerCase().includes(search.toLowerCase()) || r.enrollmentNo.includes(search))
       .filter((r) => !query.batchId || true) // batchId already filtered in DB
-      .filter((r) => !query.status || r.status === query.status);
+      .filter((r) => !query.status || r.status === query.status)
+      .filter((r) => !query.graduationStatus || r.graduationStatus === query.graduationStatus);
     return paginate(filtered, Number(query.page ?? 1), Number(query.limit ?? 20));
   },
 
@@ -666,93 +1035,149 @@ export const portalService = {
 
   // CSV columns: enrollment_no, name, branch, batch, roll_no.
   // Batch is per-row (batch code). email + admission_year are derived — not in the sheet.
-  async uploadStudentCsv(fileBuffer: Buffer | undefined, universityId: string, semesterId: string) {
+  // ponytail: hodId (optional) → any batch code not yet in this year gets auto-created and scoped to this HOD.
+  // ponytail: validate-then-transact. Every row is checked first; if ANY row is invalid the whole
+  // upload is rejected (nothing written). Valid uploads run in ONE transaction so students, batches,
+  // HOD ownership and enrollments all land together or not at all — no partial/orphan state.
+  async uploadStudentCsv(fileBuffer: Buffer | undefined, universityId: string, semesterId: string, hodId?: string) {
     if (!fileBuffer) throw new ApiError(400, "VALIDATION_ERROR", "CSV file is required.");
     const rows = parseCsvRecords(fileBuffer, ["enrollment_no", "name", "branch", "batch", "roll_no"]);
     const semester = await getSemester(semesterId);
-    // resolve batch codes once for this academic year
-    const yearBatches = await prisma.batch.findMany({ where: { academicYearId: semester.academicYearId } });
-    const batchByCode = new Map(yearBatches.map((b) => [b.code.toUpperCase(), b]));
+    const hod = hodId ? await prisma.faculty.findFirst({ where: { id: hodId, universityId, isHod: true, deletedAt: null } }) : null;
+    const autoYearLevel = (hod?.year || (semester as any).yearLevel || "FY") as any;
+    const allowedBranches = new Set((await prisma.universityBranch.findMany({ where: { universityId }, select: { code: true } })).map((b) => b.code.toUpperCase()));
 
-    let created = 0, updated = 0;
+    // ── Phase 1: validate every row (no writes) ──
+    type Clean = { row: number; enrollmentNo: string; name: string; branch: string; batchCode: string; rollNo: string };
+    const clean: Clean[] = [];
     const errors: Array<{ row: number; enrollmentNo: string; reason: string }> = [];
+    const seen = new Set<string>();
     for (const { row, record } of rows) {
       const enrollmentNo = String(record.enrollment_no ?? "").trim();
-      try {
-        const name = String(record.name ?? record.student ?? "").trim();
-        const branch = String(record.branch ?? "").trim().toUpperCase();
-        const batchCode = String(record.batch ?? "").trim().toUpperCase();
-        const rollNo = String(record.roll_no ?? "").trim();
-        if (!enrollmentNo || !name || !branch || !batchCode || !rollNo) {
-          errors.push({ row, enrollmentNo, reason: "Missing one of: enrollment_no, name, branch, batch, roll_no." });
-          continue;
-        }
-        const batch = batchByCode.get(batchCode);
-        if (!batch) { errors.push({ row, enrollmentNo, reason: `Batch "${batchCode}" not found in this year.` }); continue; }
-        await assertBranchAllowed(universityId, branch);
-
-        // ponytail: enrollment_no encodes admission year in its first two digits (e.g. 24… → 2024).
-        const yr2 = enrollmentNo.slice(0, 2);
-        const admissionYear = /^\d{2}$/.test(yr2) ? 2000 + Number(yr2) : new Date().getFullYear();
-
-        let student = await prisma.student.findFirst({ where: { enrollmentNo } });
-        if (!student) {
-          student = await prisma.student.create({
-            data: {
-              universityId, enrollmentNo, name, branch, admissionYear,
-              // email isn't in the sheet — derive a stable one; students log in with enrollment_no anyway.
-              email: `${enrollmentNo.toLowerCase()}@lju.edu.in`,
-              passwordHash: `${enrollmentNo}@123`, isActive: true,
-            },
-          });
-        } else {
-          await prisma.student.update({ where: { id: student.id }, data: { name, branch } });
-        }
-
-        const existing = await prisma.studentEnrollment.findFirst({ where: { studentId: student.id, semesterId } });
-        if (existing) {
-          await prisma.studentEnrollment.update({ where: { id: existing.id }, data: { batchId: batch.id, rollNo, yearLevel: batch.yearLevel } });
-          updated += 1;
-        } else {
-          await prisma.studentEnrollment.create({
-            data: { studentId: student.id, semesterId, batchId: batch.id, rollNo, yearLevel: batch.yearLevel, isCurrent: true },
-          });
-          created += 1;
-        }
-      } catch (e) {
-        errors.push({ row, enrollmentNo, reason: e instanceof ApiError ? e.message : "Failed to import row." });
+      const name = String(record.name ?? record.student ?? "").trim();
+      const branch = String(record.branch ?? "").trim().toUpperCase();
+      const batchCode = String(record.batch ?? "").trim().toUpperCase();
+      const rollNo = String(record.roll_no ?? "").trim();
+      if (!enrollmentNo || !name || !branch || !batchCode || !rollNo) {
+        errors.push({ row, enrollmentNo, reason: "Missing one of: enrollment_no, name, branch, batch, roll_no." }); continue;
       }
+      if (seen.has(enrollmentNo)) { errors.push({ row, enrollmentNo, reason: "Duplicate enrollment_no within this CSV." }); continue; }
+      seen.add(enrollmentNo);
+      if (!allowedBranches.has(branch)) { errors.push({ row, enrollmentNo, reason: `Branch "${branch}" is not configured. Ask the Dean to add it.` }); continue; }
+      clean.push({ row, enrollmentNo, name, branch, batchCode, rollNo });
     }
-    return { created, updated, errors, totalRows: rows.length };
+    // Reject the whole file if anything is wrong — no partial imports.
+    if (errors.length > 0) {
+      return { created: 0, updated: 0, batchesCreated: 0, errors, totalRows: rows.length, aborted: true };
+    }
+
+    // ── Phase 2: pre-fetch everything in bulk (OUTSIDE the tx), then write with few queries ──
+    // The old per-row lookups made the transaction O(rows) round-trips and blew the 5s timeout on
+    // large uploads. Now the tx does a handful of bulk writes regardless of CSV size.
+    const enrNos = clean.map((r) => r.enrollmentNo);
+    const existingStudents = await prisma.student.findMany({ where: { enrollmentNo: { in: enrNos } } });
+    const existingByEnr = new Map(existingStudents.map((s) => [s.enrollmentNo, s]));
+    const studentIdByEnr = new Map(existingStudents.map((s) => [s.enrollmentNo, s.id]));
+    const preExisting = new Set(existingStudents.map((s) => s.enrollmentNo));
+    const existingIds = existingStudents.map((s) => s.id);
+
+    // prior + same-semester enrollments for existing students (one query)
+    const allEnrs = existingIds.length
+      ? await prisma.studentEnrollment.findMany({ where: { studentId: { in: existingIds } }, include: { semester: { select: { number: true } } } })
+      : [];
+    const priorMostRecent = new Map<string, { id: string; num: number }>(); // studentId → most-recent prior enrollment
+    const sameSem = new Map<string, { id: string; promotedFromId: string | null; batchId: string; rollNo: string; isCurrent: boolean }>(); // studentId → enrollment at THIS semester
+    const hasPriorCurrent = new Set<string>();
+    for (const e of allEnrs) {
+      if (e.semesterId === semesterId) { sameSem.set(e.studentId, { id: e.id, promotedFromId: e.promotedFromId, batchId: e.batchId, rollNo: e.rollNo, isCurrent: e.isCurrent }); continue; }
+      if (e.isCurrent) hasPriorCurrent.add(e.studentId);
+      const cur = priorMostRecent.get(e.studentId);
+      if (!cur || e.semester.number > cur.num) priorMostRecent.set(e.studentId, { id: e.id, num: e.semester.number });
+    }
+
+    const yearBatches = await prisma.batch.findMany({ where: { academicYearId: semester.academicYearId } });
+    const batchByCode = new Map(yearBatches.map((b) => [b.code.toUpperCase(), b]));
+    const missingCodes = [...new Set(clean.map((r) => r.batchCode))].filter((c) => !batchByCode.has(c));
+
+    const result = await prisma.$transaction(async (tx) => {
+      let batchesCreated = 0;
+      // 1. create missing batches (few — distinct codes) + HOD scope
+      for (const code of missingCodes) {
+        const b = await tx.batch.create({ data: { universityId, academicYearId: semester.academicYearId, code, yearLevel: autoYearLevel } });
+        batchByCode.set(code, b);
+        batchesCreated += 1;
+        if (hod) {
+          await tx.hodBatchScope.upsert({
+            where: { batchId: b.id },
+            update: { facultyId: hod.id, semesterId, academicYearId: semester.academicYearId },
+            create: { facultyId: hod.id, batchId: b.id, semesterId, academicYearId: semester.academicYearId },
+          });
+        }
+      }
+      // 2. bulk-insert NEW students, then fetch their ids in one query
+      const newRows = clean.filter((r) => !preExisting.has(r.enrollmentNo));
+      if (newRows.length) {
+        await tx.student.createMany({
+          data: newRows.map((r) => {
+            const yr2 = r.enrollmentNo.slice(0, 2);
+            const admissionYear = /^\d{2}$/.test(yr2) ? 2000 + Number(yr2) : new Date().getFullYear();
+            return { universityId, enrollmentNo: r.enrollmentNo, name: r.name, branch: r.branch, admissionYear, email: `${r.enrollmentNo.toLowerCase()}@lju.edu.in`, passwordHash: `${r.enrollmentNo}@123`, isActive: true };
+          }),
+          skipDuplicates: true,
+        });
+        const created = await tx.student.findMany({ where: { enrollmentNo: { in: newRows.map((r) => r.enrollmentNo) } }, select: { id: true, enrollmentNo: true } });
+        for (const s of created) studentIdByEnr.set(s.enrollmentNo, s.id);
+      }
+      // 3. reactivate/update pre-existing students — skip no-op rows so a plain re-upload is near-instant.
+      for (const r of clean) {
+        if (!preExisting.has(r.enrollmentNo)) continue;
+        const s = existingByEnr.get(r.enrollmentNo)!;
+        if (s.name === r.name && s.branch === r.branch && !s.deletedAt && s.isActive) continue;
+        await tx.student.update({ where: { id: s.id }, data: { name: r.name, branch: r.branch, deletedAt: null, isActive: true } });
+      }
+      // 4. one query to archive any prior current enrollment (only one current per student)
+      if (hasPriorCurrent.size) {
+        await tx.studentEnrollment.updateMany({ where: { studentId: { in: [...hasPriorCurrent] }, isCurrent: true, semesterId: { not: semesterId } }, data: { isCurrent: false } });
+      }
+      // 5. enrollments — update ones that already exist at this semester, bulk-create the rest
+      let updated = 0;
+      const toCreate: Array<{ studentId: string; semesterId: string; batchId: string; rollNo: string; yearLevel: any; isCurrent: boolean; promotedFromId: string | null }> = [];
+      for (const r of clean) {
+        const sid = studentIdByEnr.get(r.enrollmentNo)!;
+        const batch = batchByCode.get(r.batchCode)!;
+        const prior = priorMostRecent.get(sid);
+        const same = sameSem.get(sid);
+        if (same) {
+          updated += 1;
+          // skip the write when nothing changed (idempotent re-upload)
+          const nextPromoted = same.promotedFromId ?? prior?.id ?? null;
+          if (same.batchId !== batch.id || same.rollNo !== r.rollNo || !same.isCurrent || same.promotedFromId !== nextPromoted) {
+            await tx.studentEnrollment.update({ where: { id: same.id }, data: { batchId: batch.id, rollNo: r.rollNo, yearLevel: batch.yearLevel, isCurrent: true, promotedFromId: nextPromoted } });
+          }
+        } else {
+          toCreate.push({ studentId: sid, semesterId, batchId: batch.id, rollNo: r.rollNo, yearLevel: batch.yearLevel, isCurrent: true, promotedFromId: prior?.id ?? null });
+        }
+      }
+      if (toCreate.length) await tx.studentEnrollment.createMany({ data: toCreate });
+      return { created: toCreate.length, updated, batchesCreated };
+    }, { timeout: 60000, maxWait: 20000 });
+    return { ...result, errors: [], totalRows: rows.length, aborted: false };
   },
 
   // ── Faculty list / management ─────────────────────────────
 
   async listFaculty(scope: Scope, query: Record<string, string | number | undefined>) {
-    const semester = await getActiveSemester(scope.universityId);
-    // HOD's owned year level (from any of their scoped batches)
-    const scopedBatches = scope.hodBatchIds.length ? await prisma.batch.findMany({ where: { id: { in: scope.hodBatchIds } }, select: { yearLevel: true } }) : [];
-    const hodYearLevels = [...new Set(scopedBatches.map((b) => b.yearLevel))];
-    // Faculty who teach in this HOD's year: any FacultyBatchAssignment in a batch of that year level.
-    // If HOD has no scoped batches yet, fall back to all faculty (bootstrap case).
-    let facultyIds: string[] | undefined;
-    if (hodYearLevels.length > 0) {
-      const yearAsg = await prisma.facultyBatchAssignment.findMany({
-        where: { semesterId: semester.id, batch: { yearLevel: { in: hodYearLevels as any } } },
-        select: { facultyId: true },
-      });
-      facultyIds = [...new Set(yearAsg.map((a) => a.facultyId))];
-      // include the HOD themselves and faculty whose "year" (year label) matches — covers newly-added roster picks
-      const rosterFallback = await prisma.faculty.findMany({
-        where: { universityId: scope.universityId, deletedAt: null, year: { in: hodYearLevels } },
-        select: { id: true },
-      });
-      facultyIds = [...new Set([...facultyIds, scope.userId, ...rosterFallback.map((f) => f.id)])];
-    }
+    const semester = await scopeSemester(scope);
+    // ponytail: HOD-year-strict — filter by the HOD's own `year` label; drop any faculty in other years.
+    const hod = await prisma.faculty.findFirst({ where: { id: scope.userId }, select: { year: true } });
+    const hodYear = hod?.year || null;
+    // ponytail: pool-first — if the HOD has claimed a pool, show only that pool.
+    // Fall back to year-strict for HODs who haven't set a pool yet.
+    const poolCount = await prisma.faculty.count({ where: { hodId: scope.userId, deletedAt: null } });
     const faculties = await prisma.faculty.findMany({
       where: {
         universityId: scope.universityId, deletedAt: null, isDean: false, NOT: { employeeId: "ADMIN001" },
-        ...(facultyIds ? { id: { in: facultyIds } } : {}),
+        ...(poolCount > 0 ? { hodId: scope.userId } : hodYear ? { year: hodYear } : {}),
       },
     });
     const rows = await Promise.all(
@@ -830,12 +1255,11 @@ export const portalService = {
   // ── Results ───────────────────────────────────────────────
 
   async listResults(scope: Scope, query: Record<string, string | number | undefined>) {
-    const semester = await getSemester(query.semesterId as string | undefined, scope.universityId);
+    const enrollmentWhere = await hodEnrollmentWhere(scope, query.semesterId as string | undefined, query.batchId as string | undefined);
     const where = {
-      enrollment: { batchId: { in: scope.hodBatchIds }, isCurrent: true, semesterId: semester.id },
+      enrollment: enrollmentWhere,
       ...(query.phaseId ? { phaseId: query.phaseId as string } : {}),
       ...(query.subjectId ? { subjectId: query.subjectId as string } : {}),
-      ...(query.batchId ? { enrollment: { batchId: query.batchId as string, isCurrent: true } } : {}),
     };
     const results = await prisma.result.findMany({ where, include: { enrollment: { include: { student: true, batch: true } }, phase: true, subject: true } });
     const rows = results.map((r) => ({
@@ -916,9 +1340,10 @@ export const portalService = {
   },
 
   async resultsSummary(scope: Scope, semesterId?: string) {
-    const semester = await getSemester(semesterId, scope.universityId);
+    const semester = await scopeSemester(scope, semesterId);
+    const enrollmentWhere = await hodEnrollmentWhere(scope, semesterId);
     const phases = await prisma.phase.findMany({ where: { semesterId: semester.id }, orderBy: { number: "asc" } });
-    const subjects = await prisma.subject.findMany({ where: { semesterId: semester.id } });
+    const subjects = await subjectsBySemester(semester.id);
     const summary = await Promise.all(
       phases.map(async (phase) => ({
         phaseLabel: phase.label,
@@ -926,7 +1351,7 @@ export const portalService = {
         isComplete: phase.isComplete,
         subjects: await Promise.all(
           subjects.map(async (subject) => {
-            const results = await prisma.result.findMany({ where: { phaseId: phase.id, subjectId: subject.id, enrollment: { batchId: { in: scope.hodBatchIds }, isCurrent: true } } });
+            const results = await prisma.result.findMany({ where: { phaseId: phase.id, subjectId: subject.id, enrollment: enrollmentWhere } });
             return {
               subjectCode: subject.code,
               uploadedCount: results.length,
@@ -943,7 +1368,7 @@ export const portalService = {
   // ── Batches ───────────────────────────────────────────────
 
   async listBatches(scope: Scope, semesterId?: string) {
-    const semester = await getSemester(semesterId, scope.universityId);
+    const semester = await scopeSemester(scope, semesterId);
     const batches = await prisma.batch.findMany({
       where: { id: { in: scope.hodBatchIds } },
       include: { hodScope: true },
@@ -972,10 +1397,10 @@ export const portalService = {
   // ── Subjects ──────────────────────────────────────────────
 
   async listSubjects(scope: Scope, semesterId?: string, search?: string, type?: string) {
-    const semester = await getSemester(semesterId, scope.universityId);
+    const semester = await scopeSemester(scope, semesterId);
     const subjects = await prisma.subject.findMany({
       where: {
-        semesterId: semester.id,
+        universityId: scope.universityId, semesterNumber: semester.number,
         deletedAt: null,
         ...(search ? { OR: [{ name: { contains: search, mode: "insensitive" } }, { code: { contains: search, mode: "insensitive" } }] } : {}),
         ...(type ? { type: type as any } : {}),
@@ -1016,76 +1441,84 @@ export const portalService = {
     return subjectById(subjectId);
   },
 
-  async createSubject(body: { semesterId: string; universityId: string; code: string; name: string; credits: number; type: string; branch?: string; facultyId?: string; batchIds?: string[] }) {
-    const existing = await prisma.subject.findUnique({ where: { semesterId_code: { semesterId: body.semesterId, code: body.code } } });
-    if (existing) throw new ApiError(409, "SUBJECT_CODE_EXISTS_IN_SEMESTER", "Subject code already exists in semester.");
+  // Global catalog: one subject per (university, semesterNumber, code). Added once, used everywhere.
+  async createSubject(body: { semesterNumber?: number; universityId: string; code: string; name: string; credits: number; type: string; branch?: string }) {
+    const semesterNumber = Number(body.semesterNumber);
+    if (!semesterNumber || semesterNumber < 1 || semesterNumber > 8) throw new ApiError(400, "VALIDATION_ERROR", "semesterNumber (1–8) is required.");
+    const code = body.code.trim().toUpperCase();
+    const existing = await prisma.subject.findFirst({ where: { universityId: body.universityId, semesterNumber, code, deletedAt: null } });
+    if (existing) throw new ApiError(409, "SUBJECT_CODE_EXISTS", "Subject code already exists in this semester.");
     if (body.branch) await assertBranchAllowed(body.universityId, body.branch);
     const subject = await prisma.subject.create({
-      data: { semesterId: body.semesterId, universityId: body.universityId, code: body.code, name: body.name, credits: body.credits, type: body.type as any, branch: body.branch ?? null },
+      data: { universityId: body.universityId, semesterNumber, code, name: body.name, credits: body.credits, type: body.type as any, branch: body.branch ?? null },
     });
-    if (body.facultyId && body.batchIds?.length) {
-      for (const batchId of body.batchIds) {
-        await prisma.facultyBatchAssignment.create({ data: { facultyId: body.facultyId, subjectId: subject.id, batchId, semesterId: body.semesterId } });
-      }
-    }
     return { id: subject.id, code: subject.code, name: subject.name };
   },
 
+  // On change: if the subject has dependent data, soft-delete the old row and create a new one
+  // (so past results/attendance keep pointing at the original). Otherwise edit in place.
   async updateSubject(subjectId: string, body: { code?: string; name?: string; credits?: number; type?: string; branch?: string | null }) {
-    const updated = await prisma.subject.update({ where: { id: subjectId }, data: { code: body.code, name: body.name, credits: body.credits, type: body.type as any, branch: body.branch } });
-    return updated;
+    const cur = await subjectById(subjectId);
+    const hasData = (await prisma.result.count({ where: { subjectId } })) > 0 || (await prisma.attendanceRecord.count({ where: { subjectId } })) > 0;
+    const next = {
+      code: (body.code ?? cur.code).trim().toUpperCase(),
+      name: body.name ?? cur.name,
+      credits: body.credits ?? cur.credits,
+      type: (body.type as any) ?? cur.type,
+      branch: body.branch === undefined ? cur.branch : body.branch,
+    };
+    if (hasData) {
+      await prisma.subject.update({ where: { id: subjectId }, data: { deletedAt: new Date() } });
+      const created = await prisma.subject.create({ data: { universityId: cur.universityId, semesterNumber: cur.semesterNumber, ...next } });
+      return created;
+    }
+    return prisma.subject.update({ where: { id: subjectId }, data: next });
   },
 
-  // ── Dean subjects (full CRUD, year+semester+branch) ──
-  async uniSubjectList(universityId: string, opts: { academicYearId?: string; semesterId?: string; branch?: string }) {
-    const semWhere: any = { universityId };
-    if (opts.academicYearId) semWhere.academicYearId = opts.academicYearId;
-    if (opts.semesterId) semWhere.id = opts.semesterId;
+  // ── Dean subjects (global catalog by semester number) ──
+  async uniSubjectList(universityId: string, opts: { semesterNumber?: number; branch?: string }) {
     const subjects = await prisma.subject.findMany({
-      where: { deletedAt: null, semester: semWhere, ...(opts.branch ? { branch: opts.branch } : {}) },
-      include: { semester: { include: { academicYear: { select: { label: true } } } } },
-      orderBy: [{ code: "asc" }],
+      where: {
+        universityId, deletedAt: null,
+        ...(opts.semesterNumber ? { semesterNumber: Number(opts.semesterNumber) } : {}),
+        ...(opts.branch ? { branch: opts.branch } : {}),
+      },
+      orderBy: [{ semesterNumber: "asc" }, { code: "asc" }],
     });
     return {
       data: subjects.map((s) => ({
         id: s.id, code: s.code, name: s.name, credits: s.credits, type: s.type, branch: s.branch,
-        semesterId: s.semesterId, semesterLabel: s.semester.label, semesterNumber: s.semester.number,
-        academicYearId: s.semester.academicYearId, academicYearLabel: s.semester.academicYear.label,
+        semesterNumber: s.semesterNumber,
       })),
     };
   },
 
   uniSubjectsCsvTemplate() {
-    return "academic_year,semester_number,branch,code,name,credits,type\n2026-27,3,IT,TOC,Theory of Computation,4,THEORY\n";
+    return "semester_number,branch,code,name,credits,type\n3,IT,TOC,Theory of Computation,4,THEORY\n";
   },
 
   async uniUploadSubjectsCsv(universityId: string, buffer: Buffer | undefined) {
     if (!buffer) throw new ApiError(400, "VALIDATION_ERROR", "CSV file is required.");
-    const rows = parseCsvRecords(buffer, ["academic_year", "semester_number", "branch", "code", "name"]);
+    const rows = parseCsvRecords(buffer, ["semester_number", "code", "name"]);
     let created = 0, updated = 0;
     const errors: { row: number; enrollmentNo: string; reason: string }[] = [];
     for (const { row, record } of rows) {
-      const ref = `${record.code}/${record.academic_year}/S${record.semester_number}`;
+      const ref = `${record.code}/S${record.semester_number}`;
       try {
-        const yearLabel = String(record.academic_year ?? "").trim();
         const semNum = Number(record.semester_number);
-        const branch = String(record.branch ?? "").trim().toUpperCase();
+        const branch = String(record.branch ?? "").trim().toUpperCase() || null;
         const code = String(record.code ?? "").trim().toUpperCase();
         const name = String(record.name ?? "").trim();
         const credits = Number(record.credits ?? 4) || 4;
         const type = String(record.type ?? "THEORY").trim().toUpperCase();
-        if (!yearLabel || !semNum || !branch || !code || !name) { errors.push({ row, enrollmentNo: ref, reason: "Missing required column." }); continue; }
-        const year = await prisma.academicYear.findFirst({ where: { universityId, label: yearLabel } });
-        if (!year) { errors.push({ row, enrollmentNo: ref, reason: `Academic year "${yearLabel}" not found.` }); continue; }
-        const sem = await prisma.semester.findFirst({ where: { academicYearId: year.id, number: semNum } });
-        if (!sem) { errors.push({ row, enrollmentNo: ref, reason: `Semester ${semNum} not found in ${yearLabel}.` }); continue; }
-        await assertBranchAllowed(universityId, branch);
-        const existing = await prisma.subject.findUnique({ where: { semesterId_code: { semesterId: sem.id, code } } });
+        if (!semNum || semNum < 1 || semNum > 8 || !code || !name) { errors.push({ row, enrollmentNo: ref, reason: "semester_number (1–8), code and name are required." }); continue; }
+        if (branch) await assertBranchAllowed(universityId, branch);
+        const existing = await prisma.subject.findFirst({ where: { universityId, semesterNumber: semNum, code, deletedAt: null } });
         if (existing) {
-          await prisma.subject.update({ where: { id: existing.id }, data: { name, credits, type: type as any, branch, deletedAt: null } });
+          await prisma.subject.update({ where: { id: existing.id }, data: { name, credits, type: type as any, branch } });
           updated++;
         } else {
-          await prisma.subject.create({ data: { universityId, semesterId: sem.id, code, name, credits, type: type as any, branch } });
+          await prisma.subject.create({ data: { universityId, semesterNumber: semNum, code, name, credits, type: type as any, branch } });
           created++;
         }
       } catch (e) {
@@ -1096,22 +1529,92 @@ export const portalService = {
   },
 
   async deleteSubject(subjectId: string) {
-    const hasResults = await prisma.result.findFirst({ where: { subjectId } });
-    const hasAttendance = await prisma.attendanceRecord.findFirst({ where: { subjectId } });
-    if (hasResults || hasAttendance) throw new ApiError(409, "SUBJECT_HAS_RESULTS_OR_ATTENDANCE", "Subject has dependent data.");
+    // ponytail: always soft-delete — old row is retained so past results/attendance stay consistent.
     await prisma.subject.update({ where: { id: subjectId }, data: { deletedAt: new Date() } });
   },
 
-  async copySubjects(fromSemesterId: string, toSemesterId: string, universityId: string) {
-    const source = await prisma.subject.findMany({ where: { semesterId: fromSemesterId, deletedAt: null } });
-    let copiedCount = 0; let skippedCount = 0;
-    for (const s of source) {
-      const exists = await prisma.subject.findUnique({ where: { semesterId_code: { semesterId: toSemesterId, code: s.code } } });
-      if (exists) { skippedCount++; continue; }
-      await prisma.subject.create({ data: { semesterId: toSemesterId, universityId, code: s.code, name: s.name, credits: s.credits, type: s.type } });
-      copiedCount++;
+  // ── Configuration-driven assessment: subject components + weightages ──
+
+  // Available component types. `key` is free-form so HODs can add custom components too.
+  subjectComponentCatalog() {
+    return [
+      { key: "THEORY", label: "Theory" },
+      { key: "IPE", label: "Internal Practical Exam" },
+      { key: "GP", label: "Group Project" },
+      { key: "ASSIGNMENT", label: "Assignment" },
+      { key: "QUIZ", label: "Quiz" },
+      { key: "VIVA", label: "Viva" },
+      { key: "LAB", label: "Lab Work" },
+      { key: "PRESENTATION", label: "Presentation" },
+      { key: "ATTENDANCE", label: "Attendance" },
+    ];
+  },
+
+  async getSubjectConfig(subjectId: string) {
+    const subject = await prisma.subject.findUnique({
+      where: { id: subjectId },
+      include: { components: { orderBy: { sortOrder: "asc" } } },
+    });
+    if (!subject) throw new ApiError(404, "SUBJECT_NOT_FOUND", "Subject not found.");
+    const totalWeightage = subject.components.filter((c) => c.isEnabled).reduce((a, c) => a + c.weightagePct, 0);
+    return {
+      id: subject.id, code: subject.code, name: subject.name, semesterNumber: subject.semesterNumber,
+      credits: subject.credits, type: subject.type, branch: subject.branch,
+      totalMarks: subject.totalMarks, passingMarks: subject.passingMarks, theoryRule: subject.theoryRule, isActive: subject.isActive,
+      components: subject.components.map((c) => ({
+        key: c.key, label: c.label, weightagePct: c.weightagePct, isEnabled: c.isEnabled,
+        // derived — never stored: the actual marks this component contributes.
+        marks: Math.round((c.weightagePct / 100) * subject.totalMarks * 100) / 100,
+      })),
+      totalWeightage,
+      catalog: this.subjectComponentCatalog(),
+    };
+  },
+
+  // Save the whole config atomically. Enabled component weightages MUST sum to 100.
+  async saveSubjectConfig(subjectId: string, body: {
+    totalMarks?: number; passingMarks?: number; theoryRule?: string; isActive?: boolean;
+    components?: { key: string; label: string; weightagePct: number; isEnabled: boolean }[];
+  }) {
+    const subject = await prisma.subject.findUnique({ where: { id: subjectId } });
+    if (!subject) throw new ApiError(404, "SUBJECT_NOT_FOUND", "Subject not found.");
+    const comps = body.components ?? [];
+    const enabled = comps.filter((c) => c.isEnabled);
+    const sum = enabled.reduce((a, c) => a + Number(c.weightagePct || 0), 0);
+    if (enabled.length > 0 && Math.round(sum) !== 100) {
+      throw new ApiError(400, "WEIGHTAGE_NOT_100", `Enabled component weightages must total exactly 100% (currently ${Math.round(sum)}%).`);
     }
-    return { copiedCount, skippedCount };
+    if (body.theoryRule && !["AVG_ALL", "BEST_3", "BEST_2"].includes(body.theoryRule)) {
+      throw new ApiError(400, "VALIDATION_ERROR", "theoryRule must be AVG_ALL, BEST_3 or BEST_2.");
+    }
+    const seen = new Set<string>();
+    for (const c of comps) {
+      const key = (c.key || "").trim().toUpperCase();
+      if (!key) throw new ApiError(400, "VALIDATION_ERROR", "Component key is required.");
+      if (seen.has(key)) throw new ApiError(400, "DUPLICATE_COMPONENT", `Duplicate component "${key}".`);
+      seen.add(key);
+    }
+    await prisma.$transaction([
+      prisma.subject.update({
+        where: { id: subjectId },
+        data: {
+          ...(body.totalMarks != null ? { totalMarks: Math.max(1, Number(body.totalMarks)) } : {}),
+          ...(body.passingMarks != null ? { passingMarks: Math.max(0, Number(body.passingMarks)) } : {}),
+          ...(body.theoryRule ? { theoryRule: body.theoryRule } : {}),
+          ...(body.isActive != null ? { isActive: body.isActive } : {}),
+        },
+      }),
+      // remove components no longer in the payload
+      prisma.subjectComponent.deleteMany({ where: { subjectId, key: { notIn: comps.map((c) => c.key.trim().toUpperCase()) } } }),
+      ...comps.map((c, i) =>
+        prisma.subjectComponent.upsert({
+          where: { subjectId_key: { subjectId, key: c.key.trim().toUpperCase() } },
+          update: { label: c.label, weightagePct: Number(c.weightagePct || 0), isEnabled: c.isEnabled, sortOrder: i },
+          create: { subjectId, key: c.key.trim().toUpperCase(), label: c.label, weightagePct: Number(c.weightagePct || 0), isEnabled: c.isEnabled, sortOrder: i },
+        }),
+      ),
+    ]);
+    return this.getSubjectConfig(subjectId);
   },
 
   async uploadPyq(subjectId: string, uploadedById: string, year: string, fileUrl: string, fileKey: string) {
@@ -1122,11 +1625,8 @@ export const portalService = {
   // ── Attendance (HOD) ──────────────────────────────────────
 
   async attendanceSummary(scope: Scope, semesterId?: string) {
-    const semester = semesterId
-      ? await prisma.semester.findUnique({ where: { id: semesterId } })
-      : await prisma.semester.findFirst({ where: { universityId: scope.universityId, status: "ACTIVE" } });
     const rules = await getAttendanceRules(scope.universityId);
-    const where = { batchId: { in: scope.hodBatchIds }, isCurrent: true, ...(semester ? { semesterId: semester.id } : {}) };
+    const where = await hodEnrollmentWhere(scope, semesterId);
     const enrollments = await prisma.studentEnrollment.findMany({ where });
     const attendancePcts = await Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)));
     const records = await prisma.attendanceRecord.findMany({ where: { enrollment: where } });
@@ -1142,8 +1642,9 @@ export const portalService = {
 
   async attendanceHeatmap(scope: Scope, batchId: string, semesterId: string) {
     if (batchId) await ensureBatchInScope(batchId, scope);
-    const subjects = await prisma.subject.findMany({ where: { semesterId } });
-    const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId: batchId || { in: scope.hodBatchIds }, semesterId, isCurrent: true }, include: { student: true } });
+    const subjects = await subjectsBySemester(semesterId);
+    // historical-aware: enrollments at this semester in the HOD's batches (isCurrent when it's the live sem).
+    const enrollments = await prisma.studentEnrollment.findMany({ where: { ...(await hodEnrollmentWhere(scope, semesterId, batchId || undefined)) }, include: { student: true } });
     const students = await Promise.all(
       enrollments.map(async (e) => {
         const perSubjectPct = await Promise.all(subjects.map((s) => computeAttendancePct(e.id, s.id)));
@@ -1155,8 +1656,8 @@ export const portalService = {
 
   async attendanceTable(scope: Scope, batchId: string, semesterId: string, search?: string, page = 1, limit = 20) {
     if (batchId) await ensureBatchInScope(batchId, scope);
-    const subjects = await prisma.subject.findMany({ where: { semesterId } });
-    const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId: batchId || { in: scope.hodBatchIds }, semesterId, isCurrent: true }, include: { student: true, batch: { select: { code: true } } } });
+    const subjects = await subjectsBySemester(semesterId);
+    const enrollments = await prisma.studentEnrollment.findMany({ where: { ...(await hodEnrollmentWhere(scope, semesterId, batchId || undefined)) }, include: { student: true, batch: { select: { code: true } } } });
     const rules = await getAttendanceRules(scope.universityId);
     const rows = await Promise.all(
       enrollments.map(async (e) => {
@@ -1182,7 +1683,7 @@ export const portalService = {
 
   async attendanceBySubject(scope: Scope, batchId: string, semesterId: string) {
     if (batchId) await ensureBatchInScope(batchId, scope);
-    const subjects = await prisma.subject.findMany({ where: { semesterId } });
+    const subjects = await subjectsBySemester(semesterId);
     const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId: batchId || { in: scope.hodBatchIds }, semesterId, isCurrent: true } });
     const result = await Promise.all(
       subjects.map(async (subject) => {
@@ -1217,7 +1718,7 @@ export const portalService = {
 
   async attendanceExport(scope: Scope, batchId: string, semesterId: string) {
     const table = (await this.attendanceTable(scope, batchId, semesterId, undefined, 1, 1000)).data;
-    const subjects = await prisma.subject.findMany({ where: { semesterId } });
+    const subjects = await subjectsBySemester(semesterId);
     const subjectCodes = subjects.map((s) => s.code);
     const lines = [["enrollment_no", "name", ...subjectCodes, "avg_pct", "status"].join(",")];
     for (const row of table) {
@@ -1254,7 +1755,7 @@ export const portalService = {
   // ── Mentorship ────────────────────────────────────────────
 
   async mentorshipSummary(scope: Scope, semesterId?: string) {
-    const semester = await getSemester(semesterId, scope.universityId);
+    const semester = await scopeSemester(scope, semesterId);
     const enrollments = await scopedCurrentEnrollments(scope, semester.id);
     const assignments = await prisma.mentorAssignment.findMany({ where: { semesterId: semester.id } });
     const activeMentors = new Set(assignments.map((a) => a.facultyId)).size;
@@ -1268,7 +1769,7 @@ export const portalService = {
   },
 
   async mentorshipMentors(scope: Scope, semesterId?: string) {
-    const semester = await getSemester(semesterId, scope.universityId);
+    const semester = await scopeSemester(scope, semesterId);
     const allFaculty = await getScopedFaculty(scope);
     const assignments = await prisma.mentorAssignment.findMany({ where: { semesterId: semester.id }, include: { student: true } });
     const data = allFaculty
@@ -1281,7 +1782,7 @@ export const portalService = {
   },
 
   async mentorshipAssignments(scope: Scope, query: Record<string, string | number | undefined>) {
-    const semester = await getSemester(query.semesterId as string | undefined, scope.universityId);
+    const semester = await scopeSemester(scope, query.semesterId as string | undefined);
     const assignments = await prisma.mentorAssignment.findMany({
       where: { semesterId: semester.id },
       include: { student: true, faculty: true },
@@ -1301,7 +1802,7 @@ export const portalService = {
   },
 
   async mentorshipUnassigned(scope: Scope, semesterId?: string) {
-    const semester = await getSemester(semesterId, scope.universityId);
+    const semester = await scopeSemester(scope, semesterId);
     const assignedIds = new Set((await prisma.mentorAssignment.findMany({ where: { semesterId: semester.id }, select: { studentId: true } })).map((a) => a.studentId));
     const enrollments = await scopedCurrentEnrollments(scope, semester.id);
     const data = await Promise.all(
@@ -1379,7 +1880,7 @@ export const portalService = {
   // ── Analytics ─────────────────────────────────────────────
 
   async analyticsKpi(scope: Scope, batchId?: string) {
-    const semester = await getActiveSemester(scope.universityId);
+    const semester = await scopeSemester(scope);
     const rules = await getAttendanceRules(scope.universityId);
     // ponytail: prefer the *last completed* phase for KPIs so avg-marks isn't 0 mid-semester
     const currentPhase = (await prisma.phase.findFirst({ where: { semesterId: semester.id, isComplete: true }, orderBy: { number: "desc" } }))
@@ -1443,13 +1944,13 @@ export const portalService = {
   async analyticsAttendanceBySubject(scope: Scope, semesterId?: string, batchId?: string) {
     const targetBatchId = batchId ?? scope.hodBatchIds[0];
     if (!targetBatchId) return { subjects: [] };
-    return this.attendanceBySubject(scope, targetBatchId, (await getSemester(semesterId, scope.universityId)).id);
+    return this.attendanceBySubject(scope, targetBatchId, (await scopeSemester(scope, semesterId)).id);
   },
 
   async analyticsMarksByPhase(scope: Scope) {
-    const semester = await getActiveSemester(scope.universityId);
+    const semester = await scopeSemester(scope);
     const phases = await prisma.phase.findMany({ where: { semesterId: semester.id }, orderBy: { number: "asc" } });
-    const subjects = await prisma.subject.findMany({ where: { semesterId: semester.id } });
+    const subjects = await subjectsBySemester(semester.id);
     const series = await Promise.all(
       subjects.slice(0, 2).map(async (subject) => ({
         subjectCode: subject.code,
@@ -1466,7 +1967,7 @@ export const portalService = {
 
   async analyticsMarksBySubject(scope: Scope, phaseId: string, batchId?: string) {
     const phase = await phaseById(phaseId);
-    const subjects = await prisma.subject.findMany({ where: { semesterId: phase.semesterId } });
+    const subjects = await subjectsBySemester(phase.semesterId);
     const result = await Promise.all(
       subjects.map(async (subject) => {
         const rows = await prisma.result.findMany({
@@ -1544,7 +2045,7 @@ export const portalService = {
 
   async analyticsYearComparison(universityId: string) {
     const years = await prisma.academicYear.findMany({ where: { universityId }, orderBy: { startDate: "desc" }, take: 2 });
-    const subjects = await prisma.subject.findMany({ where: { semester: { universityId } }, select: { code: true }, distinct: ["code"] });
+    const subjects = await prisma.subject.findMany({ where: { universityId, deletedAt: null }, select: { code: true }, distinct: ["code"] });
     const subjectCodes = subjects.map((s) => s.code);
     return {
       subjects: subjectCodes,
@@ -1561,7 +2062,7 @@ export const portalService = {
 
   async analyticsPerformanceRadar(scope: Scope, phaseId: string) {
     const phase = await phaseById(phaseId);
-    const subjects = await prisma.subject.findMany({ where: { semesterId: phase.semesterId } });
+    const subjects = await subjectsBySemester(phase.semesterId);
     const leaderboard = (await this.analyticsLeaderboard(scope, phaseId, undefined, 10)).data;
     const bottomboard = (await this.analyticsLeaderboard(scope, phaseId, undefined, 1000)).data.slice(-10);
     return {
@@ -1709,7 +2210,7 @@ export const portalService = {
   },
 
   async promotionContext(scope: Scope) {
-    const sem = await getActiveSemester(scope.universityId);
+    const sem = await scopeSemester(scope);
     if (!sem.id) return { mode: null as null | "SEMESTER" | "YEAR" };
     // odd semester (1,3,5,7) → next semester in same year; even (2,4,6,8) → next academic year
     const mode: "SEMESTER" | "YEAR" = sem.number % 2 === 1 ? "SEMESTER" : "YEAR";
@@ -1749,7 +2250,7 @@ export const portalService = {
 
   // Merit leaderboard for the current cohort (optionally one branch), ranked by aggregate %.
   async promotionLeaderboard(scope: Scope, branch?: string) {
-    const sem = await getActiveSemester(scope.universityId);
+    const sem = await scopeSemester(scope);
     if (!sem.id) return { data: [], total: 0 };
     const enrs = await prisma.studentEnrollment.findMany({
       where: { semesterId: sem.id, batchId: { in: scope.hodBatchIds }, isCurrent: true, ...(branch ? { student: { branch } } : {}) },
@@ -1797,7 +2298,7 @@ export const portalService = {
   },
 
   async promotionExecuteSemester(scope: Scope, opts: { detainEnrollmentIds?: string[] } = {}) {
-    const sem = await getActiveSemester(scope.universityId);
+    const sem = await scopeSemester(scope);
     if (!sem.id) throw new ApiError(400, "NO_ACTIVE_SEMESTER", "No active semester.");
     if (sem.number % 2 !== 1) throw new ApiError(400, "NOT_SEMESTER_POINT", "This is a year-end semester — use year promotion.");
     // create the next semester (same year, same year level) if it doesn't exist yet
@@ -1813,24 +2314,33 @@ export const portalService = {
     }
     const detain = new Set(opts.detainEnrollmentIds ?? []);
     const enrs = await prisma.studentEnrollment.findMany({ where: { semesterId: sem.id, batchId: { in: scope.hodBatchIds }, isCurrent: true } });
-    let promoted = 0;
-    for (const e of enrs) {
-      if (detain.has(e.id)) continue;
-      await prisma.studentEnrollment.update({ where: { id: e.id }, data: { isCurrent: false } });
-      await prisma.studentEnrollment.create({
-        data: { studentId: e.studentId, semesterId: next.id, batchId: e.batchId, rollNo: e.rollNo, yearLevel: next.yearLevel, isCurrent: true, promotedFromId: e.id },
-      });
-      promoted++;
-    }
-    // flip active semester forward
-    await prisma.semester.update({ where: { id: sem.id }, data: { status: "COMPLETE" } });
-    await prisma.semester.update({ where: { id: next.id }, data: { status: "ACTIVE" } });
+    const nextId = next.id;
+    // ponytail: atomic — enrollments carried forward, HOD batch scopes moved to the new semester,
+    // and the active semester advanced, all together. Prevents the "students vanish after promotion"
+    // state where enrollments moved but scope/active semester lagged behind.
+    const promoted = await prisma.$transaction(async (tx) => {
+      let n = 0;
+      for (const e of enrs) {
+        if (detain.has(e.id)) continue;
+        await tx.studentEnrollment.update({ where: { id: e.id }, data: { isCurrent: false } });
+        await tx.studentEnrollment.create({
+          data: { studentId: e.studentId, semesterId: nextId, batchId: e.batchId, rollNo: e.rollNo, yearLevel: next!.yearLevel, isCurrent: true, promotedFromId: e.id },
+        });
+        n++;
+      }
+      // move HOD batch ownership to the new semester (batchId is @unique on the scope)
+      await tx.hodBatchScope.updateMany({ where: { batchId: { in: scope.hodBatchIds } }, data: { semesterId: nextId } });
+      // advance the active semester within this batch/year
+      await tx.semester.update({ where: { id: sem.id }, data: { status: "COMPLETE" } });
+      await tx.semester.update({ where: { id: nextId }, data: { status: "ACTIVE" } });
+      return n;
+    });
     await this.logActivity(scope.universityId, scope.userId, "PROMOTION_EXECUTED", `Promoted to ${next.label}`, `${promoted} students promoted from ${sem.label} to ${next.label}. Detained: ${detain.size}.`);
     return { mode: "SEMESTER", promoted, detained: detain.size, fromSemester: sem.label, toSemester: next.label };
   },
 
   async promotionExecuteYear(scope: Scope, body: { destinationHodId: string; branch: string; batchCount: number; capacity: number; batchInitial?: string; detainEnrollmentIds?: string[] }) {
-    const sem = await getActiveSemester(scope.universityId);
+    const sem = await scopeSemester(scope);
     if (!sem.id) throw new ApiError(400, "NO_ACTIVE_SEMESTER", "No active semester.");
     if (sem.number % 2 !== 0) throw new ApiError(400, "NOT_YEAR_POINT", "This is a mid-year semester — use semester promotion.");
     const curYear = await getAcademicYear(sem.academicYearId);
@@ -1849,30 +2359,35 @@ export const portalService = {
       throw new ApiError(400, "INSUFFICIENT_CAPACITY", `${promotable.length} students but only ${body.batchCount * body.capacity} seats. Add batches or capacity.`);
     }
     const initial = (body.batchInitial || "C").toUpperCase().slice(0, 1);
-    let promoted = 0;
-    const createdBatches: { code: string; count: number }[] = [];
-    for (let i = 0; i < body.batchCount; i++) {
-      const code = `${initial}${i + 1}`;
-      const existing = await prisma.batch.findFirst({ where: { academicYearId: nextYear.id, code } });
-      const batch = existing ?? await prisma.batch.create({ data: { universityId: scope.universityId, academicYearId: nextYear.id, code, yearLevel: nextYL as any } });
-      await prisma.hodBatchScope.upsert({
-        where: { batchId: batch.id },
-        update: { facultyId: hod.id, semesterId: nextSem.id, academicYearId: nextYear.id },
-        create: { facultyId: hod.id, batchId: batch.id, semesterId: nextSem.id, academicYearId: nextYear.id },
-      });
-      const slice = promotable.slice(i * body.capacity, i * body.capacity + body.capacity);
-      let seq = 1;
-      for (const r of slice) {
-        const from = await prisma.studentEnrollment.findUnique({ where: { id: r.enrollmentId }, select: { studentId: true } });
-        if (!from) continue;
-        await prisma.studentEnrollment.update({ where: { id: r.enrollmentId }, data: { isCurrent: false } });
-        await prisma.studentEnrollment.create({
-          data: { studentId: from.studentId, semesterId: nextSem.id, batchId: batch.id, rollNo: `${code}-${String(seq).padStart(3, "0")}`, yearLevel: nextYL as any, isCurrent: true, promotedFromId: r.enrollmentId },
+    // ponytail: ALL year-promotion writes (batches, scopes, enrollment carry-forward) in ONE
+    // transaction — a partial failure must never leave orphan batches or half-promoted students.
+    const { promoted, createdBatches } = await prisma.$transaction(async (tx) => {
+      let promoted = 0;
+      const createdBatches: { code: string; count: number }[] = [];
+      for (let i = 0; i < body.batchCount; i++) {
+        const code = `${initial}${i + 1}`;
+        const existing = await tx.batch.findFirst({ where: { academicYearId: nextYear.id, code } });
+        const batch = existing ?? await tx.batch.create({ data: { universityId: scope.universityId, academicYearId: nextYear.id, code, yearLevel: nextYL as any } });
+        await tx.hodBatchScope.upsert({
+          where: { batchId: batch.id },
+          update: { facultyId: hod.id, semesterId: nextSem.id, academicYearId: nextYear.id },
+          create: { facultyId: hod.id, batchId: batch.id, semesterId: nextSem.id, academicYearId: nextYear.id },
         });
-        seq++; promoted++;
+        const slice = promotable.slice(i * body.capacity, i * body.capacity + body.capacity);
+        let seq = 1;
+        for (const r of slice) {
+          const from = await tx.studentEnrollment.findUnique({ where: { id: r.enrollmentId }, select: { studentId: true } });
+          if (!from) continue;
+          await tx.studentEnrollment.update({ where: { id: r.enrollmentId }, data: { isCurrent: false } });
+          await tx.studentEnrollment.create({
+            data: { studentId: from.studentId, semesterId: nextSem.id, batchId: batch.id, rollNo: `${code}-${String(seq).padStart(3, "0")}`, yearLevel: nextYL as any, isCurrent: true, promotedFromId: r.enrollmentId },
+          });
+          seq++; promoted++;
+        }
+        createdBatches.push({ code, count: slice.length });
       }
-      createdBatches.push({ code, count: slice.length });
-    }
+      return { promoted, createdBatches };
+    });
     await this.logActivity(scope.universityId, scope.userId, "PROMOTION_EXECUTED",
       `Year promotion → ${hod.name}`,
       `${promoted} ${body.branch} students promoted from ${curYear.label} (${sem.yearLevel}) to ${nextYear.label} (${nextYL}) under ${hod.name}. Detained/failed: ${data.length - promoted}.`);
@@ -1933,7 +2448,7 @@ export const portalService = {
   },
 
   async phaseTimeline(scope: Scope, semesterId?: string) {
-    const semester = await getSemester(semesterId, scope.universityId);
+    const semester = await scopeSemester(scope, semesterId);
     const phases = await prisma.phase.findMany({ where: { semesterId: semester.id }, orderBy: { number: "asc" } });
     return { phases: phases.map((p) => ({ label: p.label, startDate: p.startDate, endDate: p.endDate, examDate: p.examDate, isComplete: p.isComplete })) };
   },
@@ -2356,16 +2871,15 @@ export const portalService = {
     const notes = await prisma.note.findMany({
       where: {
         deletedAt: null,
-        subject: { semesterId: semester.id },
+        universityId,
+        subject: { semesterNumber: semester.number },
+        targets: { some: { batchId: enrollment.batchId } },
         ...(query.subjectId ? { subjectId: query.subjectId as string } : {}),
         ...(query.search ? { OR: [{ title: { contains: String(query.search), mode: "insensitive" } }, { description: { contains: String(query.search), mode: "insensitive" } }] } : {}),
       },
       include: { subject: true, faculty: { select: { name: true } }, flashcards: { select: { id: true } } },
     });
-    // Filter by batch visibility (faculty assignments for this batch)
-    const batchSubjectIds = await getStudentSubjectIds(studentId, universityId, semester.id);
-    const visibleNotes = notes.filter((n) => batchSubjectIds.includes(n.subjectId));
-    const rows = visibleNotes.map((n) => ({
+    const rows = notes.map((n) => ({
       id: n.id, subjectCode: n.subject.code, subjectName: n.subject.name, title: n.title, description: n.description,
       mimeType: n.mimeType, fileSizeKb: n.fileSizeKb, hasAiSummary: Boolean(n.aiSummary), hasFlashcards: n.flashcards.length > 0,
       flashcardCount: n.flashcards.length, uploadedBy: n.faculty.name, createdAt: n.createdAt,
@@ -2374,16 +2888,19 @@ export const portalService = {
   },
 
   async studentNote(studentId: string, universityId: string, noteId: string) {
-    const note = await prisma.note.findFirst({ where: { id: noteId, deletedAt: null }, include: { subject: true, faculty: { select: { name: true } }, flashcards: { orderBy: { order: "asc" } } } });
+    const { enrollment } = await getStudentEnrollment(studentId, universityId);
+    const note = await prisma.note.findFirst({
+      where: { id: noteId, universityId, deletedAt: null, targets: { some: { batchId: enrollment.batchId } } },
+      include: { subject: true, faculty: { select: { name: true } }, flashcards: { orderBy: { order: "asc" } } },
+    });
     if (!note) throw new ApiError(404, "NOT_FOUND", "Note not found.");
-    const batchSubjectIds = await getStudentSubjectIds(studentId, universityId);
-    if (!batchSubjectIds.includes(note.subjectId)) throw new ApiError(403, "SUBJECT_NOT_IN_ENROLLMENT", "Note is not visible to this student.");
     return { id: note.id, subjectCode: note.subject.code, subjectName: note.subject.name, title: note.title, description: note.description, mimeType: note.mimeType, fileSizeKb: note.fileSizeKb, uploadedBy: note.faculty.name, createdAt: note.createdAt, aiSummary: note.aiSummary, flashcards: note.flashcards };
   },
 
   async studentNoteDownload(studentId: string, universityId: string, noteId: string) {
     const note = await this.studentNote(studentId, universityId, noteId);
-    return { downloadUrl: `https://example.com/downloads/${noteId}`, expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), mimeType: note.mimeType, filename: `${note.title.replace(/\s+/g, "_")}_${note.subjectCode}.${note.mimeType.includes("pdf") ? "pdf" : "bin"}` };
+    const stored = await prisma.note.findUnique({ where: { id: noteId }, select: { fileUrl: true } });
+    return { downloadUrl: stored?.fileUrl, expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), mimeType: note.mimeType, filename: `${note.title.replace(/\s+/g, "_")}_${note.subjectCode}.${note.mimeType.includes("pdf") ? "pdf" : "bin"}` };
   },
 
   async studentNoteFlashcards(studentId: string, universityId: string, noteId: string) {
@@ -2405,11 +2922,12 @@ export const portalService = {
       include: { student: { select: { id: true } } },
     });
     const semesterId = query.semesterId as string | undefined;
-    const filtered = semesterId
+    const targetNumber = semesterId ? (await prisma.semester.findUnique({ where: { id: semesterId }, select: { number: true } }))?.number : undefined;
+    const filtered = targetNumber
       ? await Promise.all(selfNotes.map(async (n) => {
           if (!n.subjectId) return n;
-          const subject = await prisma.subject.findUnique({ where: { id: n.subjectId }, select: { semesterId: true } });
-          return subject?.semesterId === semesterId ? n : null;
+          const subject = await prisma.subject.findUnique({ where: { id: n.subjectId }, select: { semesterNumber: true } });
+          return subject?.semesterNumber === targetNumber ? n : null;
         })).then((r) => r.filter(Boolean) as typeof selfNotes)
       : selfNotes;
     const rows = await Promise.all(filtered.map(async (n) => {
@@ -2452,10 +2970,10 @@ export const portalService = {
   // ── Student — Quizzes ─────────────────────────────────────
 
   async studentQuizzes(studentId: string, universityId: string, query: Record<string, string | number | undefined>) {
-    const { semester } = await getStudentEnrollment(studentId, universityId, query.semesterId as string | undefined);
+    const { semester, enrollment } = await getStudentEnrollment(studentId, universityId, query.semesterId as string | undefined);
     const subjectIds = await getStudentSubjectIds(studentId, universityId, semester.id);
     const now = new Date();
-    const quizzes = await prisma.quiz.findMany({ where: { isPublished: true, deletedAt: null, semesterId: semester.id, subjectId: { in: subjectIds } }, include: { _count: { select: { questions: true } }, attempts: { where: { studentId }, select: { score: true, submittedAt: true } } } });
+    const quizzes = await prisma.quiz.findMany({ where: { isPublished: true, deletedAt: null, semesterId: semester.id, subjectId: { in: subjectIds }, targets: { some: { batchId: enrollment.batchId } } }, include: { _count: { select: { questions: true } }, attempts: { where: { studentId }, select: { score: true, submittedAt: true } } } });
     const rows = quizzes.map((quiz) => {
       const attempt = quiz.attempts[0];
       const expired = Boolean(quiz.dueDate && quiz.dueDate < now);
@@ -2469,7 +2987,8 @@ export const portalService = {
   },
 
   async studentQuiz(studentId: string, universityId: string, quizId: string) {
-    const quiz = await prisma.quiz.findFirst({ where: { id: quizId, isPublished: true, deletedAt: null }, include: { _count: { select: { questions: true } } } });
+    const { enrollment } = await getStudentEnrollment(studentId, universityId);
+    const quiz = await prisma.quiz.findFirst({ where: { id: quizId, isPublished: true, deletedAt: null, targets: { some: { batchId: enrollment.batchId } } }, include: { _count: { select: { questions: true } } } });
     if (!quiz) throw new ApiError(404, "NOT_FOUND", "Quiz not found.");
     await ensureStudentSubject(studentId, universityId, quiz.subjectId, quiz.semesterId);
     if (quiz.dueDate && quiz.dueDate < new Date()) throw new ApiError(410, "QUIZ_EXPIRED", "Quiz due date has passed.");
@@ -2479,7 +2998,8 @@ export const portalService = {
   },
 
   async startStudentQuiz(studentId: string, universityId: string, quizId: string) {
-    const quiz = await prisma.quiz.findFirst({ where: { id: quizId, isPublished: true, deletedAt: null } });
+    const { enrollment } = await getStudentEnrollment(studentId, universityId);
+    const quiz = await prisma.quiz.findFirst({ where: { id: quizId, isPublished: true, deletedAt: null, targets: { some: { batchId: enrollment.batchId } } } });
     if (!quiz) throw new ApiError(404, "NOT_FOUND", "Quiz not found.");
     await ensureStudentSubject(studentId, universityId, quiz.subjectId, quiz.semesterId);
     const existing = await prisma.quizAttempt.findUnique({ where: { studentId_quizId: { studentId, quizId } } });
@@ -2492,7 +3012,8 @@ export const portalService = {
   },
 
   async submitStudentQuiz(studentId: string, universityId: string, quizId: string, answers: Record<string, string>) {
-    const quiz = await prisma.quiz.findFirst({ where: { id: quizId, isPublished: true, deletedAt: null } });
+    const { enrollment } = await getStudentEnrollment(studentId, universityId);
+    const quiz = await prisma.quiz.findFirst({ where: { id: quizId, isPublished: true, deletedAt: null, targets: { some: { batchId: enrollment.batchId } } } });
     if (!quiz) throw new ApiError(404, "NOT_FOUND", "Quiz not found.");
     await ensureStudentSubject(studentId, universityId, quiz.subjectId, quiz.semesterId);
     const existing = await prisma.quizAttempt.findUnique({ where: { studentId_quizId: { studentId, quizId } } });
@@ -2943,17 +3464,37 @@ export const portalService = {
   async facultyAttendanceSummary(facultyId: string, universityId: string, semesterId?: string) {
     const scope = await getFacultyScopeData(facultyId, universityId, semesterId);
     const rules = await getAttendanceRules(universityId);
-    const bySubjectAndBatch = await Promise.all(
-      scope.assignments.filter((a) => a.subjectId).map(async (a) => {
-        const batchEnrollments = await getFacultyVisibleEnrollments(facultyId, universityId, scope.semester.id).then((e) => e.filter((en) => en.batchId === a.batchId));
-        const studentPcts = await Promise.all(batchEnrollments.map((e) => computeAttendancePct(e.id, a.subjectId!)));
-        const lectureRecords = await prisma.attendanceRecord.findMany({ where: { subjectId: a.subjectId!, enrollment: { batchId: a.batchId } } });
-        const subject = await subjectById(a.subjectId!);
-        const batch = await batchById(a.batchId);
-        return { subjectCode: subject.code, batchCode: batch.code, totalStudents: batchEnrollments.length, avgAttendancePct: average(studentPcts), belowThresholdCount: studentPcts.filter((p) => p < rules.minThresholdPct).length, totalLecturesMarked: new Set(lectureRecords.map((r) => r.lectureDate.toISOString().slice(0, 10))).size };
-      }),
-    );
-    return { semesterLabel: scope.semester.label, bySubjectAndBatch };
+    // ponytail: full-access — summarise every attendance record THIS faculty marked, across ANY of
+    // the HOD's batches (not just formally-assigned ones), so nothing they mark goes missing here.
+    const allRecords = await prisma.attendanceRecord.findMany({
+      where: { facultyId },
+      select: { isPresent: true, lectureDate: true, subjectId: true, enrollmentId: true, enrollment: { select: { batchId: true } } },
+    });
+    // Subject × batch rollup, derived from what was actually marked.
+    const groups = new Map<string, typeof allRecords>();
+    for (const r of allRecords) { const k = `${r.subjectId}|${r.enrollment.batchId}`; (groups.get(k) ?? groups.set(k, []).get(k)!).push(r); }
+    const bySubjectAndBatch = await Promise.all([...groups.entries()].map(async ([key, rows]) => {
+      const [subjectId, batchId] = key.split("|");
+      const subject = await subjectById(subjectId);
+      const batch = await batchById(batchId);
+      const byStudent = new Map<string, { p: number; t: number }>();
+      for (const r of rows) { const e = byStudent.get(r.enrollmentId) ?? { p: 0, t: 0 }; e.t++; if (r.isPresent) e.p++; byStudent.set(r.enrollmentId, e); }
+      const pcts = [...byStudent.values()].map((v) => (v.t ? (v.p / v.t) * 100 : 0));
+      return { subjectCode: subject.code, batchCode: batch.code, totalStudents: byStudent.size, avgAttendancePct: average(pcts), belowThresholdCount: pcts.filter((p) => p < rules.minThresholdPct).length, totalLecturesMarked: new Set(rows.map((r) => r.lectureDate.toISOString().slice(0, 10))).size };
+    }));
+    const pctOf = (rows: { isPresent: boolean }[]) => rows.length === 0 ? 0 : Number(((rows.filter((r) => r.isPresent).length / rows.length) * 100).toFixed(1));
+    // daily — last 7 lecture days
+    const dayGroups = new Map<string, { isPresent: boolean }[]>();
+    for (const r of allRecords) { const k = r.lectureDate.toISOString().slice(0, 10); (dayGroups.get(k) ?? dayGroups.set(k, []).get(k)!).push(r); }
+    const daily = [...dayGroups.entries()].sort().slice(-7).map(([date, rows]) => ({ date, pct: pctOf(rows), lectures: rows.length }));
+    // weekly — last 8 ISO weeks (Mon-anchored)
+    const weekKey = (d: Date) => { const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); const dow = (t.getUTCDay() + 6) % 7; t.setUTCDate(t.getUTCDate() - dow); return t.toISOString().slice(0, 10); };
+    const weekGroups = new Map<string, { isPresent: boolean }[]>();
+    for (const r of allRecords) { const k = weekKey(r.lectureDate); (weekGroups.get(k) ?? weekGroups.set(k, []).get(k)!).push(r); }
+    const weekly = [...weekGroups.entries()].sort().slice(-8).map(([weekStart, rows]) => ({ weekStart, pct: pctOf(rows), lectures: rows.length }));
+    const overall = { totalLectures: new Set(allRecords.map((r) => r.lectureDate.toISOString().slice(0, 10))).size, avgAttendancePct: pctOf(allRecords) };
+    bySubjectAndBatch.sort((a, b) => a.batchCode.localeCompare(b.batchCode) || a.subjectCode.localeCompare(b.subjectCode));
+    return { semesterLabel: scope.semester.label, bySubjectAndBatch, daily, weekly, overall };
   },
 
   async facultyAttendanceLectureLog(facultyId: string, universityId: string, subjectId: string, batchId: string, semesterId?: string) {
@@ -2995,24 +3536,28 @@ export const portalService = {
   async facultyNotes(facultyId: string, query: Record<string, string | number | undefined>) {
     const notes = await prisma.note.findMany({
       where: { facultyId, deletedAt: null, ...(query.subjectId ? { subjectId: query.subjectId as string } : {}) },
-      include: { subject: { select: { code: true } }, _count: { select: { flashcards: true } } },
+      include: { subject: { select: { code: true, name: true } }, targets: { include: { batch: { select: { code: true } } } }, _count: { select: { flashcards: true } } },
       orderBy: { createdAt: "desc" },
     });
-    const rows = notes.map((n) => ({ id: n.id, subjectCode: n.subject.code, title: n.title, description: n.description, fileUrl: n.fileUrl, mimeType: n.mimeType, fileSizeKb: n.fileSizeKb, aiSummary: n.aiSummary, hasFlashcards: n._count.flashcards > 0, createdAt: n.createdAt }));
+    const rows = notes.map((n) => ({ id: n.id, subject: n.subject, title: n.title, description: n.description, fileUrl: n.fileUrl, mimeType: n.mimeType, fileSize: n.fileSizeKb, fileType: n.mimeType, batchCodes: n.targets.map((target) => target.batch.code), aiSummaryStatus: n.aiSummary ? "complete" : "pending", hasFlashcards: n._count.flashcards > 0, createdAt: n.createdAt }));
     return paginate(rows, Number(query.page ?? 1), Number(query.limit ?? 20));
   },
 
   async getFacultyNote(facultyId: string, noteId: string) {
-    const note = await prisma.note.findFirst({ where: { id: noteId, facultyId, deletedAt: null }, include: { subject: { select: { code: true } }, flashcards: { orderBy: { order: "asc" } } } });
+    const note = await prisma.note.findFirst({ where: { id: noteId, facultyId, deletedAt: null }, include: { subject: { select: { code: true } }, targets: { include: { batch: { select: { id: true, code: true } } } }, flashcards: { orderBy: { order: "asc" } } } });
     if (!note) throw new ApiError(404, "NOT_FOUND", "Note not found.");
-    return { id: note.id, subjectCode: note.subject.code, title: note.title, description: note.description, fileUrl: note.fileUrl, mimeType: note.mimeType, fileSizeKb: note.fileSizeKb, aiSummary: note.aiSummary, flashcards: note.flashcards, createdAt: note.createdAt };
+    return { id: note.id, subjectCode: note.subject.code, title: note.title, description: note.description, fileUrl: note.fileUrl, mimeType: note.mimeType, fileSizeKb: note.fileSizeKb, batchIds: note.targets.map((target) => target.batch.id), batchCodes: note.targets.map((target) => target.batch.code), aiSummary: note.aiSummary, flashcards: note.flashcards, createdAt: note.createdAt };
   },
 
   async createFacultyNote(facultyId: string, universityId: string, fileBuffer: Buffer | undefined, fileMeta: { originalname?: string; mimetype?: string; size?: number }, body: Record<string, string>) {
     if (!fileBuffer) throw new ApiError(400, "VALIDATION_ERROR", "File is required.");
-    await ensureFacultyAssignedSubject(facultyId, universityId, String(body.subjectId));
+    const subjectId = String(body.subjectId);
+    const semester = await facultyActiveSemester(facultyId, universityId);
+    await ensureFacultyAssignedSubject(facultyId, universityId, subjectId, semester.id);
+    const batchIds = await validateFacultyContentTargets(facultyId, universityId, subjectId, semester.id, parseBatchIds(body.batchIds));
+    const fileKey = `notes/${universityId}/${facultyId}/${Date.now()}-${(fileMeta.originalname ?? "file").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
     const note = await prisma.note.create({
-      data: { subjectId: String(body.subjectId), facultyId, universityId, title: String(body.title), description: body.description ?? null, fileUrl: `/mock/notes/${Date.now()}/${fileMeta.originalname ?? "file"}`, fileKey: `notes/${facultyId}/${Date.now()}`, mimeType: fileMeta.mimetype ?? "application/octet-stream", fileSizeKb: Math.round((fileMeta.size ?? fileBuffer.length) / 1024) },
+      data: { subjectId, facultyId, universityId, title: String(body.title), description: body.description ?? null, fileUrl: objectUrl(fileKey), fileKey, originalFileName: fileMeta.originalname ?? null, mimeType: fileMeta.mimetype ?? "application/octet-stream", fileSizeKb: Math.round((fileMeta.size ?? fileBuffer.length) / 1024), targets: { create: batchIds.map((batchId) => ({ batchId })) } },
     });
     return { id: note.id, title: note.title, fileUrl: note.fileUrl, aiJobId: null, aiStatus: "QUEUED", message: "Note uploaded. AI summary will be available after processing." };
   },
@@ -3051,11 +3596,11 @@ export const portalService = {
 
   async facultyQuizzes(facultyId: string, query: Record<string, string | number | undefined>) {
     const quizzes = await prisma.quiz.findMany({
-      where: { facultyId, deletedAt: null, ...(query.subjectId ? { subjectId: query.subjectId as string } : {}), ...(query.isPublished !== undefined ? { isPublished: query.isPublished === "true" || query.isPublished === true } : {}) },
-      include: { _count: { select: { questions: true, attempts: true } }, attempts: { select: { score: true } } },
+      where: { facultyId, deletedAt: null, ...(query.subjectId ? { subjectId: query.subjectId as string } : {}), ...(query.isPublished !== undefined ? { isPublished: String(query.isPublished) === "true" } : {}) },
+      include: { subject: { select: { code: true, name: true } }, targets: { include: { batch: { select: { code: true } } } }, _count: { select: { questions: true, attempts: true } }, attempts: { select: { score: true } } },
       orderBy: { createdAt: "desc" },
     });
-    const rows = quizzes.map((q) => ({ id: q.id, title: q.title, subjectId: q.subjectId, isAiGenerated: q.isAiGenerated, isPublished: q.isPublished, questionCount: q._count.questions, attemptCount: q._count.attempts, avgScore: average(q.attempts.map((a) => a.score)), dueDate: q.dueDate, createdAt: q.createdAt }));
+    const rows = quizzes.map((q) => ({ id: q.id, title: q.title, description: q.description, subject: q.subject, batchCodes: q.targets.map((target) => target.batch.code), isAiGenerated: q.isAiGenerated, isPublished: q.isPublished, questionCount: q._count.questions, attemptCount: q._count.attempts, avgScore: average(q.attempts.map((a) => a.score)), dueDate: q.dueDate, createdAt: q.createdAt }));
     return paginate(rows, Number(query.page ?? 1), Number(query.limit ?? 20));
   },
 
@@ -3066,13 +3611,14 @@ export const portalService = {
     return { id: quiz.id, title: quiz.title, description: quiz.description, subjectCode: quiz.subject.code, semesterLabel: quiz.semester.label, isAiGenerated: quiz.isAiGenerated, isPublished: quiz.isPublished, timeLimitMins: quiz.timeLimitMins, dueDate: quiz.dueDate, questions: quiz.questions, stats: { attemptCount: scores.length, avgScore: average(scores), highScore: scores.length === 0 ? 0 : Math.max(...scores), lowScore: scores.length === 0 ? 0 : Math.min(...scores) } };
   },
 
-  async createFacultyQuiz(facultyId: string, universityId: string, body: { subjectId: string; semesterId: string; title: string; description?: string; timeLimitMins?: number; dueDate?: string; questions: Array<{ text: string; options: any; correctOption: string; explanation?: string; order: number }> }) {
+  async createFacultyQuiz(facultyId: string, universityId: string, body: { subjectId: string; semesterId: string; batchIds?: string[]; title: string; description?: string; timeLimitMins?: number; dueDate?: string; questions?: Array<{ text: string; options: any; correctOption: string; explanation?: string; order: number }> }) {
     await ensureFacultyAssignedSubject(facultyId, universityId, body.subjectId, body.semesterId);
-    const quiz = await prisma.quiz.create({ data: { facultyId, subjectId: body.subjectId, semesterId: body.semesterId, title: body.title, description: body.description ?? null, timeLimitMins: body.timeLimitMins ?? null, dueDate: body.dueDate ? new Date(body.dueDate) : null, isAiGenerated: false, isPublished: false } });
-    for (const q of body.questions) {
+    const batchIds = await validateFacultyContentTargets(facultyId, universityId, body.subjectId, body.semesterId, parseBatchIds(body.batchIds));
+    const quiz = await prisma.quiz.create({ data: { facultyId, subjectId: body.subjectId, semesterId: body.semesterId, title: body.title, description: body.description ?? null, timeLimitMins: body.timeLimitMins ?? null, dueDate: body.dueDate ? new Date(body.dueDate) : null, isAiGenerated: false, isPublished: false, targets: { create: batchIds.map((batchId) => ({ batchId })) } } });
+    for (const q of body.questions ?? []) {
       await prisma.question.create({ data: { quizId: quiz.id, text: q.text, options: q.options, correctOption: q.correctOption, explanation: q.explanation ?? null, order: q.order } });
     }
-    return { id: quiz.id, title: quiz.title, isPublished: false, questionCount: body.questions.length, message: "Quiz created as draft. Publish when ready." };
+    return { id: quiz.id, title: quiz.title, isPublished: false, questionCount: body.questions?.length ?? 0, message: "Quiz created as draft. Publish when ready." };
   },
 
   async createAiQuizJob(facultyId: string, universityId: string, body: { subjectId: string; semesterId: string; topic: string; questionCount: number; difficulty: string }) {
@@ -3169,10 +3715,17 @@ export const portalService = {
 
   async facultyAnnouncements(facultyId: string, universityId: string, page = 1, limit = 20) {
     const scope = await getFacultyScopeData(facultyId, universityId);
+    const me = await prisma.faculty.findUnique({ where: { id: facultyId }, select: { hodId: true } });
     const rows = await prisma.announcement.findMany({
       where: {
         universityId, deletedAt: null,
-        OR: [{ scope: "ALL" }, { scope: "BATCH", scopeValue: { in: scope.assignedBatchIds } }, { scope: "YEAR_LEVEL" }],
+        OR: [
+          { scope: "ALL" },
+          { scope: "BATCH", scopeValue: { in: scope.assignedBatchIds } },
+          { scope: "YEAR_LEVEL" },
+          // ponytail: FACULTY_ONLY — receive if I'm in this HOD's pool.
+          ...(me?.hodId ? [{ scope: "FACULTY_ONLY" as any, facultyId: me.hodId }] : []),
+        ],
       },
       orderBy: { createdAt: "desc" },
       include: { faculty: { select: { name: true, isHod: true } } },
@@ -3196,11 +3749,26 @@ export const portalService = {
     const a = await prisma.announcement.create({ data: { universityId, facultyId, title: body.title, body: body.body, scope: body.scope as any, scopeValue: body.scopeValue } });
     const batch = body.scope === "BATCH" ? await prisma.batch.findUnique({ where: { id: body.scopeValue! }, select: { code: true } }) : null;
     // Fan-out notifications to matching students
-    await this.fanOutAnnouncement(universityId, body.scope, body.scopeValue, body.title);
+    await this.fanOutAnnouncement(universityId, body.scope, body.scopeValue, body.title, facultyId);
     return { id: a.id, title: a.title, scope: a.scope, scopeLabel: a.scope === "BATCH" && batch ? `Batch ${batch.code}` : a.scopeValue, createdAt: a.createdAt };
   },
 
-  async fanOutAnnouncement(universityId: string, scope: string, scopeValue: string | undefined, title: string) {
+  async fanOutAnnouncement(universityId: string, scope: string, scopeValue: string | undefined, title: string, senderId?: string) {
+    // FACULTY_ONLY targets the sender-HOD's pool of faculty, not students.
+    if (scope === "FACULTY_ONLY") {
+      if (!senderId) return;
+      const pool = await prisma.faculty.findMany({ where: { universityId, hodId: senderId, deletedAt: null, isActive: true }, select: { id: true } });
+      if (pool.length === 0) return;
+      await this.notifyMany(
+        universityId,
+        pool.map((f) => ({ facultyId: f.id })),
+        "ANNOUNCEMENT",
+        `New announcement: ${title}`,
+        "Tap to read.",
+        "/faculty/announcements",
+      );
+      return;
+    }
     let studentIds: string[] = [];
     if (scope === "BATCH" && scopeValue) {
       const enrs = await prisma.studentEnrollment.findMany({ where: { batchId: scopeValue, isCurrent: true }, select: { studentId: true } });
@@ -3468,8 +4036,8 @@ export const portalService = {
     return {
       enrollmentNo: s.enrollmentNo,
       journey: enrollments.map((e) => ({
-        semesterNumber: e.semester.number, yearLevel: e.yearLevel,
-        batchCode: e.batch.code, rollNo: e.rollNo, academicYear: e.semester.academicYear.label,
+        semesterNumber: e.semester.number, semesterLabel: e.semester.label, yearLevel: e.yearLevel,
+        batchCode: e.batch.code, rollNo: e.rollNo, academicYear: e.semester.academicYear.label, isCurrent: e.isCurrent,
       })),
     };
   },
@@ -3514,8 +4082,9 @@ export const portalService = {
   },
 
   async studentCsvUpload(scope: Scope, buffer: Buffer | undefined, opts: { semesterId?: string }) {
-    const semesterId = opts.semesterId || (await getActiveSemester(scope.universityId)).id;
-    return this.uploadStudentCsv(buffer, scope.universityId, semesterId);
+    // ponytail: upload allowed in any semester — HOD's own active (scoped) sem is the target.
+    const semesterId = opts.semesterId || scope.hodSemesterIds?.[0] || (await scopeSemester(scope)).id;
+    return this.uploadStudentCsv(buffer, scope.universityId, semesterId, scope.userId);
   },
 
   async studentCsvTemplate() {
@@ -3634,7 +4203,7 @@ export const portalService = {
       prisma.academicYear.findMany({ where: { universityId: scope.universityId }, orderBy: { label: "desc" } }),
       prisma.semester.findMany({ where: { universityId: scope.universityId }, orderBy: { number: "asc" } }),
       prisma.phase.findMany({ where: { semesterId: semester.id }, orderBy: { number: "asc" } }),
-      prisma.subject.findMany({ where: { semesterId: semester.id } }),
+      subjectsBySemester(semester.id),
       prisma.batch.findMany({ where: { id: { in: scope.hodBatchIds } } }),
     ]);
     return {
@@ -3772,7 +4341,7 @@ export const portalService = {
       : await prisma.semester.findFirst({ where: { universityId: scope.universityId, status: "ACTIVE" } });
     if (!semester) return { phases: [] };
     const phases = await prisma.phase.findMany({ where: { semesterId: semester.id }, orderBy: { number: "asc" } });
-    const subjectsTotal = await prisma.subject.count({ where: { semesterId: semester.id } });
+    const subjectsTotal = await prisma.subject.count({ where: { universityId: semester.universityId, semesterNumber: semester.number, deletedAt: null } });
     const rows = await Promise.all(phases.map(async (p) => {
       const uploadedSubjects = await prisma.result.groupBy({
         by: ["subjectId"],
@@ -3866,7 +4435,7 @@ export const portalService = {
   // ─── Exam coordination (paper checking + publish) ──────────
   // T1–T3 papers are out of 25. T4 is written out of 50 and stored ÷2 (max 25).
   async examCoordinators(scope: Scope) {
-    const sem = await getActiveSemester(scope.universityId);
+    const sem = await scopeSemester(scope);
     const rows = sem.id ? await prisma.examCoordinator.findMany({ where: { semesterId: sem.id } }) : [];
     const facIds = rows.map((r) => r.facultyId);
     const facs = facIds.length ? await prisma.faculty.findMany({ where: { id: { in: facIds } }, select: { id: true, name: true, employeeId: true } }) : [];
@@ -3888,7 +4457,7 @@ export const portalService = {
 
   async assignExamCoordinator(scope: Scope, slot: number, facultyId: string) {
     if (slot !== 1 && slot !== 2) throw new ApiError(400, "VALIDATION_ERROR", "Slot must be 1 or 2.");
-    const sem = await getActiveSemester(scope.universityId);
+    const sem = await scopeSemester(scope);
     if (!sem.id) throw new ApiError(400, "NO_ACTIVE_SEMESTER", "No active semester.");
     const fac = await prisma.faculty.findFirst({ where: { id: facultyId, universityId: scope.universityId, isHod: false, deletedAt: null } });
     if (!fac) throw new ApiError(404, "FACULTY_NOT_FOUND", "Faculty not found or is a HOD.");
@@ -3905,23 +4474,24 @@ export const portalService = {
   },
 
   async removeExamCoordinator(scope: Scope, slot: number) {
-    const sem = await getActiveSemester(scope.universityId);
+    const sem = await scopeSemester(scope);
     await prisma.examCoordinator.deleteMany({ where: { semesterId: sem.id, slot } });
     return { removed: true };
   },
 
   async facultyExamStatus(facultyId: string, universityId: string) {
-    const sem = await getActiveSemester(universityId);
+    // ponytail: resolve THIS faculty's active semester (multi-active-sem era).
+    const sem = await facultyActiveSemester(facultyId, universityId);
     const row = sem.id ? await prisma.examCoordinator.findFirst({ where: { semesterId: sem.id, facultyId } }) : null;
     return { isCoordinator: !!row, slot: row?.slot ?? null, semesterId: sem.id, semesterLabel: sem.label };
   },
 
-  async examContext(universityId: string) {
-    const sem = await getActiveSemester(universityId);
+  async examContext(universityId: string, facultyId?: string) {
+    const sem = facultyId ? await facultyActiveSemester(facultyId, universityId) : await getActiveSemester(universityId);
     if (!sem.id) return { semesterId: "", activeYearLevel: null, phases: [], subjects: [], batches: [], faculty: [], subjectFaculty: {} };
     const [phases, subjects, batches, faculty, yearAssignments] = await Promise.all([
       prisma.phase.findMany({ where: { semesterId: sem.id }, orderBy: { number: "asc" } }),
-      prisma.subject.findMany({ where: { semesterId: sem.id, deletedAt: null }, orderBy: { code: "asc" } }),
+      subjectsBySemester(sem.id),
       prisma.batch.findMany({ where: { academicYearId: sem.academicYearId }, orderBy: { code: "asc" } }),
       prisma.faculty.findMany({ where: { universityId, isHod: false, isDean: false, isActive: true, deletedAt: null }, select: { id: true, name: true, employeeId: true }, orderBy: { name: "asc" } }),
       // a faculty's year(s) come from the year levels of batches they teach, across all semesters
@@ -3963,7 +4533,7 @@ export const portalService = {
     if (rows.length === 0) return { data: [] };
     const [phases, subjects, facs] = await Promise.all([
       prisma.phase.findMany({ where: { semesterId: sem.id } }),
-      prisma.subject.findMany({ where: { semesterId: sem.id } }),
+      subjectsBySemester(sem.id),
       prisma.faculty.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.facultyId))] } }, select: { id: true, name: true } }),
     ]);
     const phaseById2 = new Map(phases.map((p) => [p.id, p]));
@@ -3996,6 +4566,13 @@ export const portalService = {
     const from = body.fromEnrollmentNo.trim().toUpperCase();
     const to = body.toEnrollmentNo.trim().toUpperCase();
     if (from > to) throw new ApiError(400, "VALIDATION_ERROR", "From-enrollment must not be greater than to-enrollment.");
+    // Subject teachers are preferred in the desk UI, but an active faculty
+    // member from another year may check papers when staffing is tight.
+    const checker = await prisma.faculty.findFirst({
+      where: { id: body.facultyId, universityId, isHod: false, isDean: false, isActive: true, deletedAt: null },
+      select: { id: true },
+    });
+    if (!checker) throw new ApiError(400, "INVALID_CHECKER", "Choose an active faculty member from this university.");
     const enrs = await examRangeEnrollments(semester.id, body.subjectId, from, to);
     if (enrs.length === 0) throw new ApiError(400, "EMPTY_RANGE", "No students found in that enrollment range for this subject.");
     // overlap is now per (phase, subject) — batch is no longer part of the key
@@ -4157,26 +4734,35 @@ export const portalService = {
     };
   },
 
-  async uniCreateYear(universityId: string, body: { label: string; startDate: string; endDate: string }) {
-    if (!body.label || !body.startDate || !body.endDate) throw new ApiError(400, "VALIDATION_ERROR", "label, startDate, endDate required.");
-    const exists = await prisma.academicYear.findFirst({ where: { universityId, label: body.label } });
-    if (exists) throw new ApiError(409, "CONFLICT", "Academic year already exists.");
-    const start = new Date(body.startDate);
-    const end = new Date(body.endDate);
+  // An Academic Year is a 4-year admission BATCH (e.g. "2024-2028"): FY(1,2) SY(3,4) TY(5,6) FINAL(7,8).
+  // On creation the batch is ACTIVE and starts at Semester 1 (only one semester active per batch).
+  // Several batches run concurrently — one per year level (FY/SY/TY/FINAL).
+  async uniCreateYear(universityId: string, body: { label: string; startDate?: string; endDate?: string; activeSemester?: number }) {
+    if (!body.label) throw new ApiError(400, "VALIDATION_ERROR", "label is required.");
+    const label = body.label.trim();
+    const m = /^(\d{4})-(\d{4})$/.exec(label);
+    if (!m) throw new ApiError(400, "VALIDATION_ERROR", "Label must be a 4-year batch, e.g. 2024-2028.");
+    const y1 = Number(m[1]), y2 = Number(m[2]);
+    if (y2 - y1 !== 4) throw new ApiError(400, "VALIDATION_ERROR", "A batch must span 4 years, e.g. 2024-2028.");
+    const exists = await prisma.academicYear.findFirst({ where: { universityId, label } });
+    if (exists) throw new ApiError(409, "CONFLICT", "This batch already exists.");
+    const start = body.startDate ? new Date(body.startDate) : new Date(`${y1}-07-01`);
+    const end = body.endDate ? new Date(body.endDate) : new Date(`${y2}-05-31`);
+    const activeNum = body.activeSemester && body.activeSemester >= 1 && body.activeSemester <= 8 ? body.activeSemester : 1;
     const y = await prisma.academicYear.create({
-      data: { universityId, label: body.label, status: "DRAFT", startDate: start, endDate: end },
+      data: { universityId, label, status: "ACTIVE", startDate: start, endDate: end },
     });
-    // Auto-generate all 8 semesters (1-8) with 4 phases each. Span each sem evenly.
-    // ponytail: semester dates overlap since we auto-cover 1..8 across one label; only ACTIVE semester matters at runtime.
+    // 8 semesters, 4 phases each. Only `activeNum` is ACTIVE; earlier are COMPLETE, later UPCOMING.
     const perSem = (end.getTime() - start.getTime()) / 8;
     const YL = ["FY", "FY", "SY", "SY", "TY", "TY", "FINAL", "FINAL"];
     for (let i = 1; i <= 8; i++) {
       const semStart = new Date(start.getTime() + perSem * (i - 1));
       const semEnd = new Date(start.getTime() + perSem * i);
+      const status = i === activeNum ? "ACTIVE" : i < activeNum ? "COMPLETE" : "UPCOMING";
       const sem = await prisma.semester.create({
         data: {
           universityId, academicYearId: y.id, number: i, label: `Semester ${i}`,
-          yearLevel: YL[i - 1] as any, status: "UPCOMING", startDate: semStart, endDate: semEnd,
+          yearLevel: YL[i - 1] as any, status: status as any, startDate: semStart, endDate: semEnd,
         },
       });
       const phaseSpan = (semEnd.getTime() - semStart.getTime()) / 4;
@@ -4191,10 +4777,10 @@ export const portalService = {
     return { id: y.id, label: y.label, status: y.status, semestersCreated: 8 };
   },
 
+  // ponytail: multiple batches active at once — just flip this one ACTIVE, don't archive siblings.
   async uniActivateYear(universityId: string, yearId: string) {
     const y = await prisma.academicYear.findFirst({ where: { id: yearId, universityId } });
     if (!y) throw new ApiError(404, "NOT_FOUND", "Academic year not found.");
-    await prisma.academicYear.updateMany({ where: { universityId, status: "ACTIVE", NOT: { id: yearId } }, data: { status: "ARCHIVED" } });
     await prisma.academicYear.update({ where: { id: yearId }, data: { status: "ACTIVE" } });
     return { id: yearId, status: "ACTIVE" };
   },
@@ -4222,11 +4808,20 @@ export const portalService = {
     return { id: sem.id, label: sem.label, yearLevel };
   },
 
+  // Only one semester active PER batch/year. Earlier sems → COMPLETE, later → UPCOMING, this one → ACTIVE.
   async uniActivateSemester(universityId: string, semesterId: string) {
     const s = await prisma.semester.findFirst({ where: { id: semesterId, universityId } });
     if (!s) throw new ApiError(404, "NOT_FOUND", "Semester not found.");
-    await prisma.semester.updateMany({ where: { universityId, status: "ACTIVE", NOT: { id: semesterId } }, data: { status: "COMPLETE" } });
+    await prisma.semester.updateMany({ where: { academicYearId: s.academicYearId, number: { lt: s.number } }, data: { status: "COMPLETE" } });
+    await prisma.semester.updateMany({ where: { academicYearId: s.academicYearId, number: { gt: s.number } }, data: { status: "UPCOMING" } });
     await prisma.semester.update({ where: { id: semesterId }, data: { status: "ACTIVE" } });
+    // ponytail: HodBatchScope.batchId is @unique (one row per batch). Move every scope in this
+    // year onto the newly active semester so the HOD keeps ownership when advancing (Sem 3 → 4)
+    // and can upload the new roster there.
+    const yearBatchIds = (await prisma.batch.findMany({ where: { academicYearId: s.academicYearId }, select: { id: true } })).map((b) => b.id);
+    if (yearBatchIds.length) {
+      await prisma.hodBatchScope.updateMany({ where: { batchId: { in: yearBatchIds } }, data: { semesterId } });
+    }
     return { id: semesterId, status: "ACTIVE" };
   },
 
@@ -4270,6 +4865,54 @@ export const portalService = {
     return { created, initial, count: created.length };
   },
 
+  // Promotion Dashboard (Dean): per-HOD promotion status for the current year-end transition,
+  // grouped by year level, with a per-level `allComplete` gate. Status is DERIVED from enrollment
+  // state (no separate flag to drift): at the HOD's active semester, isCurrent=true → still to
+  // promote (pending); isCurrent=false → already moved forward (promoted).
+  async promotionDashboard(universityId: string) {
+    const hods = await prisma.faculty.findMany({
+      where: { universityId, isHod: true, isDean: false, deletedAt: null },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, year: true, employeeId: true },
+    });
+    const rows = await Promise.all(hods.map(async (hod) => {
+      const scopes = await prisma.hodBatchScope.findMany({ where: { facultyId: hod.id }, select: { batchId: true } });
+      const batchIds = scopes.map((s) => s.batchId);
+      // the HOD's active semester = the ACTIVE semester at their year level
+      const activeSem = hod.year
+        ? await prisma.semester.findFirst({ where: { universityId, status: "ACTIVE", yearLevel: hod.year as any } })
+        : null;
+      let total = 0, promoted = 0, pending = 0;
+      if (activeSem && batchIds.length) {
+        const enrs = await prisma.studentEnrollment.findMany({ where: { semesterId: activeSem.id, batchId: { in: batchIds } }, select: { isCurrent: true } });
+        total = enrs.length;
+        promoted = enrs.filter((e) => !e.isCurrent).length;
+        pending = enrs.filter((e) => e.isCurrent).length;
+      }
+      const promotionDue = !!activeSem && activeSem.number % 2 === 0; // year-end semesters
+      let status: string;
+      if (total === 0) status = "NO_DATA";
+      else if (pending === 0) status = "COMPLETE";
+      else if (promoted > 0) status = "IN_PROGRESS";
+      else status = "PENDING";
+      return {
+        hodId: hod.id, name: hod.name, employeeId: hod.employeeId, yearLevel: hod.year,
+        activeSemester: activeSem ? { label: activeSem.label, number: activeSem.number } : null,
+        promotionDue, totalStudents: total, promoted, pending, status,
+        progressPct: total ? Math.round((promoted / total) * 100) : 0,
+      };
+    }));
+    // group by year level with a completion gate (only HODs with students count toward the gate)
+    const byYear: Record<string, { hods: typeof rows; allComplete: boolean; pendingHods: number }> = {};
+    for (const yl of ["FY", "SY", "TY", "FINAL"]) {
+      const group = rows.filter((r) => r.yearLevel === yl);
+      const withStudents = group.filter((r) => r.totalStudents > 0);
+      const pendingHods = withStudents.filter((r) => r.status !== "COMPLETE").length;
+      byYear[yl] = { hods: group, allComplete: withStudents.length > 0 && pendingHods === 0, pendingHods };
+    }
+    return { byYear, hods: rows };
+  },
+
   async uniHods(universityId: string) {
     const activeSem = await prisma.semester.findFirst({ where: { universityId, status: "ACTIVE" } });
     const hods = await prisma.faculty.findMany({
@@ -4285,10 +4928,15 @@ export const portalService = {
     });
     return {
       activeSemester: activeSem ? { id: activeSem.id, label: activeSem.label } : null,
-      hods: hods.map((h) => ({
-        id: h.id, name: h.name, email: h.email, employeeId: h.employeeId, year: h.year, isActive: h.isActive,
-        scopes: h.hodBatchScopes.map((s) => ({ batchId: s.batch.id, batchCode: s.batch.code, semesterLabel: s.semester.label })),
-      })),
+      hods: hods.map((h) => {
+        // A HOD owns one initial-group of batches — tag from the year level + that initial.
+        const firstBatch = h.hodBatchScopes[0]?.batch.code ?? null;
+        return {
+          id: h.id, name: h.name, email: h.email, employeeId: h.employeeId, year: h.year, isActive: h.isActive,
+          sectionTag: sectionTag(h.year, firstBatch),
+          scopes: h.hodBatchScopes.map((s) => ({ batchId: s.batch.id, batchCode: s.batch.code, semesterLabel: s.semester.label })),
+        };
+      }),
       batches: batches.map((b) => ({ id: b.id, code: b.code, yearLevel: b.yearLevel, ownedBy: b.hodScope?.facultyId ?? null })),
       facultyOptions: options,
     };
@@ -4456,6 +5104,7 @@ export const portalService = {
           yearLevel: e?.semester.yearLevel ?? null,
           academicYearLabel: e?.semester.academicYear.label ?? null,
           rollNo: e?.rollNo ?? null,
+          sectionTag: sectionTag(e?.semester.yearLevel, e?.batch.code),
         };
       }),
       ...buildPagination(page, limit, total),
@@ -4532,19 +5181,20 @@ export const portalService = {
     };
   },
 
-  async createHodAnnouncement(facultyId: string, universityId: string, body: { title: string; body: string; scope: "BATCH" | "YEAR_LEVEL" | "ALL"; scopeValue?: string }) {
+  async createHodAnnouncement(facultyId: string, universityId: string, body: { title: string; body: string; scope: "BATCH" | "YEAR_LEVEL" | "ALL" | "FACULTY_ONLY"; scopeValue?: string }) {
     if (!body.title || !body.body) throw new ApiError(400, "VALIDATION_ERROR", "Title and body required.");
-    if (body.scope !== "ALL" && !body.scopeValue) throw new ApiError(400, "VALIDATION_ERROR", "scopeValue required for scoped announcements.");
+    // FACULTY_ONLY targets the HOD's pool (no scopeValue needed — pool is derived from Faculty.hodId).
+    if (body.scope !== "ALL" && body.scope !== "FACULTY_ONLY" && !body.scopeValue) throw new ApiError(400, "VALIDATION_ERROR", "scopeValue required for scoped announcements.");
     const a = await prisma.announcement.create({
       data: { universityId, facultyId, title: body.title, body: body.body, scope: body.scope as any, scopeValue: body.scopeValue ?? null },
     });
-    await this.fanOutAnnouncement(universityId, body.scope, body.scopeValue, body.title);
+    await this.fanOutAnnouncement(universityId, body.scope, body.scopeValue, body.title, facultyId);
     return { id: a.id, title: a.title, scope: a.scope, createdAt: a.createdAt };
   },
 
   // ─── HOD: Timetable CRUD ───────────────────────────────────
   async listTimetable(scope: Scope, batchId?: string, semesterId?: string) {
-    const semId = semesterId || (await getActiveSemester(scope.universityId)).id;
+    const semId = semesterId || (await scopeSemester(scope)).id;
     const slots = await prisma.timetableSlot.findMany({
       where: { semesterId: semId, ...(batchId ? { batchId } : { batchId: { in: scope.hodBatchIds } }) },
       include: { subject: { select: { id: true, code: true, name: true } }, batch: { select: { id: true, code: true } } },
@@ -4567,7 +5217,7 @@ export const portalService = {
   },
 
   async createTimetableSlot(scope: Scope, body: { batchId: string; subjectId: string; facultyId?: string | null; dayOfWeek: number; slotStart: string; slotEnd: string; room?: string; semesterId?: string }) {
-    const semId = body.semesterId || (await getActiveSemester(scope.universityId)).id;
+    const semId = body.semesterId || (await scopeSemester(scope)).id;
     if (!scope.hodBatchIds.includes(body.batchId)) throw new ApiError(403, "BATCH_NOT_IN_SCOPE", "Batch not in your scope.");
     const slot = await prisma.timetableSlot.create({
       data: {
@@ -4605,10 +5255,10 @@ export const portalService = {
   async uploadTimetableCsv(scope: Scope, buffer: Buffer | undefined, opts: { semesterId?: string; replaceExisting?: boolean }) {
     if (!buffer) throw new ApiError(400, "VALIDATION_ERROR", "CSV file is required.");
     const rows = parseCsvRecords(buffer, ["batch", "day", "start", "end", "subject"]);
-    const semId = opts.semesterId || (await getActiveSemester(scope.universityId)).id;
+    const semId = opts.semesterId || (await scopeSemester(scope)).id;
     const [batches, subjects, faculty] = await Promise.all([
       prisma.batch.findMany({ where: { id: { in: scope.hodBatchIds } } }),
-      prisma.subject.findMany({ where: { semesterId: semId, deletedAt: null } }),
+      subjectsBySemester(semId),
       prisma.faculty.findMany({ where: { universityId: scope.universityId, deletedAt: null }, select: { id: true, employeeId: true, mentorCode: true } }),
     ]);
     const batchByCode = new Map(batches.map((b) => [b.code.toUpperCase(), b]));
@@ -4657,6 +5307,14 @@ export const portalService = {
         await prisma.timetableSlot.create({
           data: { semesterId: semId, batchId: batch.id, subjectId: subject.id, facultyId, dayOfWeek, slotStart: start, slotEnd: end, room: record.room ? String(record.room).trim() : null },
         });
+        // ponytail: auto-assign — a timetable slot IS the faculty↔subject↔batch assignment
+        // that drives attendance/results. Upsert it (dedup) so we don't rely on a separate step.
+        if (facultyId) {
+          const existing = await prisma.facultyBatchAssignment.findFirst({ where: { facultyId, subjectId: subject.id, batchId: batch.id, semesterId: semId } });
+          if (!existing) {
+            await prisma.facultyBatchAssignment.create({ data: { facultyId, subjectId: subject.id, batchId: batch.id, semesterId: semId } });
+          }
+        }
         created++;
       } catch {
         errors.push({ row, enrollmentNo: ref, reason: "Failed to import row." });
@@ -4665,17 +5323,48 @@ export const portalService = {
     return { created, skipped, errors, totalRows: rows.length, replaced: !!opts.replaceExisting };
   },
 
-  // ─── Faculty: batches under HOD (all in dept) ──────────────
+  // ─── Attendance-only: batches under the faculty's HOD ──────
+  // The faculty's HOD = whichever HOD(s) own the batches this faculty is assigned to teach
+  // (derived from FacultyBatchAssignment → HodBatchScope). Return every batch those HODs own.
+  // Fallback: if the faculty has no assignments yet, keep the year-level view so onboarding
+  // isn't blocked. This scope applies ONLY to the Attendance module.
   async facultyHodBatches(universityId: string, facultyId: string) {
     const me = await facultyById(facultyId);
-    const activeSem = await getActiveSemester(universityId);
-    const batches = await prisma.batch.findMany({
-      where: { universityId, academicYearId: activeSem.academicYearId || undefined },
-      orderBy: { code: "asc" },
+    const activeSem = await facultyActiveSemester(facultyId, universityId);
+    // 1. Which batches is this faculty assigned to (any subject/semester)?
+    const myAsg = await prisma.facultyBatchAssignment.findMany({
+      where: { facultyId }, select: { batchId: true },
     });
-    // Filter to dept-aligned batches: for now return all — dept mapping isn't on Batch.
-    // ponytail: year scoping when Batch.year exists.
-    void me;
+    const myBatchIds = [...new Set(myAsg.map((a) => a.batchId))];
+    // 2. Whoever HODs those batches → those are this faculty's HODs.
+    const hodScopes = myBatchIds.length
+      ? await prisma.hodBatchScope.findMany({ where: { batchId: { in: myBatchIds } }, select: { facultyId: true } })
+      : [];
+    const hodIds = [...new Set(hodScopes.map((s) => s.facultyId))];
+    // 3. Every batch under those HODs (in the active academic year).
+    let batches;
+    if (hodIds.length > 0) {
+      const allScopes = await prisma.hodBatchScope.findMany({
+        where: { facultyId: { in: hodIds } },
+        include: { batch: true },
+      });
+      const uniq = new Map<string, typeof allScopes[number]["batch"]>();
+      for (const s of allScopes) {
+        if (activeSem.academicYearId && s.batch.academicYearId !== activeSem.academicYearId) continue;
+        uniq.set(s.batch.id, s.batch);
+      }
+      batches = [...uniq.values()].sort((a, b) => a.code.localeCompare(b.code));
+    } else {
+      // No assignments yet → fall back to year-level so the selector isn't empty pre-onboarding.
+      batches = await prisma.batch.findMany({
+        where: {
+          universityId,
+          academicYearId: activeSem.academicYearId || undefined,
+          ...(me.year ? { yearLevel: me.year as any } : {}),
+        },
+        orderBy: { code: "asc" },
+      });
+    }
     return {
       activeSemester: { id: activeSem.id, label: activeSem.label },
       data: batches.map((b) => ({ id: b.id, code: b.code, yearLevel: b.yearLevel })),
@@ -4690,7 +5379,9 @@ export const portalService = {
     // ponytail: use DB `Date` (day-only) — align to UTC midnight
     const day = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
     const dayOfWeek = day.getUTCDay(); // 0=Sun..6=Sat
-    const activeSem = await getActiveSemester(universityId);
+    // ponytail: resolve the batch's OWN active semester (several year levels active at once).
+    const batch = await batchById(batchId);
+    const activeSem = (await prisma.semester.findFirst({ where: { academicYearId: batch.academicYearId, status: "ACTIVE" } })) ?? await getActiveSemester(universityId);
 
     const slots = await prisma.timetableSlot.findMany({
       where: { batchId, semesterId: activeSem.id, dayOfWeek },
@@ -4723,10 +5414,7 @@ export const portalService = {
     const isEditable = daysDelta >= 0 && daysDelta <= 7;
 
     // Subject-swap suggestions: any subject in the same semester, in case of proxy
-    const allSubjects = await prisma.subject.findMany({
-      where: { semesterId: activeSem.id, deletedAt: null },
-      select: { id: true, code: true, name: true },
-    });
+    const allSubjects = (await subjectsBySemester(activeSem.id)).map((s) => ({ id: s.id, code: s.code, name: s.name }));
 
     void facultyId;
     return {
@@ -4768,7 +5456,9 @@ export const portalService = {
     if (daysDelta < 0) throw new ApiError(400, "FUTURE_DATE", "Cannot mark future attendance.");
     if (daysDelta > 7) throw new ApiError(403, "EDIT_WINDOW_EXPIRED", "Attendance older than 7 days cannot be edited.");
 
-    const activeSem = await getActiveSemester(universityId);
+    // resolve the batch's own active semester (multiple year levels active at once)
+    const batch = await batchById(body.batchId);
+    const activeSem = (await prisma.semester.findFirst({ where: { academicYearId: batch.academicYearId, status: "ACTIVE" } })) ?? await getActiveSemester(universityId);
     const enrollments = await prisma.studentEnrollment.findMany({
       where: { batchId: body.batchId, semesterId: activeSem.id, isCurrent: true },
       select: { id: true },

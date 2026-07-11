@@ -31,6 +31,17 @@ export interface UniHodsResponse {
   facultyOptions: { id: string; name: string; employeeId: string; year: string }[]
 }
 
+export interface PromotionHodRow {
+  hodId: string; name: string; employeeId: string; yearLevel: string | null
+  activeSemester: { label: string; number: number } | null
+  promotionDue: boolean; totalStudents: number; promoted: number; pending: number
+  status: 'NO_DATA' | 'COMPLETE' | 'IN_PROGRESS' | 'PENDING'; progressPct: number
+}
+export interface PromotionDashboard {
+  byYear: Record<string, { hods: PromotionHodRow[]; allComplete: boolean; pendingHods: number }>
+  hods: PromotionHodRow[]
+}
+
 export interface UniFacultyRow {
   id: string; name: string; email: string; employeeId: string; year: string | null
   isHod: boolean; mentorCode: string | null; isActive: boolean
@@ -45,8 +56,7 @@ export interface Paged<T> { data: T[]; total: number; page: number; totalPages: 
 
 export interface UniSubject {
   id: string; code: string; name: string; credits: number; type: string; branch: string | null
-  semesterId: string; semesterLabel: string; semesterNumber: number
-  academicYearId: string; academicYearLabel: string
+  semesterNumber: number
 }
 
 async function downloadBlob(path: string, filename: string) {
@@ -58,7 +68,7 @@ async function downloadBlob(path: string, filename: string) {
 export const universityApi = {
   overview: () => api.get<UniOverview>('/admin/overview').then((r) => r.data),
 
-  subjects: (params: { academicYearId?: string; semesterId?: string; branch?: string }) =>
+  subjects: (params: { semesterNumber?: number; branch?: string }) =>
     api.get<{ data: UniSubject[] }>('/admin/subjects', { params }).then((r) => r.data),
   createSubject: (body: Record<string, unknown>) => api.post('/admin/subjects', body).then((r) => r.data),
   updateSubject: (id: string, body: Record<string, unknown>) => api.put(`/admin/subjects/${id}`, body).then((r) => r.data),
@@ -67,17 +77,16 @@ export const universityApi = {
   downloadSubjectsTemplate: () => downloadBlob('/admin/subjects/csv/template', 'subjects-template.csv'),
 
   years: () => api.get<{ data: UniYear[] }>('/admin/years').then((r) => r.data),
-  createYear: (body: { label: string; startDate: string; endDate: string }) => api.post('/admin/years', body).then((r) => r.data),
+  createYear: (body: { label: string; startDate?: string; endDate?: string; activeSemester?: number }) => api.post('/admin/years', body).then((r) => r.data),
   activateYear: (id: string) => api.post(`/admin/years/${id}/activate`).then((r) => r.data),
   createSemester: (body: { academicYearId: string; number: number; startDate: string; endDate: string }) => api.post('/admin/semesters', body).then((r) => r.data),
   activateSemester: (id: string) => api.post(`/admin/semesters/${id}/activate`).then((r) => r.data),
   createBatch: (body: { academicYearId: string; code: string; yearLevel: string }) => api.post('/admin/batches', body).then((r) => r.data),
 
   hods: () => api.get<UniHodsResponse>('/admin/hods').then((r) => r.data),
+  promotionDashboard: () => api.get<PromotionDashboard>('/admin/promotion-dashboard').then((r) => r.data),
   setHod: (facultyId: string, isHod: boolean) => api.post(`/admin/hods/${facultyId}/toggle`, { isHod }).then((r) => r.data),
   assignScope: (facultyId: string, batchId: string) => api.post('/admin/hod-scope', { facultyId, batchId }).then((r) => r.data),
-  bulkCreateBatches: (body: { academicYearId: string; hodId: string; initial: string; count: number; yearLevel: string }) =>
-    api.post<{ created: { id: string; code: string }[]; initial: string; count: number }>('/admin/batches/bulk', body).then((r) => r.data),
   removeScope: (batchId: string) => api.delete(`/admin/hod-scope/${batchId}`).then((r) => r.data),
 
   faculty: (params: { search?: string; page?: number }) => api.get<Paged<UniFacultyRow>>('/admin/faculty', { params }).then((r) => r.data),
@@ -91,6 +100,8 @@ export const universityApi = {
 
   students: (params: { search?: string; branch?: string; page?: number }) => api.get<Paged<UniStudentRow>>('/admin/students', { params }).then((r) => r.data),
   setStudentActive: (id: string, isActive: boolean) => api.patch(`/admin/students/${id}/active`, { isActive }).then((r) => r.data),
+  studentDetail: (enrollmentNo: string) => api.get(`/admin/students/${enrollmentNo}`).then((r) => r.data),
+  studentHistory: (enrollmentNo: string) => api.get<{ enrollmentNo: string; journey: { semesterNumber: number; semesterLabel: string; yearLevel: string; batchCode: string; rollNo: string; academicYear: string; isCurrent: boolean }[] }>(`/admin/students/${enrollmentNo}/history`).then((r) => r.data),
 
   branches: () => api.get<{ data: { id: string; code: string; name: string; studentCount: number }[]; orphanBranches: { branch: string; count: number }[] }>('/admin/branches').then((r) => r.data),
   createBranch: (body: { code: string; name: string }) => api.post('/admin/branches', body).then((r) => r.data),

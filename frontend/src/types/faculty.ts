@@ -71,6 +71,7 @@ export interface FacultyNote {
   fileSize?: number
   fileType?: string
   aiSummaryStatus?: 'pending' | 'complete' | 'failed' | null
+  batchCodes?: string[]
   createdAt: string
 }
 
@@ -84,6 +85,7 @@ export interface FacultyQuiz {
   timeLimitMins?: number | null
   questionCount?: number
   attemptCount?: number
+  batchCodes?: string[]
   createdAt: string
 }
 

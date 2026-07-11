@@ -20,6 +20,8 @@ import { Pagination } from '@/components/ui/Pagination'
 import { TableSkeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { HistoryBanner } from '@/components/hod/HistoryBanner'
+import { useHistoryStore } from '@/stores/historyStore'
 import { FacultyDetailModal } from './faculty/FacultyDetailModal'
 import { AddFacultyModal } from './faculty/AddFacultyModal'
 
@@ -27,6 +29,8 @@ const YEAR_LABEL: Record<string, string> = { FY: '1st Year', SY: '2nd Year', TY:
 
 export default function FacultyPage() {
   const qc = useQueryClient()
+  const history = useHistoryStore()
+  const readOnly = !!history.semesterId
   const [search, setSearch] = useState('')
   const [role, setRole] = useState('')
   const [status, setStatus] = useState('')
@@ -38,8 +42,8 @@ export default function FacultyPage() {
 
   const debouncedSearch = useDebounce(search)
   const filters = useMemo(
-    () => ({ search: debouncedSearch || undefined, role: role || undefined, status: status || undefined, page, limit: 10 }),
-    [debouncedSearch, role, status, page],
+    () => ({ search: debouncedSearch || undefined, role: role || undefined, status: status || undefined, semesterId: history.semesterId || undefined, page, limit: 10 }),
+    [debouncedSearch, role, status, history.semesterId, page],
   )
 
   const list = useQuery({ queryKey: ['hod', 'faculty', filters], queryFn: () => hodApi.faculty.list(filters) })
@@ -61,11 +65,14 @@ export default function FacultyPage() {
       action={
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" leftIcon={<Download size={15} />} onClick={() => hodApi.faculty.export(filters)}>Export</Button>
-          <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload CSV</Button>
-          <Button leftIcon={<UserPlus size={15} />} onClick={() => setShowAdd(true)}>Add Faculty</Button>
+          {!readOnly && <>
+            <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload CSV</Button>
+            <Button leftIcon={<UserPlus size={15} />} onClick={() => setShowAdd(true)}>Add Faculty</Button>
+          </>}
         </div>
       }
     >
+      <HistoryBanner />
       <FilterBar>
         <div className="w-64 max-w-full">
           <SearchInput value={search} onChange={(v) => { setSearch(v); setPage(1) }} placeholder="Search name or employee ID" />

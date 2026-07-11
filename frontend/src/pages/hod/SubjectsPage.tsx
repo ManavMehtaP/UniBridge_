@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { BookOpen, FileText, Plus, UserPlus, Users, X } from 'lucide-react'
-import { hodApi } from '@/api/hod'
+import { BookOpen, FileText, Plus, SlidersHorizontal, UserPlus, Users, X } from 'lucide-react'
+import { hodApi, type SubjectConfigInput } from '@/api/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
 import { useDebounce } from '@/hooks/shared/useDebounce'
@@ -40,6 +40,7 @@ export default function SubjectsPage() {
   const [search, setSearch] = useState('')
   const [type, setType] = useState('')
   const [manageOf, setManageOf] = useState<string | null>(null)
+  const [configOf, setConfigOf] = useState<string | null>(null)
 
   const debouncedSearch = useDebounce(search)
   const filters = useMemo(
@@ -136,9 +137,12 @@ export default function SubjectsPage() {
                   )}
                 </div>
 
-                <div className="mt-3 border-t border-border-light pt-3">
-                  <Button size="sm" variant="outline" leftIcon={<UserPlus size={14} />} onClick={() => setManageOf(s.id)} className="w-full">
-                    Manage Faculty
+                <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border-light pt-3">
+                  <Button size="sm" variant="outline" leftIcon={<SlidersHorizontal size={14} />} onClick={() => setConfigOf(s.id)}>
+                    Assessment
+                  </Button>
+                  <Button size="sm" variant="outline" leftIcon={<UserPlus size={14} />} onClick={() => setManageOf(s.id)}>
+                    Faculty
                   </Button>
                 </div>
               </Card>
@@ -155,6 +159,8 @@ export default function SubjectsPage() {
           onChanged={invalidate}
         />
       )}
+
+      {configOf && <SubjectConfigModal subjectId={configOf} onClose={() => setConfigOf(null)} />}
 
     </PageShell>
   )
@@ -239,4 +245,111 @@ function ManageFacultyModal({ subject, semesterId, onClose, onChanged }: {
       </div>
     </Modal>
   )
+}
+
+const THEORY_RULES = [
+  { value: 'AVG_ALL', label: 'Average of all four (T1–T4)' },
+  { value: 'BEST_3', label: 'Best three of four' },
+  { value: 'BEST_2', label: 'Best two of four' },
+]
+
+type Comp = { key: string; label: string; weightagePct: number; isEnabled: boolean }
+
+function SubjectConfigModal({ subjectId, onClose }: { subjectId: string; onClose: () => void }) {
+  const qc = useQueryClient()
+  const cfg = useQuery({ queryKey: ['hod', 'subject-config', subjectId], queryFn: () => hodApi.subjects.getConfig(subjectId) })
+  const [totalMarks, setTotalMarks] = useState(100)
+  const [passingMarks, setPassingMarks] = useState(40)
+  const [theoryRule, setTheoryRule] = useState('AVG_ALL')
+  const [comps, setComps] = useState<Comp[]>([])
+
+  // seed local state from server once loaded (merge catalog so all options are pickable)
+  const loadedId = cfg.data?.id
+  useEffect(() => {
+    if (!cfg.data) return
+    setTotalMarks(cfg.data.totalMarks); setPassingMarks(cfg.data.passingMarks); setTheoryRule(cfg.data.theoryRule)
+    const existing = new Map(cfg.data.components.map((c) => [c.key, c]))
+    const merged: Comp[] = cfg.data.catalog.map((cat) => {
+      const e = existing.get(cat.key)
+      return { key: cat.key, label: e?.label ?? cat.label, weightagePct: e?.weightagePct ?? 0, isEnabled: e?.isEnabled ?? false }
+    })
+    setComps(merged)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadedId])
+
+  const enabledTotal = comps.filter((c) => c.isEnabled).reduce((a, c) => a + (Number(c.weightagePct) || 0), 0)
+  const valid = Math.round(enabledTotal) === 100
+
+  const set = (key: string, patch: Partial<Comp>) => setComps((cs) => cs.map((c) => (c.key === key ? { ...c, ...patch } : c)))
+
+  const save = useMutation({
+    mutationFn: () => {
+      const body: SubjectConfigInput = { totalMarks, passingMarks, theoryRule, components: comps }
+      return hodApi.subjects.saveConfig(subjectId, body)
+    },
+    onSuccess: () => { toast.success('Assessment configuration saved'); qc.invalidateQueries({ queryKey: ['hod', 'subject-config', subjectId] }); onClose() },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  const theoryEnabled = comps.some((c) => c.key === 'THEORY' && c.isEnabled)
+
+  return (
+    <Modal open onClose={onClose} size="lg" title={`Assessment — ${cfg.data?.code ?? ''} ${cfg.data?.name ?? ''}`}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => save.mutate()} loading={save.isPending} disabled={!valid}>Save</Button>
+        </>
+      }
+    >
+      {cfg.isLoading ? (
+        <div className="py-10 text-center text-sm text-text-muted">Loading…</div>
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Total Marks"><input type="number" min={1} value={totalMarks} onChange={(e) => setTotalMarks(Math.max(1, Number(e.target.value)))} className={inputCls} /></Field>
+            <Field label="Passing Marks"><input type="number" min={0} value={passingMarks} onChange={(e) => setPassingMarks(Math.max(0, Number(e.target.value)))} className={inputCls} /></Field>
+            <Field label="Total Weightage">
+              <div className={`flex h-10 items-center rounded-sm border px-3 text-sm font-bold ${valid ? 'border-success/40 text-success' : 'border-danger/40 text-danger'}`}>
+                {Math.round(enabledTotal)}% {valid ? '✓' : '· must be 100%'}
+              </div>
+            </Field>
+          </div>
+
+          <div>
+            <div className="mb-2 text-xs font-semibold uppercase text-text-secondary">Components — enable & set weightage</div>
+            <div className="space-y-1.5">
+              {comps.map((c) => (
+                <div key={c.key} className="flex items-center gap-3 rounded-sm border border-border px-3 py-2">
+                  <input type="checkbox" checked={c.isEnabled} onChange={(e) => set(c.key, { isEnabled: e.target.checked })} className="h-4 w-4 accent-primary" />
+                  <span className="flex-1 text-sm font-medium text-text-primary">{c.label}</span>
+                  <div className="flex items-center gap-1">
+                    <input type="number" min={0} max={100} value={c.weightagePct} disabled={!c.isEnabled}
+                      onChange={(e) => set(c.key, { weightagePct: Math.max(0, Math.min(100, Number(e.target.value))) })}
+                      className="h-8 w-20 rounded-sm border border-border bg-surface px-2 text-right text-sm outline-none focus:border-primary disabled:opacity-40" />
+                    <span className="w-6 text-xs text-text-muted">%</span>
+                  </div>
+                  <span className="w-20 text-right text-xs text-text-muted">
+                    {c.isEnabled ? `${Math.round((c.weightagePct / 100) * totalMarks * 100) / 100} marks` : '—'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {theoryEnabled && (
+            <Field label="Theory (T1–T4) calculation rule">
+              <Select value={theoryRule} onChange={(e) => setTheoryRule(e.target.value)} options={THEORY_RULES} />
+            </Field>
+          )}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+const inputCls = 'h-10 w-full rounded-sm border border-border bg-surface px-3 text-sm outline-none focus:border-primary'
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div><label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-text-secondary">{label}</label>{children}</div>
 }

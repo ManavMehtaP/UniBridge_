@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { GraduationCap, Search } from 'lucide-react'
+import { Eye, GraduationCap, Search } from 'lucide-react'
 import { universityApi } from '@/api/university'
 import { errorMessage } from '@/api/client'
 import { PageShell } from '@/components/shared/PageShell'
+import { StudentProfileModal } from '@/components/shared/StudentProfileModal'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -20,6 +21,7 @@ export default function UniversityStudentsPage() {
   const [search, setSearch] = useState('')
   const [branch, setBranch] = useState('')
   const [page, setPage] = useState(1)
+  const [profileOf, setProfileOf] = useState<string | null>(null)
 
   // branch filter options come from the university's universal branch list
   const branchesQ = useQuery({ queryKey: ['uni', 'branches'], queryFn: universityApi.branches })
@@ -64,9 +66,14 @@ export default function UniversityStudentsPage() {
                   <Td className="font-mono text-xs">{s.rollNo ?? '—'}</Td>
                   <Td><Badge tone={s.isActive ? 'success' : 'danger'}>{s.isActive ? 'Active' : 'Inactive'}</Badge></Td>
                   <Td>
-                    <Button size="sm" variant="outline" onClick={() => toggle.mutate({ id: s.id, isActive: !s.isActive })}>
-                      {s.isActive ? 'Deactivate' : 'Activate'}
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      <button onClick={() => setProfileOf(s.enrollmentNo)} className="flex h-8 w-8 items-center justify-center rounded-sm text-text-secondary hover:bg-primary-light hover:text-primary" title="View profile & journey">
+                        <Eye size={16} />
+                      </button>
+                      <Button size="sm" variant="outline" onClick={() => toggle.mutate({ id: s.id, isActive: !s.isActive })}>
+                        {s.isActive ? 'Deactivate' : 'Activate'}
+                      </Button>
+                    </div>
                   </Td>
                 </Tr>
               ))}
@@ -78,6 +85,16 @@ export default function UniversityStudentsPage() {
             </div>
           )}
         </Card>
+      )}
+
+      {profileOf && (
+        <StudentProfileModal
+          enrollmentNo={profileOf}
+          onClose={() => setProfileOf(null)}
+          getFn={(e) => universityApi.studentDetail(e) as any}
+          historyFn={(e) => universityApi.studentHistory(e)}
+          queryKey="uni"
+        />
       )}
     </PageShell>
   )

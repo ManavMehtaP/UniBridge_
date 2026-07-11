@@ -92,14 +92,70 @@ export default function FacultyAttendancePage() {
     onSuccess: (res: { inserted?: number; updated?: number }) => {
       toast.success(`Saved (${res.inserted ?? 0} new, ${res.updated ?? 0} updated)`)
       day.refetch()
+      summary.refetch()
     },
     onError: (e) => toast.error(errorMessage(e)),
   })
+
+  const summary = useQuery({ queryKey: ['faculty', 'att-summary'], queryFn: facultyApi.attendanceSummary })
 
   const batchOpts = batches.data?.data.map((b) => ({ value: b.id, label: `Batch ${b.code}` })) ?? []
 
   return (
     <PageShell title="Attendance" subtitle="Mark daily attendance by batch — lectures auto-fetched from the timetable">
+      {summary.data && (
+        <div className="mb-5 grid gap-4 lg:grid-cols-3">
+          {/* Overall */}
+          <Card>
+            <CardHeader title="Overall" />
+            <CardBody className="pt-0">
+              <div className="text-3xl font-bold text-text-primary">{summary.data.overall.avgAttendancePct}%</div>
+              <div className="mt-1 text-xs text-text-muted">{summary.data.overall.totalLectures} lectures conducted · {summary.data.semesterLabel}</div>
+              {summary.data.weekly.length > 0 && (
+                <div className="mt-3">
+                  <div className="mb-1.5 text-[11px] font-semibold uppercase text-text-secondary">Weekly trend</div>
+                  <div className="flex items-end gap-1" style={{ height: 44 }}>
+                    {summary.data.weekly.map((w) => (
+                      <div key={w.weekStart} className="flex-1" title={`${w.weekStart}: ${w.pct}% (${w.lectures} lec)`}>
+                        <div className={cn('rounded-sm', w.pct >= 75 ? 'bg-success' : w.pct >= 60 ? 'bg-warning' : 'bg-danger')} style={{ height: Math.max(4, (w.pct / 100) * 40) }} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardBody>
+          </Card>
+          {/* Subject-wise */}
+          <Card className="lg:col-span-2">
+            <CardHeader title="By subject & batch" />
+            <CardBody className="pt-0">
+              {summary.data.bySubjectAndBatch.length === 0 ? (
+                <p className="text-xs text-text-muted">No lectures marked yet.</p>
+              ) : (
+                <div className="scrollbar-thin max-h-44 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="text-left text-[11px] uppercase text-text-muted">
+                      <th className="pb-1.5 font-semibold">Subject</th><th className="font-semibold">Batch</th><th className="font-semibold">Lectures</th><th className="font-semibold">Avg %</th><th className="font-semibold">Below 75%</th>
+                    </tr></thead>
+                    <tbody>
+                      {summary.data.bySubjectAndBatch.map((r, i) => (
+                        <tr key={i} className="border-t border-border">
+                          <td className="py-1.5 font-medium">{r.subjectCode}</td>
+                          <td>{r.batchCode}</td>
+                          <td className="tabular-nums">{r.totalLecturesMarked}</td>
+                          <td><Badge tone={r.avgAttendancePct >= 75 ? 'success' : r.avgAttendancePct >= 60 ? 'warning' : 'danger'}>{r.avgAttendancePct}%</Badge></td>
+                          <td className="tabular-nums">{r.belowThresholdCount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardBody>
+          </Card>
+        </div>
+      )}
+
       <FilterBar>
         <Select className="w-52" value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Select batch" options={batchOpts} />
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 rounded-sm border border-border bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10" />

@@ -67,6 +67,7 @@ export default function QuizzesPage() {
                 <Badge tone={q.isPublished ? 'success' : 'neutral'}>{q.isPublished ? 'Published' : 'Draft'}</Badge>
               </div>
               {q.description && <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{q.description}</p>}
+              {!!q.batchCodes?.length && <p className="mt-2 text-[11px] font-medium text-primary">Visible to: {q.batchCodes.join(', ')}</p>}
               <div className="mt-3 flex items-center justify-between border-t border-border-light pt-3 text-xs text-text-secondary">
                 <div className="flex gap-3">
                   <span><b>{q.questionCount ?? 0}</b> Q</span>
@@ -87,7 +88,7 @@ export default function QuizzesPage() {
         </div>
       )}
 
-      <CreateQuizModal open={showCreate} onClose={() => setShowCreate(false)} subjectOpts={subjectOpts} onSuccess={() => qc.invalidateQueries({ queryKey: ['faculty', 'quizzes'] })} />
+      <CreateQuizModal open={showCreate} onClose={() => setShowCreate(false)} subjectOpts={subjectOpts} assignments={scope.data?.assignments ?? []} semesterId={scope.data?.activeSemester.id ?? ''} onSuccess={() => qc.invalidateQueries({ queryKey: ['faculty', 'quizzes'] })} />
 
       <ConfirmDialog
         open={!!deleteOf}
@@ -102,16 +103,20 @@ export default function QuizzesPage() {
   )
 }
 
-function CreateQuizModal({ open, onClose, subjectOpts, onSuccess }: { open: boolean; onClose: () => void; subjectOpts: { value: string; label: string }[]; onSuccess: () => void }) {
+type Assignment = { subject: { id: string }; batch: { id: string; code: string } }
+
+function CreateQuizModal({ open, onClose, subjectOpts, assignments, semesterId, onSuccess }: { open: boolean; onClose: () => void; subjectOpts: { value: string; label: string }[]; assignments: Assignment[]; semesterId: string; onSuccess: () => void }) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [subjectId, setSubjectId] = useState('')
   const [timeLimitMins, setTimeLimitMins] = useState('')
   const [dueDate, setDueDate] = useState('')
+  const [batchIds, setBatchIds] = useState<string[]>([])
+  const batches = useMemo(() => assignments.filter((assignment) => assignment.subject.id === subjectId).map((assignment) => assignment.batch), [assignments, subjectId])
 
   const create = useMutation({
     mutationFn: () => facultyApi.createQuiz({
-      title, description, subjectId,
+      title, description, subjectId, semesterId, batchIds,
       timeLimitMins: timeLimitMins ? Number(timeLimitMins) : null,
       dueDate: dueDate || null,
     }),
@@ -119,7 +124,7 @@ function CreateQuizModal({ open, onClose, subjectOpts, onSuccess }: { open: bool
     onError: (e) => toast.error(errorMessage(e)),
   })
 
-  function close() { setTitle(''); setDescription(''); setSubjectId(''); setTimeLimitMins(''); setDueDate(''); onClose() }
+  function close() { setTitle(''); setDescription(''); setSubjectId(''); setTimeLimitMins(''); setDueDate(''); setBatchIds([]); onClose() }
 
   return (
     <Modal
@@ -127,15 +132,16 @@ function CreateQuizModal({ open, onClose, subjectOpts, onSuccess }: { open: bool
       footer={
         <>
           <Button variant="outline" onClick={close}>Cancel</Button>
-          <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!title || !subjectId}>Create</Button>
+          <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!title || !subjectId || !semesterId || batchIds.length === 0}>Create</Button>
         </>
       }
     >
       <div className="space-y-3">
         <div>
           <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Subject *</label>
-          <Select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} placeholder="Select subject" options={subjectOpts} />
+          <Select value={subjectId} onChange={(e) => { setSubjectId(e.target.value); setBatchIds([]) }} placeholder="Select subject" options={subjectOpts} />
         </div>
+        <BatchAudiencePicker batches={batches} selected={batchIds} onChange={setBatchIds} />
         <div>
           <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Title *</label>
           <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Chapter 1 Quiz" />
@@ -156,5 +162,23 @@ function CreateQuizModal({ open, onClose, subjectOpts, onSuccess }: { open: bool
         </div>
       </div>
     </Modal>
+  )
+}
+
+function BatchAudiencePicker({ batches, selected, onChange }: { batches: { id: string; code: string }[]; selected: string[]; onChange: (ids: string[]) => void }) {
+  if (!batches.length) return <p className="rounded-sm bg-warning-light/40 px-3 py-2 text-xs text-warning">Select a subject to choose its assigned batch.</p>
+  return (
+    <fieldset>
+      <legend className="mb-1.5 text-xs font-semibold uppercase text-text-secondary">Visible to assigned batch *</legend>
+      <div className="flex flex-wrap gap-2">
+        {batches.map((batch) => {
+          const checked = selected.includes(batch.id)
+          return <label key={batch.id} className="flex cursor-pointer items-center gap-2 rounded-sm border border-border px-2.5 py-1.5 text-xs font-medium text-text-primary">
+            <input type="checkbox" checked={checked} onChange={() => onChange(checked ? selected.filter((id) => id !== batch.id) : [...selected, batch.id])} className="accent-primary" />
+            {batch.code}
+          </label>
+        })}
+      </div>
+    </fieldset>
   )
 }

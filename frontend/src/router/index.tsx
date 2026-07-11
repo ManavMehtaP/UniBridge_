@@ -43,6 +43,7 @@ import UniDashboard from '@/pages/university/DashboardPage'
 import UniYears from '@/pages/university/YearsPage'
 import UniBranches from '@/pages/university/BranchesPage'
 import UniHods from '@/pages/university/HodsPage'
+import UniPromotion from '@/pages/university/PromotionDashboardPage'
 import UniFaculty from '@/pages/university/FacultyPage'
 import UniStudents from '@/pages/university/StudentsPage'
 import UniSubjects from '@/pages/university/SubjectsPage'
@@ -115,6 +116,7 @@ export const router = createBrowserRouter([
           { path: '/university/years', element: <UniYears /> },
           { path: '/university/branches', element: <UniBranches /> },
           { path: '/university/hods', element: <UniHods /> },
+          { path: '/university/promotion', element: <UniPromotion /> },
           { path: '/university/faculty', element: <UniFaculty /> },
           { path: '/university/students', element: <UniStudents /> },
           { path: '/university/subjects', element: <UniSubjects /> },

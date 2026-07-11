@@ -6,6 +6,8 @@ import { ClipboardList, Pencil, Search, ShieldCheck, Upload } from 'lucide-react
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
+import { useHistoryStore } from '@/stores/historyStore'
+import { HistoryBanner } from '@/components/hod/HistoryBanner'
 import { cn } from '@/lib/utils'
 import { PageShell } from '@/components/shared/PageShell'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -46,7 +48,8 @@ interface Preview {
 
 export default function ResultsPage() {
   const scope = useHodScope()
-  const semesterId = scope.data?.activeSemester.id
+  const history = useHistoryStore()
+  const semesterId = history.semesterId ?? scope.data?.activeSemester.id
 
   const [phaseId, setPhaseId] = useState('')
   const [subjectId, setSubjectId] = useState('')
@@ -64,7 +67,7 @@ export default function ResultsPage() {
     queryFn: () => hodApi.results.phaseStatus(semesterId) as Promise<{ phases: { phase: string; subjectsTotal: number; subjectsUploaded: number; status: string }[] }>,
     enabled: !!semesterId,
   })
-  const history = useQuery({
+  const hist = useQuery({
     queryKey: ['hod', 'results', 'history'],
     queryFn: () => hodApi.results.uploadHistory(1, 8) as Promise<{ data: { phase: string; subjectCode: string; batchCode: string; uploadedAt: string; studentCount: number }[] }>,
   })
@@ -92,6 +95,7 @@ export default function ResultsPage() {
         </Link>
       }
     >
+      <HistoryBanner />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="space-y-4 lg:col-span-2">
           {/* Filter bar */}

@@ -5,6 +5,7 @@ import {
   GitBranch,
   GraduationCap,
   LayoutDashboard,
+  TrendingUp,
   UserCheck,
   Users,
 } from 'lucide-react'
@@ -18,6 +19,7 @@ export const universityNavItems: NavSection[] = [
       { id: 'years', label: 'Academic Years', path: '/university/years', icon: CalendarRange },
       { id: 'branches', label: 'Branches', path: '/university/branches', icon: GitBranch },
       { id: 'hods', label: 'HODs', path: '/university/hods', icon: UserCheck },
+      { id: 'promotion', label: 'Promotion', path: '/university/promotion', icon: TrendingUp },
       { id: 'faculty', label: 'Faculty', path: '/university/faculty', icon: Users },
       { id: 'students', label: 'Students', path: '/university/students', icon: GraduationCap },
       { id: 'subjects', label: 'Subjects', path: '/university/subjects', icon: BookOpen },

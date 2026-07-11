@@ -5,6 +5,8 @@ import { Sparkles, Upload, UserCheck, UserPlus, Users, UserX } from 'lucide-reac
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
+import { useHistoryStore } from '@/stores/historyStore'
+import { HistoryBanner } from '@/components/hod/HistoryBanner'
 import { useDebounce } from '@/hooks/shared/useDebounce'
 import { PageShell } from '@/components/shared/PageShell'
 import { FilterBar } from '@/components/shared/FilterBar'
@@ -25,7 +27,8 @@ import { EmptyState } from '@/components/ui/EmptyState'
 export default function MentorshipPage() {
   const qc = useQueryClient()
   const scope = useHodScope()
-  const semesterId = scope.data?.activeSemester.id
+  const history = useHistoryStore()
+  const semesterId = history.semesterId ?? scope.data?.activeSemester.id
 
   const [tab, setTab] = useState('mentors')
   const [search, setSearch] = useState('')
@@ -69,12 +72,15 @@ export default function MentorshipPage() {
       title="Mentorship"
       subtitle="Assign and manage student mentors"
       action={
+        history.semesterId ? undefined : (
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload CSV</Button>
           <Button leftIcon={<Sparkles size={15} />} loading={autoAssign.isPending} onClick={() => autoAssign.mutate()}>Auto-Assign</Button>
         </div>
+        )
       }
     >
+      <HistoryBanner />
       <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-4">
         {summary.isLoading ? <StatCardSkeleton count={4} /> : s ? (
           <>
@@ -166,7 +172,7 @@ export default function MentorshipPage() {
                     <Td>{u.batchCode}</Td>
                     <Td>{u.branch}</Td>
                     <Td className="text-right">
-                      <Button size="sm" variant="outline" onClick={() => setAssignFor(u.enrollmentNo)}>Assign</Button>
+                      {!history.semesterId && <Button size="sm" variant="outline" onClick={() => setAssignFor(u.enrollmentNo)}>Assign</Button>}
                     </Td>
                   </Tr>
                 ))}

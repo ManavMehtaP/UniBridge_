@@ -49,6 +49,7 @@ enum AnnouncementScope {
   ALL           // all faculty + all students in university
   BATCH         // specific batch only
   YEAR_LEVEL    // all students of a year level (FY / SY / TY / FINAL)
+  FACULTY_ONLY  // faculty of the sender's HOD only — students never see this
 }
 
 enum EventType {
@@ -166,6 +167,7 @@ model University {
   attendanceRules     AttendanceRules?
   notificationConfig  NotificationConfig[]
   archiveJobs         ArchiveJob[]
+  notes               Note[]
 
   @@map("universities")
 }
@@ -239,7 +241,6 @@ model Semester {
   updatedAt      DateTime       @updatedAt
 
   academicYear    AcademicYear        @relation(fields: [academicYearId], references: [id])
-  subjects        Subject[]
   phases          Phase[]
   enrollments     StudentEnrollment[]
   timetableSlots  TimetableSlot[]
@@ -248,6 +249,7 @@ model Semester {
   promotionFroms  PromotionMapping[]  @relation("FromSemester")
   promotionTos    PromotionMapping[]  @relation("ToSemester")
   facultyAssignments FacultyBatchAssignment[]
+  quizzes         Quiz[]
 
   @@unique([universityId, academicYearId, number])
   @@index([academicYearId, status])
@@ -300,6 +302,8 @@ model Batch {
   facultyAssignments FacultyBatchAssignment[]
   timetableSlots     TimetableSlot[]
   hodScope           HodBatchScope?          // ONE HOD per batch — @unique on HodBatchScope.batchId
+  noteTargets        NoteBatchTarget[]
+  quizTargets        QuizBatchTarget[]
 
   @@unique([academicYearId, code])
   @@index([academicYearId, yearLevel])
@@ -343,30 +347,65 @@ model HodBatchScope {
 //    Subjects link to batches via FacultyBatchAssignment.
 // ─────────────────────────────────────────────────────────────
 
+// ponytail: subjects are a university-global catalog keyed by SEMESTER NUMBER (1–8), added once
+// and shared across every batch/year. No per-academic-year rows. Editing soft-deletes the old row
+// and creates a new one so past results/attendance keep pointing at the original subject.
 model Subject {
-  id           String      @id @default(uuid())
-  universityId String
-  semesterId   String
-  code         String      // "COA", "DM", "TOC"
-  name         String      // "Computer Organization & Architecture"
-  credits      Int         @default(4)
-  type         SubjectType @default(THEORY)
-  branch       String?     // "IT", "CSE" — subjects belong to a year+semester+branch
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-  deletedAt    DateTime?   // soft delete — blocked if has results/attendance
+  id             String      @id @default(uuid())
+  universityId   String
+  semesterNumber Int         // 1..8 — the semester this subject belongs to, for all batches/years
+  code           String      // "COA", "DM", "TOC"
+  name           String      // "Computer Organization & Architecture"
+  credits        Int         @default(4)
+  type           SubjectType @default(THEORY)
+  branch         String?     // optional branch tag
+  // ── configuration-driven assessment (nothing hardcoded) ──
+  totalMarks     Int         @default(100)  // marks the subject is out of
+  passingMarks   Int         @default(40)   // overall passing threshold
+  theoryRule     String      @default("AVG_ALL") // AVG_ALL | BEST_3 | BEST_2 — how T1–T4 → Theory
+  isActive       Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  deletedAt      DateTime?   // soft delete — old row retained so dependent data stays consistent
 
-  semester           Semester               @relation(fields: [semesterId], references: [id])
+  components         SubjectComponent[]
   results            Result[]
   notes              Note[]
   attendanceRecords  AttendanceRecord[]
   timetableSlots     TimetableSlot[]
   facultyAssignments FacultyBatchAssignment[]
   pyqFiles           PYQFile[]
+  quizzes            Quiz[]
 
-  @@unique([semesterId, code])
-  @@index([semesterId])
+  @@unique([universityId, semesterNumber, code])
+  @@index([universityId, semesterNumber])
   @@map("subjects")
+}
+
+// ─────────────────────────────────────────────────────────────
+// 8b. SUBJECT COMPONENT (configuration-driven assessment weightage)
+//     HOD enables components (Theory / IPE / GP / Assignment / …) per subject and sets each
+//     component's weightage as a % of the subject total. Enabled weightages MUST sum to 100
+//     (validated at the app layer). Everything downstream (marks entry, marksheet) derives from
+//     this — no hardcoded components or splits. `key` is free-form so custom components work.
+// ─────────────────────────────────────────────────────────────
+
+model SubjectComponent {
+  id           String   @id @default(uuid())
+  subjectId    String
+  key          String   // "THEORY" | "IPE" | "GP" | "ASSIGNMENT" | "QUIZ" | "VIVA" | "LAB" | custom
+  label        String   // display name, e.g. "Internal Practical Exam"
+  weightagePct Float    @default(0)   // % of the subject total; enabled ones sum to 100
+  isEnabled    Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([subjectId, key])
+  @@index([subjectId])
+  @@map("subject_components")
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -384,6 +423,7 @@ model Faculty {
   email           String    @unique
   passwordHash    String
   year            String?   // FY / SY / TY / FINAL — the year this faculty teaches (null for Dean)
+  hodId           String?   // the HOD this faculty belongs to (a faculty pool per HOD)
   isHod           Boolean   @default(false)
   isDean          Boolean   @default(false)  // University (Dean) portal access
   mentorCode      String?   // 3-char, e.g. "SYD" — null for HOD
@@ -395,6 +435,8 @@ model Faculty {
   deletedAt       DateTime? // soft delete
 
   university         University               @relation(fields: [universityId], references: [id])
+  hod                Faculty?                 @relation("HodPool", fields: [hodId], references: [id])
+  poolMembers        Faculty[]                @relation("HodPool")
   hodBatchScopes     HodBatchScope[]          // populated only when isHod = true
   batchAssignments   FacultyBatchAssignment[] // subjects taught
   mentorAssignments  MentorAssignment[]       // populated only when isHod = false
@@ -413,6 +455,7 @@ model Faculty {
   @@unique([universityId, employeeId])
   @@index([universityId, isHod])
   @@index([universityId, mentorCode])
+  @@index([hodId])
   @@map("faculties")
 }
 
@@ -462,6 +505,9 @@ model Student {
   profilePhotoUrl String?
   phone           String?
   isActive        Boolean   @default(true)
+  // ponytail: graduation is a STATUS, never a delete/archive. History stays fully accessible.
+  graduationStatus String   @default("ACTIVE")  // ACTIVE | PASS_OUT | DETAINED
+  graduatedAt      DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   deletedAt       DateTime?
@@ -617,12 +663,14 @@ model AttendanceRecord {
 
 model Note {
   id          String    @id @default(uuid())
+  universityId String
   subjectId   String
   facultyId   String
   title       String
   description String?
   fileUrl     String    // S3 public/presigned URL
   fileKey     String    // S3 object key for deletion
+  originalFileName String? // original client filename for display/download metadata
   mimeType    String    // "application/pdf", "video/mp4"
   fileSizeKb  Int?
   aiSummary   String?   // populated by Django after processing
@@ -633,11 +681,28 @@ model Note {
 
   subject    Subject    @relation(fields: [subjectId], references: [id])
   faculty    Faculty    @relation(fields: [facultyId], references: [id])
+  university University @relation(fields: [universityId], references: [id])
   flashcards Flashcard[]
+  targets    NoteBatchTarget[]
 
   @@index([subjectId])
   @@index([facultyId])
+  @@index([universityId])
   @@map("notes")
+}
+
+// Explicit audience metadata for a faculty note. A note must have at least
+// one target at the application layer; students can only access their batch.
+model NoteBatchTarget {
+  noteId  String
+  batchId String
+
+  note    Note  @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  batch   Batch @relation(fields: [batchId], references: [id])
+
+  @@id([noteId, batchId])
+  @@index([batchId])
+  @@map("note_batch_targets")
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -743,12 +808,29 @@ model Quiz {
   deletedAt     DateTime?
 
   faculty    Faculty       @relation(fields: [facultyId], references: [id])
+  subject    Subject       @relation(fields: [subjectId], references: [id])
+  semester   Semester      @relation(fields: [semesterId], references: [id])
   questions  Question[]
   attempts   QuizAttempt[]
+  targets    QuizBatchTarget[]
 
   @@index([subjectId, semesterId])
   @@index([facultyId])
   @@map("quizzes")
+}
+
+// Quizzes follow the same batch audience rule as notes. This also prevents a
+// student from starting a published quiz intended for another division.
+model QuizBatchTarget {
+  quizId  String
+  batchId String
+
+  quiz    Quiz  @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  batch   Batch @relation(fields: [batchId], references: [id])
+
+  @@id([quizId, batchId])
+  @@index([batchId])
+  @@map("quiz_batch_targets")
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -80,6 +80,10 @@ facultyRouter.get("/timetable", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyTimetable(req.user!.id, req.user!.universityId, req.query.semesterId as string | undefined));
 }));
 
+facultyRouter.get("/students/:enrollmentNo/history", asyncHandler(async (req, res) => {
+  res.json(await portalService.getStudentHistory({ universityId: req.user!.universityId, userId: req.user!.id, role: req.user!.role, isHod: false, hodBatchIds: [] } as any, str(req.params.enrollmentNo)));
+}));
+
 facultyRouter.get("/students/:enrollmentNo/attendance", asyncHandler(async (req, res) => {
   res.json(
     await portalService.facultyStudentAttendance(
@@ -368,7 +372,7 @@ facultyRouter.get("/exam/status", asyncHandler(async (req, res) => {
 }));
 
 facultyRouter.get("/exam/context", asyncHandler(async (req, res) => {
-  res.json(await portalService.examContext(req.user!.universityId));
+  res.json(await portalService.examContext(req.user!.universityId, req.user!.id));
 }));
 
 facultyRouter.get("/exam/assignments", asyncHandler(async (req, res) => {

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { Eye } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
 import { useDebounce } from '@/hooks/shared/useDebounce'
 import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
@@ -7,6 +8,7 @@ import { PageShell } from '@/components/shared/PageShell'
 import { FilterBar } from '@/components/shared/FilterBar'
 import { SearchInput } from '@/components/shared/SearchInput'
 import { AttendancePctCell } from '@/components/shared/AttendancePctCell'
+import { StudentProfileModal } from '@/components/shared/StudentProfileModal'
 import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Select } from '@/components/ui/Select'
@@ -23,6 +25,7 @@ export default function FacultyStudentsPage() {
   const [search, setSearch] = useState('')
   const [batchId, setBatchId] = useState('')
   const [page, setPage] = useState(1)
+  const [profileOf, setProfileOf] = useState<string | null>(null)
   const debounced = useDebounce(search)
 
   const batchOpts = useMemo(() => {
@@ -67,6 +70,7 @@ export default function FacultyStudentsPage() {
                   <Th>Roll No.</Th>
                   <Th>Attendance</Th>
                   <Th>Status</Th>
+                  <Th className="text-right">Actions</Th>
                 </tr>
               </thead>
               <tbody>
@@ -83,6 +87,13 @@ export default function FacultyStudentsPage() {
                     <Td className="whitespace-nowrap text-text-secondary">{s.rollNo ?? '—'}</Td>
                     <Td><AttendancePctCell pct={s.attendancePct} /></Td>
                     <Td><Badge tone={statusTone[s.status]}>{s.status.replace('_', ' ')}</Badge></Td>
+                    <Td>
+                      <div className="flex justify-end">
+                        <button onClick={() => setProfileOf(s.enrollmentNo)} className="flex h-8 w-8 items-center justify-center rounded-sm text-text-secondary hover:bg-primary-light hover:text-primary" title="View profile & journey">
+                          <Eye size={16} />
+                        </button>
+                      </div>
+                    </Td>
                   </Tr>
                 ))}
               </tbody>
@@ -95,6 +106,23 @@ export default function FacultyStudentsPage() {
           </>
         )}
       </Card>
+
+      {profileOf && (
+        <StudentProfileModal
+          enrollmentNo={profileOf}
+          onClose={() => setProfileOf(null)}
+          getFn={async (e) => {
+            const p = await facultyApi.studentDetail(e) as any
+            return {
+              enrollmentNo: p.enrollmentNo, name: p.name, email: p.email ?? '', phone: p.phone ?? null,
+              branch: p.branch, status: p.status,
+              currentEnrollment: p.currentBatch ? { batchCode: p.currentBatch.code, semesterLabel: p.currentSemester?.label ?? '', rollNo: p.rollNo ?? '', attendancePct: p.attendancePct ?? 0 } : null,
+            }
+          }}
+          historyFn={(e) => facultyApi.studentHistory(e)}
+          queryKey="faculty"
+        />
+      )}
     </PageShell>
   )
 }

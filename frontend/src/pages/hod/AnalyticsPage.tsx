@@ -5,6 +5,8 @@ import { Activity, AlertTriangle, Award, Download, TrendingUp, Users } from 'luc
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
+import { useHistoryStore } from '@/stores/historyStore'
+import { HistoryBanner } from '@/components/hod/HistoryBanner'
 import { PageShell } from '@/components/shared/PageShell'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -18,7 +20,8 @@ import { DonutChart, MultiLineChart, RadarCompareChart, SimpleBarChart } from '@
 
 export default function AnalyticsPage() {
   const scope = useHodScope()
-  const semesterId = scope.data?.activeSemester.id
+  const history = useHistoryStore()
+  const semesterId = history.semesterId ?? scope.data?.activeSemester.id
   const [batchId, setBatchId] = useState('')
   const [phaseId, setPhaseId] = useState('')
   const [tab, setTab] = useState('attendance')
@@ -62,6 +65,7 @@ export default function AnalyticsPage() {
         </div>
       }
     >
+      <HistoryBanner />
       <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-3 lg:grid-cols-5">
         {kpi.isLoading || !k ? <StatCardSkeleton count={5} /> : (
           <>

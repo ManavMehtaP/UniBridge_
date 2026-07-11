@@ -5,6 +5,8 @@ import { AlertTriangle, Download, Lock, LockOpen } from 'lucide-react'
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
+import { useHistoryStore } from '@/stores/historyStore'
+import { HistoryBanner } from '@/components/hod/HistoryBanner'
 import { attendanceTone } from '@/lib/utils'
 import { PageShell } from '@/components/shared/PageShell'
 import { AttendancePctCell } from '@/components/shared/AttendancePctCell'
@@ -26,7 +28,8 @@ const cellBg = { success: 'bg-success-light text-success', warning: 'bg-warning-
 export default function AttendancePage() {
   const qc = useQueryClient()
   const scope = useHodScope()
-  const semesterId = scope.data?.activeSemester.id
+  const history = useHistoryStore()
+  const semesterId = history.semesterId ?? scope.data?.activeSemester.id
   const [batchId, setBatchId] = useState('')
   const [tab, setTab] = useState('overview')
   const [page, setPage] = useState(1)
@@ -105,6 +108,7 @@ export default function AttendancePage() {
         </div>
       }
     >
+      <HistoryBanner />
       <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-4">
         {summary.isLoading ? (
           <StatCardSkeleton count={4} />

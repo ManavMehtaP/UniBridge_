@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Download, Eye, Trash2, Upload, UserPlus } from 'lucide-react'
+import { Download, Eye, GraduationCap, Trash2, Upload, UserPlus } from 'lucide-react'
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
 import { useDebounce } from '@/hooks/shared/useDebounce'
+import { useHistoryStore } from '@/stores/historyStore'
 import type { StudentRow } from '@/types/hod'
 import { PageShell } from '@/components/shared/PageShell'
 import { FilterBar } from '@/components/shared/FilterBar'
@@ -22,7 +23,7 @@ import { Pagination } from '@/components/ui/Pagination'
 import { TableSkeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
-import { StudentProfileModal } from './students/StudentProfileModal'
+import { StudentProfileModal } from '@/components/shared/StudentProfileModal'
 import { AddStudentModal } from './students/AddStudentModal'
 
 const STATUSES = ['ACTIVE', 'AT_RISK', 'INACTIVE']
@@ -32,6 +33,7 @@ const statusTone = { ACTIVE: 'success', AT_RISK: 'danger', INACTIVE: 'neutral' }
 export default function StudentsPage() {
   const qc = useQueryClient()
   const scope = useHodScope()
+  const history = useHistoryStore()
 
   const [search, setSearch] = useState('')
   const [branch, setBranch] = useState('')
@@ -44,6 +46,9 @@ export default function StudentsPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [deleteOf, setDeleteOf] = useState<StudentRow | null>(null)
 
+  // ponytail: when a past semester is selected, pass its id → backend shows the students this HOD
+  // managed then (read-only). null → live current view.
+  const historySemesterId = history.semesterId
   const debouncedSearch = useDebounce(search)
   const filters = useMemo(
     () => ({
@@ -51,10 +56,11 @@ export default function StudentsPage() {
       branch: branch || undefined,
       batchId: batchId || undefined,
       status: status || undefined,
+      semesterId: historySemesterId || undefined,
       page,
       limit: 20,
     }),
-    [debouncedSearch, branch, batchId, status, page],
+    [debouncedSearch, branch, batchId, status, historySemesterId, page],
   )
 
   const list = useQuery({
@@ -72,6 +78,14 @@ export default function StudentsPage() {
     onError: (e) => toast.error(errorMessage(e)),
   })
 
+  // Graduation is only at Semester 8 (final), and only in the live (non-history) view.
+  const isFinalSem = scope.data?.activeSemester?.number === 8 && !historySemesterId
+  const graduate = useMutation({
+    mutationFn: () => hodApi.graduateFinalYear(),
+    onSuccess: (r) => { toast.success(`${r.graduated} students marked Pass Out`); qc.invalidateQueries({ queryKey: ['hod', 'students'] }) },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
   const batchOptions = scope.data?.batches.map((b) => ({ value: b.id, label: b.code })) ?? []
 
   function resetPage<T>(setter: (v: T) => void) {
@@ -81,24 +95,45 @@ export default function StudentsPage() {
     }
   }
 
+  const readOnly = !!historySemesterId
+
   return (
     <PageShell
       title="Students"
-      subtitle={list.data ? `${list.data.total.toLocaleString('en-IN')} students` : 'Manage student records'}
+      subtitle={
+        readOnly
+          ? `${history.semesterLabel ?? 'Past semester'} — history (read-only)`
+          : list.data ? `${list.data.total.toLocaleString('en-IN')} students` : 'Manage student records'
+      }
       action={
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" leftIcon={<Download size={15} />} onClick={() => hodApi.students.export(filters)}>
             Export
           </Button>
-          <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>
-            Upload CSV
-          </Button>
-          <Button leftIcon={<UserPlus size={15} />} onClick={() => setShowAdd(true)}>
-            Add Student
-          </Button>
+          {!readOnly && (
+            <>
+              {isFinalSem && (
+                <Button variant="outline" leftIcon={<GraduationCap size={15} />} loading={graduate.isPending}
+                  onClick={() => { if (confirm('Mark all current final-year students as Pass Out? History is preserved; this cannot mark them back automatically.')) graduate.mutate() }}>
+                  Graduate Final Year
+                </Button>
+              )}
+              <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>
+                Upload CSV
+              </Button>
+              <Button leftIcon={<UserPlus size={15} />} onClick={() => setShowAdd(true)}>
+                Add Student
+              </Button>
+            </>
+          )}
         </div>
       }
     >
+      {readOnly && (
+        <div className="mb-4 flex items-center gap-2 rounded-sm border border-warning/30 bg-warning-light/30 px-3 py-2 text-xs text-warning">
+          Viewing <b>{history.semesterLabel}</b> — students you managed then. Switch to <b>Current Semester</b> in the sidebar to make changes.
+        </div>
+      )}
       <FilterBar>
         <div className="w-64 max-w-full">
           <SearchInput value={search} onChange={resetPage(setSearch)} placeholder="Search name or enrollment no." />
@@ -139,6 +174,8 @@ export default function StudentsPage() {
                       <div className="flex items-center gap-2.5">
                         <Avatar name={s.name} size={32} />
                         <span className="font-medium">{s.name}</span>
+                        {s.graduationStatus === 'PASS_OUT' && <Badge tone="success">Passed Out</Badge>}
+                        {s.graduationStatus === 'DETAINED' && <Badge tone="danger">Detained</Badge>}
                       </div>
                     </Td>
                     <Td className="font-mono text-xs text-text-secondary">{s.enrollmentNo}</Td>
@@ -152,9 +189,11 @@ export default function StudentsPage() {
                         <button onClick={() => setProfileOf(s.enrollmentNo)} className="flex h-8 w-8 items-center justify-center rounded-sm text-text-secondary hover:bg-primary-light hover:text-primary" title="View profile">
                           <Eye size={16} />
                         </button>
-                        <button onClick={() => setDeleteOf(s)} className="flex h-8 w-8 items-center justify-center rounded-sm text-text-secondary hover:bg-danger-light hover:text-danger" title="Remove">
-                          <Trash2 size={16} />
-                        </button>
+                        {!readOnly && (
+                          <button onClick={() => setDeleteOf(s)} className="flex h-8 w-8 items-center justify-center rounded-sm text-text-secondary hover:bg-danger-light hover:text-danger" title="Remove">
+                            <Trash2 size={16} />
+                          </button>
+                        )}
                       </div>
                     </Td>
                   </Tr>
@@ -170,7 +209,15 @@ export default function StudentsPage() {
         )}
       </Card>
 
-      {profileOf && <StudentProfileModal enrollmentNo={profileOf} onClose={() => setProfileOf(null)} />}
+      {profileOf && (
+        <StudentProfileModal
+          enrollmentNo={profileOf}
+          onClose={() => setProfileOf(null)}
+          getFn={(e) => hodApi.students.get(e) as any}
+          historyFn={(e) => hodApi.students.history(e) as any}
+          queryKey="hod"
+        />
+      )}
 
       <AddStudentModal
         open={showAdd}
