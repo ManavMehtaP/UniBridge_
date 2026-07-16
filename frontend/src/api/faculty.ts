@@ -64,7 +64,9 @@ export const facultyApi = {
 
   notes: (params: Params) =>
     api.get<PaginatedResponse<T.FacultyNote>>('/faculty/notes', { params }).then((r) => r.data),
-  uploadNote: (form: FormData) => api.post('/faculty/notes', form).then((r) => r.data),
+  // Multipart: file + fields (title, subjectId, batchIds, releaseAt). Backend uploads to Supabase S3.
+  createNote: (form: FormData) => api.post('/faculty/notes', form).then((r) => r.data),
+  updateNote: (id: string, form: FormData) => api.put(`/faculty/notes/${id}`, form).then((r) => r.data),
   deleteNote: (id: string) => api.delete(`/faculty/notes/${id}`).then((r) => r.data),
 
   quizzes: (params: Params) =>

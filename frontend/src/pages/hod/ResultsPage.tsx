@@ -200,7 +200,7 @@ export default function ResultsPage() {
           <Card>
             <CardHeader title="Recent Mark Entries" />
             <CardBody className="space-y-2 pt-0">
-              {hist.data?.data.map((h, i) => (
+              {history.data?.data.map((h, i) => (
                 <div key={i} className="flex items-center gap-2 border-b border-border-light py-2 text-sm last:border-0">
                   <Upload size={14} className="text-text-muted" />
                   <span className="font-semibold">{h.phase}</span>
@@ -208,7 +208,7 @@ export default function ResultsPage() {
                   <span className="ml-auto text-xs text-text-muted">{h.studentCount}</span>
                 </div>
               ))}
-              {hist.data && hist.data.data.length === 0 && <p className="py-4 text-center text-xs text-text-muted">No marks entered yet.</p>}
+              {history.data && history.data.data.length === 0 && <p className="py-4 text-center text-xs text-text-muted">No marks entered yet.</p>}
             </CardBody>
           </Card>
         </div>

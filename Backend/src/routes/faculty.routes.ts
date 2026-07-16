@@ -225,24 +225,22 @@ facultyRouter.get("/notes", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyNotes(req.user!.id, req.query as Record<string, string | number | undefined>));
 }));
 
+// Browser posts the file (multipart); backend uploads bytes to Supabase S3 and stores metadata.
 facultyRouter.post("/notes", upload.single("file"), asyncHandler(async (req, res) => {
-  res.status(201).json(
-    await portalService.createFacultyNote(
-      req.user!.id,
-      req.user!.universityId,
-      req.file?.buffer,
-      {
-        originalname: req.file?.originalname,
-        mimetype: req.file?.mimetype,
-        size: req.file?.size,
-      },
-      req.body,
-    ),
-  );
+  res.status(201).json(await portalService.createFacultyNote(
+    req.user!.id, req.user!.universityId, req.file?.buffer,
+    { originalname: req.file?.originalname, mimetype: req.file?.mimetype, size: req.file?.size },
+    req.body,
+  ));
 }));
 
-facultyRouter.put("/notes/:noteId", asyncHandler(async (req, res) => {
-  res.json(await portalService.updateFacultyNote(req.user!.id, str(req.params.noteId), req.body));
+// Optional file replace via multipart; JSON body (no file) also accepted for title/desc/reschedule.
+facultyRouter.put("/notes/:noteId", upload.single("file"), asyncHandler(async (req, res) => {
+  res.json(await portalService.updateFacultyNote(
+    req.user!.id, str(req.params.noteId), req.file?.buffer,
+    { originalname: req.file?.originalname, mimetype: req.file?.mimetype, size: req.file?.size },
+    req.body,
+  ));
 }));
 
 facultyRouter.delete("/notes/:noteId", asyncHandler(async (req, res) => {

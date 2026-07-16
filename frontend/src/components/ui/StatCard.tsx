@@ -1,3 +1,4 @@
+import { Minus, TrendingDown, TrendingUp } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Card } from './Card'
 
@@ -13,20 +14,21 @@ export interface StatCardProps {
   className?: string
 }
 
-const trendClass: Record<Trend, string> = {
-  up: 'text-success',
-  down: 'text-danger',
-  neutral: 'text-text-muted',
+// Delta pill: green for up, red for down, muted for flat — reads at a glance without shouting.
+const trendPill: Record<Trend, string> = {
+  up: 'bg-success-light text-success',
+  down: 'bg-danger-light text-danger',
+  neutral: 'bg-surface-2 text-text-muted',
 }
-
-const trendGlyph: Record<Trend, string> = { up: '↑', down: '↓', neutral: '—' }
+const TrendIcon = { up: TrendingUp, down: TrendingDown, neutral: Minus }
 
 export function StatCard({ value, label, icon, iconBg, delta, trend = 'neutral', className }: StatCardProps) {
+  const Icon = TrendIcon[trend]
   return (
-    <Card className={cn('p-4', className)}>
+    <Card className={cn('p-4 transition-shadow hover:shadow-md', className)}>
       <div className="flex items-start justify-between">
         <div>
-          <div className="text-2xl font-bold text-text-primary">{value}</div>
+          <div className="text-2xl font-bold tracking-tight text-text-primary">{value}</div>
           <div className="mt-0.5 text-xs font-medium text-text-secondary">{label}</div>
         </div>
         {icon && (
@@ -39,8 +41,10 @@ export function StatCard({ value, label, icon, iconBg, delta, trend = 'neutral',
         )}
       </div>
       {delta && (
-        <div className={cn('mt-3 text-xs font-medium', trendClass[trend])}>
-          {trendGlyph[trend]} {delta}
+        <div className="mt-3">
+          <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold', trendPill[trend])}>
+            <Icon size={12} /> {delta}
+          </span>
         </div>
       )}
     </Card>

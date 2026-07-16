@@ -675,6 +675,8 @@ model Note {
   fileSizeKb  Int?
   aiSummary   String?   // populated by Django after processing
   aiJobId     String?   // async job ID for tracking
+  status      String    @default("PUBLISHED") // PUBLISHED | SCHEDULED — students only see PUBLISHED
+  releaseAt   DateTime  @default(now())        // when it goes live; future for SCHEDULED notes
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   deletedAt   DateTime?
@@ -688,6 +690,7 @@ model Note {
   @@index([subjectId])
   @@index([facultyId])
   @@index([universityId])
+  @@index([status, releaseAt]) // scheduler scans due SCHEDULED notes
   @@map("notes")
 }
 

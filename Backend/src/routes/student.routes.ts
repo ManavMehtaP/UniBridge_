@@ -116,7 +116,7 @@ studentRouter.get("/attendance/history", asyncHandler(async (req, res) => {
 }));
 
 studentRouter.get("/attendance", asyncHandler(async (req, res) => {
-  res.json(await portalService.studentAttendance(req.user!.id, req.query.semesterId as string | undefined));
+  res.json(await portalService.studentAttendance(req.user!.id, req.user!.universityId, req.query.semesterId as string | undefined));
 }));
 
 studentRouter.get("/notes/:noteId/download", asyncHandler(async (req, res) => {

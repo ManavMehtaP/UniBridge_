@@ -50,6 +50,8 @@ export interface StudentNote {
   facultyName?: string
   fileType?: string
   fileSize?: number
+  fileUrl?: string
+  releaseAt?: string
   createdAt: string
 }
 

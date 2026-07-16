@@ -149,6 +149,7 @@ export default function CalendarPage() {
                   <Badge tone={p.isComplete ? 'success' : 'primary'}>{p.isComplete ? 'Done' : 'Upcoming'}</Badge>
                 </div>
               ))}
+              {timeline.data && timeline.data.phases.length === 0 && <p className="py-3 text-center text-xs text-text-muted">No phases scheduled for this semester yet.</p>}
             </CardBody>
           </Card>
         </div>

@@ -30,11 +30,13 @@ export interface TimetableSlot {
   id: string
   dayOfWeek?: number
   dayLabel?: string
-  startTime: string
-  endTime: string
-  subject?: { code: string; name: string }
+  slotStart: string
+  slotEnd: string
+  subject?: { code: string; name?: string }
   batch?: { code: string }
   room?: string
+  facultyName?: string
+  attendanceMarked?: boolean
 }
 
 export interface TodayTimetable {
@@ -72,6 +74,8 @@ export interface FacultyNote {
   fileType?: string
   aiSummaryStatus?: 'pending' | 'complete' | 'failed' | null
   batchCodes?: string[]
+  status?: 'PUBLISHED' | 'SCHEDULED'
+  releaseAt?: string
   createdAt: string
 }
 

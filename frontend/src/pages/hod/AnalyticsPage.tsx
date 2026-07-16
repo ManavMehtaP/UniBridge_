@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Select } from '@/components/ui/Select'
 import { Tabs } from '@/components/ui/Tabs'
 import { Table, Td, Th, Tr } from '@/components/ui/Table'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { StatCardSkeleton, ChartSkeleton, TableSkeleton } from '@/components/ui/Skeleton'
 import { DonutChart, MultiLineChart, RadarCompareChart, SimpleBarChart } from '@/components/charts'
 
@@ -124,7 +125,9 @@ export default function AnalyticsPage() {
 
       {tab === 'atrisk' && (
         <Card className="overflow-hidden">
-          {atRisk.isLoading ? <div className="p-4"><TableSkeleton rows={8} cols={6} /></div> : (
+          {atRisk.isLoading ? <div className="p-4"><TableSkeleton rows={8} cols={6} /></div> : atRisk.data && atRisk.data.data.length === 0 ? (
+            <EmptyState icon={<AlertTriangle size={22} />} title="No at-risk students" description="Every student in this view is above the attendance and marks thresholds." className="border-0" />
+          ) : (
             <Table>
               <thead><tr><Th>Student</Th><Th>Batch</Th><Th>Mentor</Th><Th>Attendance</Th><Th>Marks</Th><Th>Risk</Th><Th className="text-right">Action</Th></tr></thead>
               <tbody>
@@ -149,7 +152,9 @@ export default function AnalyticsPage() {
         <>
           <div className="mb-4"><Select className="w-40" value={phaseId} onChange={(e) => setPhaseId(e.target.value)} placeholder="Phase" options={phaseOptions} /></div>
           <Card className="overflow-hidden">
-            {leaderboard.isLoading ? <div className="p-4"><TableSkeleton rows={8} cols={4} /></div> : (
+            {leaderboard.isLoading ? <div className="p-4"><TableSkeleton rows={8} cols={4} /></div> : leaderboard.data && leaderboard.data.data.length === 0 ? (
+              <EmptyState icon={<Award size={22} />} title="No ranked students yet" description="Once marks are published for this phase, the leaderboard fills in." className="border-0" />
+            ) : (
               <Table>
                 <thead><tr><Th>Rank</Th><Th>Student</Th><Th>Batch</Th><Th className="text-right">Avg %</Th></tr></thead>
                 <tbody>

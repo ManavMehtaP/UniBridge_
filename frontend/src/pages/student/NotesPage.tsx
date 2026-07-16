@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import { Download, FileText } from 'lucide-react'
 import { studentApi } from '@/api/student'
 import { PageShell } from '@/components/shared/PageShell'
@@ -9,7 +10,12 @@ import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { CardSkeleton } from '@/components/ui/Skeleton'
-import { formatDistanceToNow } from 'date-fns'
+import { format } from 'date-fns'
+
+function fmtSize(kb?: number) {
+  if (!kb) return null
+  return kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`
+}
 
 export default function StudentNotesPage() {
   const [search, setSearch] = useState('')
@@ -37,17 +43,22 @@ export default function StudentNotesPage() {
               <div className="text-sm font-semibold text-text-primary line-clamp-2">{n.title}</div>
               <div className="mt-0.5 text-xs text-text-muted">{n.subject.code} · {n.facultyName}</div>
               {n.description && <p className="mt-2 line-clamp-2 text-xs text-text-secondary">{n.description}</p>}
-              <div className="mt-3 flex items-center justify-between border-t border-border-light pt-2">
-                <Badge tone="neutral">{n.fileType ?? 'PDF'}</Badge>
-                <span className="text-[11px] text-text-muted">{formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}</span>
+              <div className="mt-2 space-y-0.5 text-[11px] text-text-muted">
+                <div>Released {format(new Date(n.releaseAt ?? n.createdAt), 'dd MMM yyyy, HH:mm')}</div>
+                {fmtSize(n.fileSize) && <div>Size {fmtSize(n.fileSize)}</div>}
               </div>
-              <a
-                href={studentApi.noteDownloadUrl(n.id)}
-                target="_blank" rel="noreferrer"
+              <div className="mt-3 flex items-center justify-between border-t border-border-light pt-2">
+                <Badge tone="neutral">{(n.fileType ?? 'file').split('/').pop()}</Badge>
+              </div>
+              <button
+                onClick={async () => {
+                  try { const { downloadUrl } = await studentApi.noteDownload(n.id); if (downloadUrl) window.open(downloadUrl, '_blank', 'noreferrer') }
+                  catch { toast.error('Could not open file') }
+                }}
                 className="mt-3 inline-flex items-center justify-center gap-1.5 rounded-sm bg-primary px-3 py-2 text-xs font-semibold text-white hover:bg-primary-dark"
               >
                 <Download size={13} /> Download
-              </a>
+              </button>
             </Card>
           ))}
         </div>

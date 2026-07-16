@@ -56,9 +56,9 @@ export default function StudentDashboardPage() {
               <EmptyState title="No classes today" description="Take it easy 🌿" className="border-0" />
             ) : (
               <ul className="divide-y divide-border-light">
-                {today.data?.slots.map((s: { id: string; startTime: string; endTime: string; subject?: { code: string; name: string }; room?: string }) => (
+                {today.data?.slots.map((s: { id: string; slotStart: string; slotEnd: string; subject?: { code: string; name: string }; room?: string }) => (
                   <li key={s.id} className="flex items-center gap-3 py-2.5">
-                    <span className="min-w-[92px] text-sm font-semibold text-primary">{s.startTime}–{s.endTime}</span>
+                    <span className="min-w-[92px] text-sm font-semibold text-primary">{s.slotStart}–{s.slotEnd}</span>
                     <div className="flex-1">
                       <div className="text-[13px] font-semibold text-text-primary">{s.subject?.code} · {s.subject?.name}</div>
                       {s.room && <div className="text-xs text-text-muted">Room {s.room}</div>}

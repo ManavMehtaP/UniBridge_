@@ -55,7 +55,7 @@ export default function FacultyDashboardPage() {
               <ul className="divide-y divide-border-light">
                 {today.data?.slots.map((slot) => (
                   <li key={slot.id} className="flex items-center gap-3 py-2.5">
-                    <div className="min-w-[92px] text-sm font-semibold text-primary">{slot.startTime}–{slot.endTime}</div>
+                    <div className="min-w-[92px] text-sm font-semibold text-primary">{slot.slotStart}–{slot.slotEnd}</div>
                     <div className="flex-1">
                       <div className="text-[13px] font-semibold text-text-primary">
                         {slot.subject?.code ?? '—'} <span className="text-text-muted">· {slot.subject?.name}</span>

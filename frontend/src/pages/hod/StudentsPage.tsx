@@ -67,6 +67,8 @@ export default function StudentsPage() {
     queryKey: ['hod', 'students', filters],
     queryFn: () => hodApi.students.list(filters),
   })
+  // Full branch list (student.branch stores the code) — not just codes on the visible page.
+  const branchesQ = useQuery({ queryKey: ['hod', 'branches'], queryFn: hodApi.onboarding.branches })
 
   const del = useMutation({
     mutationFn: (enrollmentNo: string) => hodApi.students.remove(enrollmentNo),
@@ -139,7 +141,7 @@ export default function StudentsPage() {
           <SearchInput value={search} onChange={resetPage(setSearch)} placeholder="Search name or enrollment no." />
         </div>
         <Select className="w-36" value={branch} onChange={(e) => resetPage(setBranch)(e.target.value)} placeholder="All Branches">
-          {[...new Set((list.data?.data ?? []).map((s) => s.branch).filter(Boolean))].sort().map((b) => <option key={b} value={b}>{b}</option>)}
+          {(branchesQ.data?.data ?? []).map((b) => <option key={b.id} value={b.code}>{b.code}</option>)}
         </Select>
         <Select className="w-36" value={batchId} onChange={(e) => resetPage(setBatchId)(e.target.value)} placeholder="All Batches" options={batchOptions} />
         <Select className="w-40" value={status} onChange={(e) => resetPage(setStatus)(e.target.value)} placeholder="All Status">

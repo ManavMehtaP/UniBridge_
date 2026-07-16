@@ -1,5 +1,6 @@
 import prisma from "../config/prisma.js";
 import { env } from "../config/env.js";
+import { uploadObject, presignGetUrl, storageEnabled } from "../config/storage.js";
 import type { Role, YearLevel } from "../types/domain.js";
 import { ApiError, buildPagination } from "../utils/http.js";
 
@@ -98,6 +99,15 @@ function objectUrl(fileKey: string) {
   return env.STORAGE_BUCKET_URL
     ? `${env.STORAGE_BUCKET_URL.replace(/\/$/, "")}/${fileKey}`
     : `/mock/${fileKey}`;
+}
+
+// A note publishes immediately unless given a future release timestamp. Server clock is authoritative.
+function resolveRelease(raw?: string): { status: "PUBLISHED" | "SCHEDULED"; releaseAt: Date } {
+  const now = new Date();
+  if (!raw) return { status: "PUBLISHED", releaseAt: now };
+  const at = new Date(raw);
+  if (isNaN(at.getTime())) throw new ApiError(400, "VALIDATION_ERROR", "Invalid release date.");
+  return at.getTime() > now.getTime() ? { status: "SCHEDULED", releaseAt: at } : { status: "PUBLISHED", releaseAt: now };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -409,9 +419,14 @@ async function getFacultyVisibleEnrollments(facultyId: string, universityId: str
 
 async function getStudentEnrollment(studentId: string, universityId: string, semesterId?: string) {
   const student = await getStudentUser(studentId);
-  const semester = await getSemester(semesterId, universityId);
-  const enrollment = await currentEnrollmentForStudent(student.id, semester.id);
+  // With several year levels ACTIVE at once, getActiveSemester(uni) is ambiguous. Resolve the
+  // semester from the STUDENT's own enrollment instead: explicit → their enrollment at that
+  // semester (current or historical); otherwise → their single live (isCurrent) enrollment.
+  const enrollment = semesterId
+    ? await prisma.studentEnrollment.findFirst({ where: { studentId: student.id, semesterId } })
+    : await currentEnrollmentForStudent(student.id);
   if (!enrollment) throw new ApiError(404, "NOT_FOUND", "Current enrollment not found.");
+  const semester = await getSemester(enrollment.semesterId);
   return { student, semester, enrollment };
 }
 
@@ -2871,6 +2886,7 @@ export const portalService = {
     const notes = await prisma.note.findMany({
       where: {
         deletedAt: null,
+        status: "PUBLISHED", // scheduled notes stay hidden until the scheduler flips them
         universityId,
         subject: { semesterNumber: semester.number },
         targets: { some: { batchId: enrollment.batchId } },
@@ -2878,11 +2894,14 @@ export const portalService = {
         ...(query.search ? { OR: [{ title: { contains: String(query.search), mode: "insensitive" } }, { description: { contains: String(query.search), mode: "insensitive" } }] } : {}),
       },
       include: { subject: true, faculty: { select: { name: true } }, flashcards: { select: { id: true } } },
+      orderBy: { releaseAt: "desc" },
     });
     const rows = notes.map((n) => ({
       id: n.id, subjectCode: n.subject.code, subjectName: n.subject.name, title: n.title, description: n.description,
-      mimeType: n.mimeType, fileSizeKb: n.fileSizeKb, hasAiSummary: Boolean(n.aiSummary), hasFlashcards: n.flashcards.length > 0,
-      flashcardCount: n.flashcards.length, uploadedBy: n.faculty.name, createdAt: n.createdAt,
+      mimeType: n.mimeType, fileType: n.mimeType, fileUrl: n.fileUrl, fileSizeKb: n.fileSizeKb, fileSize: n.fileSizeKb,
+      hasAiSummary: Boolean(n.aiSummary), hasFlashcards: n.flashcards.length > 0,
+      flashcardCount: n.flashcards.length, uploadedBy: n.faculty.name, facultyName: n.faculty.name,
+      subject: { code: n.subject.code, name: n.subject.name }, releaseAt: n.releaseAt, createdAt: n.createdAt,
     }));
     return paginate(rows, Number(query.page ?? 1), Number(query.limit ?? 20));
   },
@@ -2890,17 +2909,18 @@ export const portalService = {
   async studentNote(studentId: string, universityId: string, noteId: string) {
     const { enrollment } = await getStudentEnrollment(studentId, universityId);
     const note = await prisma.note.findFirst({
-      where: { id: noteId, universityId, deletedAt: null, targets: { some: { batchId: enrollment.batchId } } },
+      where: { id: noteId, universityId, deletedAt: null, status: "PUBLISHED", targets: { some: { batchId: enrollment.batchId } } },
       include: { subject: true, faculty: { select: { name: true } }, flashcards: { orderBy: { order: "asc" } } },
     });
     if (!note) throw new ApiError(404, "NOT_FOUND", "Note not found.");
-    return { id: note.id, subjectCode: note.subject.code, subjectName: note.subject.name, title: note.title, description: note.description, mimeType: note.mimeType, fileSizeKb: note.fileSizeKb, uploadedBy: note.faculty.name, createdAt: note.createdAt, aiSummary: note.aiSummary, flashcards: note.flashcards };
+    return { id: note.id, subjectCode: note.subject.code, subjectName: note.subject.name, title: note.title, description: note.description, mimeType: note.mimeType, fileUrl: note.fileUrl, fileSizeKb: note.fileSizeKb, uploadedBy: note.faculty.name, releaseAt: note.releaseAt, createdAt: note.createdAt, aiSummary: note.aiSummary, flashcards: note.flashcards };
   },
 
   async studentNoteDownload(studentId: string, universityId: string, noteId: string) {
-    const note = await this.studentNote(studentId, universityId, noteId);
-    const stored = await prisma.note.findUnique({ where: { id: noteId }, select: { fileUrl: true } });
-    return { downloadUrl: stored?.fileUrl, expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), mimeType: note.mimeType, filename: `${note.title.replace(/\s+/g, "_")}_${note.subjectCode}.${note.mimeType.includes("pdf") ? "pdf" : "bin"}` };
+    const note = await this.studentNote(studentId, universityId, noteId); // enforces batch + PUBLISHED access
+    const stored = await prisma.note.findUnique({ where: { id: noteId }, select: { fileKey: true, fileUrl: true, originalFileName: true } });
+    const downloadUrl = storageEnabled && stored?.fileKey ? presignGetUrl(stored.fileKey, 15 * 60) : stored?.fileUrl;
+    return { downloadUrl, expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), mimeType: note.mimeType, filename: stored?.originalFileName ?? `${note.title.replace(/\s+/g, "_")}_${note.subjectCode}` };
   },
 
   async studentNoteFlashcards(studentId: string, universityId: string, noteId: string) {
@@ -3539,34 +3559,96 @@ export const portalService = {
       include: { subject: { select: { code: true, name: true } }, targets: { include: { batch: { select: { code: true } } } }, _count: { select: { flashcards: true } } },
       orderBy: { createdAt: "desc" },
     });
-    const rows = notes.map((n) => ({ id: n.id, subject: n.subject, title: n.title, description: n.description, fileUrl: n.fileUrl, mimeType: n.mimeType, fileSize: n.fileSizeKb, fileType: n.mimeType, batchCodes: n.targets.map((target) => target.batch.code), aiSummaryStatus: n.aiSummary ? "complete" : "pending", hasFlashcards: n._count.flashcards > 0, createdAt: n.createdAt }));
+    const rows = notes.map((n) => ({ id: n.id, subject: n.subject, title: n.title, description: n.description, fileUrl: n.fileUrl, mimeType: n.mimeType, fileSize: n.fileSizeKb, fileType: n.mimeType, batchCodes: n.targets.map((target) => target.batch.code), status: n.status, releaseAt: n.releaseAt, aiSummaryStatus: n.aiSummary ? "complete" : "pending", hasFlashcards: n._count.flashcards > 0, createdAt: n.createdAt }));
     return paginate(rows, Number(query.page ?? 1), Number(query.limit ?? 20));
   },
 
   async getFacultyNote(facultyId: string, noteId: string) {
     const note = await prisma.note.findFirst({ where: { id: noteId, facultyId, deletedAt: null }, include: { subject: { select: { code: true } }, targets: { include: { batch: { select: { id: true, code: true } } } }, flashcards: { orderBy: { order: "asc" } } } });
     if (!note) throw new ApiError(404, "NOT_FOUND", "Note not found.");
-    return { id: note.id, subjectCode: note.subject.code, title: note.title, description: note.description, fileUrl: note.fileUrl, mimeType: note.mimeType, fileSizeKb: note.fileSizeKb, batchIds: note.targets.map((target) => target.batch.id), batchCodes: note.targets.map((target) => target.batch.code), aiSummary: note.aiSummary, flashcards: note.flashcards, createdAt: note.createdAt };
+    return { id: note.id, subjectCode: note.subject.code, title: note.title, description: note.description, fileUrl: note.fileUrl, mimeType: note.mimeType, fileSizeKb: note.fileSizeKb, batchIds: note.targets.map((target) => target.batch.id), batchCodes: note.targets.map((target) => target.batch.code), status: note.status, releaseAt: note.releaseAt, aiSummary: note.aiSummary, flashcards: note.flashcards, createdAt: note.createdAt };
   },
 
+  // Browser posts the file (multipart) here; the backend uploads bytes to Supabase S3 and stores metadata.
   async createFacultyNote(facultyId: string, universityId: string, fileBuffer: Buffer | undefined, fileMeta: { originalname?: string; mimetype?: string; size?: number }, body: Record<string, string>) {
     if (!fileBuffer) throw new ApiError(400, "VALIDATION_ERROR", "File is required.");
     const subjectId = String(body.subjectId);
     const semester = await facultyActiveSemester(facultyId, universityId);
     await ensureFacultyAssignedSubject(facultyId, universityId, subjectId, semester.id);
     const batchIds = await validateFacultyContentTargets(facultyId, universityId, subjectId, semester.id, parseBatchIds(body.batchIds));
+    const { status, releaseAt } = resolveRelease(body.releaseAt);
+    const mimeType = fileMeta.mimetype ?? "application/octet-stream";
     const fileKey = `notes/${universityId}/${facultyId}/${Date.now()}-${(fileMeta.originalname ?? "file").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    await uploadObject(fileKey, fileBuffer, mimeType);
     const note = await prisma.note.create({
-      data: { subjectId, facultyId, universityId, title: String(body.title), description: body.description ?? null, fileUrl: objectUrl(fileKey), fileKey, originalFileName: fileMeta.originalname ?? null, mimeType: fileMeta.mimetype ?? "application/octet-stream", fileSizeKb: Math.round((fileMeta.size ?? fileBuffer.length) / 1024), targets: { create: batchIds.map((batchId) => ({ batchId })) } },
+      data: {
+        subjectId, facultyId, universityId, title: String(body.title), description: body.description ?? null,
+        fileUrl: objectUrl(fileKey), fileKey, originalFileName: fileMeta.originalname ?? null,
+        mimeType, fileSizeKb: Math.round((fileMeta.size ?? fileBuffer.length) / 1024),
+        status, releaseAt, targets: { create: batchIds.map((batchId) => ({ batchId })) },
+      },
     });
-    return { id: note.id, title: note.title, fileUrl: note.fileUrl, aiJobId: null, aiStatus: "QUEUED", message: "Note uploaded. AI summary will be available after processing." };
+    if (status === "PUBLISHED") await this.notifyNotePublished(note.id);
+    return { id: note.id, title: note.title, fileUrl: note.fileUrl, status, releaseAt, message: status === "SCHEDULED" ? "Note scheduled." : "Note published." };
   },
 
-  async updateFacultyNote(facultyId: string, noteId: string, body: Record<string, string>) {
+  async updateFacultyNote(facultyId: string, noteId: string, fileBuffer: Buffer | undefined, fileMeta: { originalname?: string; mimetype?: string; size?: number }, body: Record<string, string>) {
     const note = await prisma.note.findFirst({ where: { id: noteId, facultyId, deletedAt: null } });
     if (!note) throw new ApiError(404, "NOT_FOUND", "Note not found.");
-    await prisma.note.update({ where: { id: noteId }, data: { title: body.title ?? note.title, description: body.description ?? note.description } });
+    // Reschedule/replace only allowed while still SCHEDULED — a published note can't be un-published.
+    const data: Record<string, unknown> = { title: body.title ?? note.title, description: body.description ?? note.description };
+    if (fileBuffer) {
+      const mimeType = fileMeta.mimetype ?? note.mimeType;
+      const fileKey = `notes/${note.universityId}/${facultyId}/${Date.now()}-${(fileMeta.originalname ?? "file").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      await uploadObject(fileKey, fileBuffer, mimeType);
+      data.fileKey = fileKey; data.fileUrl = objectUrl(fileKey);
+      data.originalFileName = fileMeta.originalname ?? note.originalFileName;
+      data.mimeType = mimeType;
+      data.fileSizeKb = Math.round((fileMeta.size ?? fileBuffer.length) / 1024);
+    }
+    if (body.releaseAt !== undefined) {
+      if (note.status === "PUBLISHED") throw new ApiError(409, "ALREADY_PUBLISHED", "A published note can't be rescheduled.");
+      const { status, releaseAt } = resolveRelease(body.releaseAt);
+      data.status = status; data.releaseAt = releaseAt;
+      // If rescheduled to now/past, publish immediately and notify.
+      if (status === "PUBLISHED") { await prisma.note.update({ where: { id: noteId }, data }); await this.notifyNotePublished(noteId); return this.getFacultyNote(facultyId, noteId); }
+    }
+    await prisma.note.update({ where: { id: noteId }, data });
     return this.getFacultyNote(facultyId, noteId);
+  },
+
+  // Flip every note whose scheduled release has arrived. Race-safe & exactly-once:
+  // the status-guarded updateMany means only one tick wins the flip and sends notifications.
+  // ponytail: 30s poll granularity (set in server.ts); swap for pg_cron if sub-minute precision matters.
+  async publishDueNotes() {
+    const due = await prisma.note.findMany({ where: { status: "SCHEDULED", releaseAt: { lte: new Date() }, deletedAt: null }, select: { id: true } });
+    for (const { id } of due) {
+      const flip = await prisma.note.updateMany({ where: { id, status: "SCHEDULED" }, data: { status: "PUBLISHED" } });
+      if (flip.count === 1) await this.notifyNotePublished(id);
+    }
+    return { published: due.length };
+  },
+
+  // Notify every student currently enrolled in the note's target batches (in-app; the bell polls this).
+  // ponytail: web-push/FCM not configured — add a push provider here when a key exists in .env.
+  async notifyNotePublished(noteId: string) {
+    const note = await prisma.note.findUnique({
+      where: { id: noteId },
+      include: { subject: { select: { code: true, name: true } }, faculty: { select: { name: true } }, targets: { select: { batchId: true } } },
+    });
+    if (!note) return;
+    const batchIds = note.targets.map((t) => t.batchId);
+    if (batchIds.length === 0) return;
+    const enrs = await prisma.studentEnrollment.findMany({ where: { batchId: { in: batchIds }, isCurrent: true }, select: { studentId: true } });
+    const studentIds = [...new Set(enrs.map((e) => e.studentId))];
+    return this.notifyMany(
+      note.universityId,
+      studentIds.map((studentId) => ({ studentId })),
+      "NOTE_PUBLISHED",
+      `New note: ${note.title}`,
+      `${note.subject.code} · ${note.faculty.name}`,
+      `/student/notes?open=${noteId}`,
+    );
   },
 
   async deleteFacultyNote(facultyId: string, noteId: string) {
