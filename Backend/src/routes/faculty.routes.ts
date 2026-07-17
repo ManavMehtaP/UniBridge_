@@ -5,6 +5,7 @@ import multer from "multer";
 import { requireAuth, requireFacultyPortal } from "../middleware/auth.js";
 import { facultyScope } from "../middleware/facultyScope.js";
 import { portalService } from "../services/portal.service.js";
+import { parseFormat, sendExport } from "../utils/export.js";
 import { asyncHandler } from "../utils/http.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -79,6 +80,16 @@ facultyRouter.get("/timetable/today", asyncHandler(async (req, res) => {
 facultyRouter.get("/timetable", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyTimetable(req.user!.id, req.user!.universityId, req.query.semesterId as string | undefined));
 }));
+
+// Literal export paths MUST be declared before "/students/:enrollmentNo", or Express
+// matches "export" as the enrollmentNo and returns STUDENT_NOT_FOUND.
+facultyRouter.get("/students/export", asyncHandler(async (req, res) =>
+  sendExport(res, "my-students", parseFormat(req.query.format),
+    await portalService.facultyStudentsExport(req.user!.id, req.user!.universityId, req.query as Record<string, string | number | undefined>))));
+
+facultyRouter.get("/results/export", asyncHandler(async (req, res) =>
+  sendExport(res, "results", parseFormat(req.query.format),
+    await portalService.facultyResultsExport(req.user!.id, req.user!.universityId, req.query as Record<string, string | number | undefined>))));
 
 facultyRouter.get("/students/:enrollmentNo/history", asyncHandler(async (req, res) => {
   res.json(await portalService.getStudentHistory({ universityId: req.user!.universityId, userId: req.user!.id, role: req.user!.role, isHod: false, hodBatchIds: [] } as any, str(req.params.enrollmentNo)));

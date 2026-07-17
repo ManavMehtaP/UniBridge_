@@ -2,6 +2,7 @@ import prisma from "../config/prisma.js";
 import { env } from "../config/env.js";
 import { uploadObject, presignGetUrl, storageEnabled } from "../config/storage.js";
 import type { Role, YearLevel } from "../types/domain.js";
+import type { ExportTable } from "../utils/export.js";
 import { ApiError, buildPagination } from "../utils/http.js";
 
 // ─────────────────────────────────────────────────────────────
@@ -1731,15 +1732,17 @@ export const portalService = {
     return { lockedCount: count };
   },
 
-  async attendanceExport(scope: Scope, batchId: string, semesterId: string) {
+  async attendanceExport(scope: Scope, batchId: string, semesterId: string): Promise<ExportTable> {
     const table = (await this.attendanceTable(scope, batchId, semesterId, undefined, 1, 1000)).data;
     const subjects = await subjectsBySemester(semesterId);
     const subjectCodes = subjects.map((s) => s.code);
-    const lines = [["enrollment_no", "name", ...subjectCodes, "avg_pct", "status"].join(",")];
-    for (const row of table) {
-      lines.push([row.enrollmentNo, row.name, ...subjectCodes.map((c) => row.perSubject[c] ?? 0), row.avgPct, row.status].join(","));
-    }
-    return lines.join("\n");
+    const batch = await batchById(batchId);
+    return {
+      title: `Attendance — Batch ${batch.code}`,
+      subtitle: `${table.length} student(s) · exported ${new Date().toLocaleString("en-IN")}`,
+      headers: ["Enrollment No", "Name", ...subjectCodes, "Avg %", "Status"],
+      rows: table.map((row) => [row.enrollmentNo, row.name, ...subjectCodes.map((c) => row.perSubject[c] ?? 0), row.avgPct, row.status]),
+    };
   },
 
   // ── Faculty Attendance (marking) ──────────────────────────
@@ -2071,8 +2074,15 @@ export const portalService = {
     };
   },
 
-  async analyticsExport() {
-    return Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF");
+  // Real at-risk report (this used to return an empty stub PDF).
+  async analyticsExport(scope: Scope, query: Record<string, string | number | undefined> = {}): Promise<ExportTable> {
+    const { data } = await this.analyticsAtRisk(scope, { ...query, limit: 1000 });
+    return {
+      title: "Analytics — At-Risk Students",
+      subtitle: `${data.length} student(s) below threshold · exported ${new Date().toLocaleString("en-IN")}`,
+      headers: ["Enrollment No", "Name", "Batch", "Mentor", "Attendance %", "Latest Marks %", "Risk"],
+      rows: data.map((r: any) => [r.enrollmentNo, r.name, r.batchCode, r.mentorCode ?? "—", Math.round(r.avgAttendancePct), Math.round(r.latestPhaseMarksPct), r.riskFactor]),
+    };
   },
 
   async analyticsPerformanceRadar(scope: Scope, phaseId: string) {
@@ -2468,8 +2478,16 @@ export const portalService = {
     return { phases: phases.map((p) => ({ label: p.label, startDate: p.startDate, endDate: p.endDate, examDate: p.examDate, isComplete: p.isComplete })) };
   },
 
-  async calendarExport() {
-    return Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF");
+  // Real calendar listing (this used to return an empty stub PDF).
+  async calendarExport(universityId: string, query: Record<string, string | number | undefined> = {}): Promise<ExportTable> {
+    const { data } = await this.calendarEvents(universityId, query);
+    const fmt = (d: Date | string) => new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    return {
+      title: "Academic Calendar",
+      subtitle: `${data.length} event(s) · exported ${new Date().toLocaleString("en-IN")}`,
+      headers: ["Start Date", "End Date", "Title", "Type", "Description"],
+      rows: data.map((e: any) => [fmt(e.startDate ?? e.date), fmt(e.endDate ?? e.date), e.title, e.type, e.description ?? ""]),
+    };
   },
 
   // ── Announcements (HOD) ───────────────────────────────────
@@ -3381,6 +3399,28 @@ export const portalService = {
     return paginate(rows.filter((r) => !search || r.name.toLowerCase().includes(search.toLowerCase()) || r.enrollmentNo.includes(search)).filter((r) => !query.status || r.status === query.status), Number(query.page ?? 1), Number(query.limit ?? 20));
   },
 
+  // Faculty exports reuse the scoped list queries above, so a faculty can only ever
+  // export the batches/subjects they are assigned to.
+  async facultyStudentsExport(facultyId: string, universityId: string, query: Record<string, string | number | undefined>): Promise<ExportTable> {
+    const { data } = await this.facultyStudents(facultyId, universityId, { ...query, page: 1, limit: 5000 });
+    return {
+      title: "My Students",
+      subtitle: `${data.length} student(s) · exported ${new Date().toLocaleString("en-IN")}`,
+      headers: ["Enrollment No", "Name", "Branch", "Batch", "Roll No", "Attendance %", "Status"],
+      rows: data.map((r: any) => [r.enrollmentNo, r.name, r.branch, r.currentBatch?.code ?? "", r.rollNo, Math.round(r.attendancePct), r.status]),
+    };
+  },
+
+  async facultyResultsExport(facultyId: string, universityId: string, query: Record<string, string | number | undefined>): Promise<ExportTable> {
+    const { data } = await this.facultyResults(facultyId, universityId, { ...query, page: 1, limit: 5000 });
+    return {
+      title: "Results",
+      subtitle: `${data.length} record(s) · exported ${new Date().toLocaleString("en-IN")}`,
+      headers: ["Enrollment No", "Student", "Batch", "Subject", "Phase", "Marks", "Max", "Grade", "Published"],
+      rows: data.map((r: any) => [r.enrollmentNo, r.studentName, r.batchCode, r.subjectCode, r.phase, r.marksObtained, r.maxMarks, r.grade ?? "", r.isPublished ? "Yes" : "No"]),
+    };
+  },
+
   async facultyStudentProfile(facultyId: string, universityId: string, enrollmentNo: string, semesterId?: string) {
     const scope = await getFacultyScopeData(facultyId, universityId, semesterId);
     const student = await studentByEnrollmentNo(enrollmentNo);
@@ -4173,14 +4213,26 @@ export const portalService = {
     return "enrollment_no,name,branch,batch,roll_no\n24IT001,Aarav Patel,IT,C2,IT-25-001\n";
   },
 
-  async studentExport(scope: Scope) {
+  async studentExport(scope: Scope, query: Record<string, string | number | undefined> = {}): Promise<ExportTable> {
+    const search = query.search ? String(query.search).toLowerCase() : "";
     const rows = await prisma.studentEnrollment.findMany({
-      where: { isCurrent: true, batchId: { in: scope.hodBatchIds } },
+      where: {
+        isCurrent: true,
+        batchId: query.batchId ? String(query.batchId) : { in: scope.hodBatchIds },
+        ...(query.branch ? { student: { branch: String(query.branch) } } : {}),
+      },
       include: { student: true, batch: true },
+      orderBy: { rollNo: "asc" },
     });
-    const header = "enrollment_no,name,email,branch,batch,roll_no\n";
-    const body = rows.map((r) => `${r.student.enrollmentNo},${r.student.name},${r.student.email},${r.student.branch},${r.batch.code},${r.rollNo}`).join("\n");
-    return header + body;
+    const filtered = search
+      ? rows.filter((r) => r.student.name.toLowerCase().includes(search) || r.student.enrollmentNo.includes(search))
+      : rows;
+    return {
+      title: "Students",
+      subtitle: `${filtered.length} student(s) · exported ${new Date().toLocaleString("en-IN")}`,
+      headers: ["Enrollment No", "Name", "Email", "Branch", "Batch", "Roll No"],
+      rows: filtered.map((r) => [r.student.enrollmentNo, r.student.name, r.student.email, r.student.branch, r.batch.code, r.rollNo]),
+    };
   },
 
   // ── Faculty ──
@@ -4268,11 +4320,14 @@ export const portalService = {
     await prisma.facultyBatchAssignment.delete({ where: { id: assignmentId } });
   },
 
-  async facultyExport(scope: Scope) {
-    const faculty = await prisma.faculty.findMany({ where: { universityId: scope.universityId, deletedAt: null } });
-    const header = "employee_id,name,email,year,is_hod,mentor_code,status\n";
-    const body = faculty.map((f) => `${f.employeeId},${f.name},${f.email},${f.year},${f.isHod},${f.mentorCode ?? ""},${f.isActive ? "ACTIVE" : "INACTIVE"}`).join("\n");
-    return header + body;
+  async facultyExport(scope: Scope): Promise<ExportTable> {
+    const faculty = await prisma.faculty.findMany({ where: { universityId: scope.universityId, deletedAt: null }, orderBy: { name: "asc" } });
+    return {
+      title: "Faculty",
+      subtitle: `${faculty.length} member(s) · exported ${new Date().toLocaleString("en-IN")}`,
+      headers: ["Employee ID", "Name", "Email", "Year", "Is HOD", "Mentor Code", "Status"],
+      rows: faculty.map((f) => [f.employeeId, f.name, f.email, f.year ?? "", f.isHod ? "Yes" : "No", f.mentorCode ?? "", f.isActive ? "ACTIVE" : "INACTIVE"]),
+    };
   },
 
   // ── Results ──

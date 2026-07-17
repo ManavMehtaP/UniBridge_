@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useQuery } from '@tanstack/react-query'
 import { facultyApi } from '@/api/faculty'
 import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
@@ -39,7 +40,9 @@ export default function FacultyResultsPage() {
   }, [scope.data])
 
   return (
-    <PageShell title="Results" subtitle="View published results for your subjects">
+    <PageShell title="Results" subtitle="View published results for your subjects"
+      action={<ExportMenu onExport={(f) => facultyApi.resultsExport({ subjectId: subjectId || undefined, batchId: batchId || undefined, phase: phase || undefined }, f)} />}
+    >
       <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-3">
         {list.isLoading ? (
           <StatCardSkeleton count={3} />

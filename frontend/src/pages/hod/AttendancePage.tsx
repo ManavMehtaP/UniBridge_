@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { AlertTriangle, Download, Lock, LockOpen } from 'lucide-react'
@@ -103,7 +104,7 @@ export default function AttendancePage() {
         <div className="flex flex-wrap items-center gap-2">
           <Select className="w-40" value={batchId} onChange={(e) => { setBatchId(e.target.value); setPage(1) }}
             options={scope.data?.batches.map((b) => ({ value: b.id, label: `Batch ${b.code}` })) ?? []} />
-          <Button variant="outline" leftIcon={<Download size={15} />} disabled={!ready} onClick={() => hodApi.attendance.export(batchId, semesterId!)}>Export</Button>
+          <ExportMenu disabled={!ready} onExport={(f) => hodApi.attendance.export(batchId, semesterId!, f)} />
           <Button variant="outline" leftIcon={<Lock size={15} />} disabled={!ready} loading={lockAll.isPending} onClick={() => lockAll.mutate()}>Lock All</Button>
         </div>
       }

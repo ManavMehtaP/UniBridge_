@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useQuery } from '@tanstack/react-query'
 import { Eye } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
@@ -46,6 +47,7 @@ export default function FacultyStudentsPage() {
     <PageShell
       title="Students"
       subtitle={list.data ? `${list.data.total} students in your batches` : 'View-only student list'}
+      action={<ExportMenu onExport={(f) => facultyApi.studentsExport({ search: debounced || undefined, batchId: batchId || undefined }, f)} />}
     >
       <FilterBar>
         <div className="w-64 max-w-full">

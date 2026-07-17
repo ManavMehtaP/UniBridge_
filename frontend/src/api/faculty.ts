@@ -1,3 +1,4 @@
+import { downloadExport, type ExportFormat } from '@/lib/download'
 import { api } from './client'
 import type { PaginatedResponse } from '@/types/common'
 import type * as T from '@/types/faculty'
@@ -61,6 +62,11 @@ export const facultyApi = {
     api.patch('/faculty/attendance', body).then((r) => r.data),
   lectureLog: (params: Params) => api.get('/faculty/attendance/lecture-log', { params }).then((r) => r.data),
   belowThreshold: (params: Params) => api.get('/faculty/attendance/students-below-threshold', { params }).then((r) => r.data),
+
+  studentsExport: (params: Params, format: ExportFormat = 'csv') =>
+    downloadExport('/faculty/students/export', 'my-students', format, params),
+  resultsExport: (params: Params, format: ExportFormat = 'csv') =>
+    downloadExport('/faculty/results/export', 'results', format, params),
 
   notes: (params: Params) =>
     api.get<PaginatedResponse<T.FacultyNote>>('/faculty/notes', { params }).then((r) => r.data),

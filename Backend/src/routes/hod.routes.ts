@@ -3,6 +3,7 @@ import { Router } from "express";
 import multer from "multer";
 
 import { portalService } from "../services/portal.service.js";
+import { parseFormat, sendExport } from "../utils/export.js";
 import { asyncHandler } from "../utils/http.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -22,11 +23,6 @@ function sendCsv(res: Response, filename: string, body: string) {
   res.status(200).send(body);
 }
 
-function sendPdf(res: Response, filename: string, body: Buffer) {
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  res.status(200).send(body);
-}
 
 function str(value: unknown) {
   return Array.isArray(value) ? String(value[0] ?? "") : String(value ?? "");
@@ -56,7 +52,7 @@ hodRouter.get("/dashboard/activity-feed", asyncHandler(async (req, res) => res.j
 hodRouter.get("/students", asyncHandler(async (req, res) => res.json(await portalService.listStudents(scopeFrom(req), req.query as Record<string, string | number | undefined>))));
 hodRouter.post("/students", asyncHandler(async (req, res) => res.status(201).json(await portalService.createStudent(req.body))));
 hodRouter.get("/students/csv/template", asyncHandler(async (_req, res) => sendCsv(res, "students-template.csv", await portalService.studentCsvTemplate())));
-hodRouter.get("/students/export", asyncHandler(async (req, res) => sendCsv(res, "students.csv", await portalService.studentExport(scopeFrom(req)))));
+hodRouter.get("/students/export", asyncHandler(async (req, res) => sendExport(res, "students", parseFormat(req.query.format), await portalService.studentExport(scopeFrom(req), req.query as Record<string, string | number | undefined>))));
 hodRouter.post("/students/csv", upload.single("file"), asyncHandler(async (req, res) => {
   res.json(
     await portalService.studentCsvUpload(scopeFrom(req), req.file?.buffer, {
@@ -75,7 +71,7 @@ hodRouter.delete("/students/:enrollmentNo", asyncHandler(async (req, res) => {
 
 hodRouter.get("/faculty", asyncHandler(async (req, res) => res.json(await portalService.listFaculty(scopeFrom(req), req.query as Record<string, string | number | undefined>))));
 hodRouter.post("/faculty", asyncHandler(async (req, res) => res.status(201).json(await portalService.createFaculty(req.body))));
-hodRouter.get("/faculty/export", asyncHandler(async (req, res) => sendCsv(res, "faculty.csv", await portalService.facultyExport(scopeFrom(req)))));
+hodRouter.get("/faculty/export", asyncHandler(async (req, res) => sendExport(res, "faculty", parseFormat(req.query.format), await portalService.facultyExport(scopeFrom(req)))));
 hodRouter.post("/faculty/csv", upload.single("file"), asyncHandler(async (req, res) => {
   res.json(await portalService.facultyCsvUpload(req.file?.buffer, req.user!.universityId));
 }));
@@ -124,7 +120,7 @@ hodRouter.get("/attendance/by-subject", asyncHandler(async (req, res) => res.jso
 hodRouter.patch("/attendance/lock", asyncHandler(async (req, res) => res.json(await portalService.lockAttendance(String(req.body.subjectId), String(req.body.batchId), String(req.body.semesterId)))));
 hodRouter.patch("/attendance/unlock", asyncHandler(async (req, res) => res.json(await portalService.unlockAttendance(String(req.body.enrollmentId), String(req.body.subjectId)))));
 hodRouter.patch("/attendance/lock-all", asyncHandler(async (req, res) => res.json(await portalService.lockAllAttendance(String(req.body.batchId), String(req.body.semesterId)))));
-hodRouter.get("/attendance/export", asyncHandler(async (req, res) => sendCsv(res, "attendance.csv", await portalService.attendanceExport(scopeFrom(req), String(req.query.batchId), String(req.query.semesterId)))));
+hodRouter.get("/attendance/export", asyncHandler(async (req, res) => sendExport(res, "attendance", parseFormat(req.query.format), await portalService.attendanceExport(scopeFrom(req), String(req.query.batchId), String(req.query.semesterId)))));
 
 hodRouter.get("/subjects", asyncHandler(async (req, res) => res.json(await portalService.listSubjects(scopeFrom(req), req.query.semesterId as string | undefined, req.query.search as string | undefined, req.query.type as string | undefined))));
 hodRouter.get("/subjects/:subjectId/config", asyncHandler(async (req, res) => res.json(await portalService.getSubjectConfig(str(req.params.subjectId)))));
@@ -164,7 +160,7 @@ hodRouter.get("/analytics/performance-radar", asyncHandler(async (req, res) => r
 hodRouter.get("/analytics/at-risk", asyncHandler(async (req, res) => res.json(await portalService.analyticsAtRisk(scopeFrom(req), req.query as Record<string, string | number | undefined>))));
 hodRouter.post("/analytics/at-risk/notify-mentor", asyncHandler(async (req, res) => res.json(await portalService.notifyAtRiskMentor(String(req.body.enrollmentNo)))));
 hodRouter.get("/analytics/year-comparison", asyncHandler(async (_req, res) => res.json(await portalService.analyticsYearComparison())));
-hodRouter.get("/analytics/export", asyncHandler(async (_req, res) => sendPdf(res, "analytics-report.pdf", await portalService.analyticsExport())));
+hodRouter.get("/analytics/export", asyncHandler(async (req, res) => sendExport(res, "analytics-at-risk", parseFormat(req.query.format), await portalService.analyticsExport(scopeFrom(req), req.query as Record<string, string | number | undefined>))));
 
 // Promotion v2 — result-based
 hodRouter.get("/promotion/context", asyncHandler(async (req, res) => res.json(await portalService.promotionContext(scopeFrom(req)))));
@@ -197,7 +193,7 @@ hodRouter.delete("/calendar/events/:eventId", asyncHandler(async (req, res) => {
   res.status(204).send();
 }));
 hodRouter.get("/calendar/phase-timeline", asyncHandler(async (req, res) => res.json(await portalService.phaseTimeline(scopeFrom(req), req.query.semesterId as string | undefined))));
-hodRouter.get("/calendar/export", asyncHandler(async (_req, res) => sendPdf(res, "calendar.pdf", await portalService.calendarExport())));
+hodRouter.get("/calendar/export", asyncHandler(async (req, res) => sendExport(res, "calendar", parseFormat(req.query.format), await portalService.calendarExport(req.user!.universityId, req.query as Record<string, string | number | undefined>))));
 
 hodRouter.get("/settings/profile", asyncHandler(async (req, res) => res.json(await portalService.settingsProfile(req.user!.id))));
 hodRouter.put("/settings/profile", asyncHandler(async (req, res) => res.json(await portalService.updateSettingsProfile(req.user!.id, req.body))));

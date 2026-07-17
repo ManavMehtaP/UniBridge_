@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Activity, AlertTriangle, Award, Download, TrendingUp, Users } from 'lucide-react'
@@ -62,7 +63,7 @@ export default function AnalyticsPage() {
       action={
         <div className="flex flex-wrap items-center gap-2">
           <Select className="w-40" value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="All Batches" options={batchOptions} />
-          <Button variant="outline" leftIcon={<Download size={15} />} onClick={() => hodApi.analytics.export({ batchId: batchId || undefined })}>Export PDF</Button>
+          <ExportMenu onExport={(f) => hodApi.analytics.export({ batchId: batchId || undefined }, f)} />
         </div>
       }
     >

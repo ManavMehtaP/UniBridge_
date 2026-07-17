@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Download, Eye, Trash2, Upload, UserPlus } from 'lucide-react'
@@ -64,7 +65,7 @@ export default function FacultyPage() {
       subtitle={list.data ? `${list.data.total} faculty members` : 'Manage faculty & assignments'}
       action={
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" leftIcon={<Download size={15} />} onClick={() => hodApi.faculty.export(filters)}>Export</Button>
+          <ExportMenu onExport={(f) => hodApi.faculty.export(filters, f)} />
           {!readOnly && <>
             <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload CSV</Button>
             <Button leftIcon={<UserPlus size={15} />} onClick={() => setShowAdd(true)}>Add Faculty</Button>

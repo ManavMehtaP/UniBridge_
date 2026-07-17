@@ -1,3 +1,4 @@
+import { downloadExport, downloadFile, type ExportFormat } from '@/lib/download'
 import { api } from './client'
 import type { PaginatedResponse } from '@/types/common'
 import type * as T from '@/types/hod'
@@ -16,16 +17,7 @@ export interface SubjectConfigInput {
   components?: { key: string; label: string; weightagePct: number; isEnabled: boolean }[]
 }
 
-/** Trigger a browser download for a blob endpoint (CSV/PDF). */
-async function download(path: string, filename: string, params?: Params) {
-  const res = await api.get(path, { params, responseType: 'blob' })
-  const url = URL.createObjectURL(res.data as Blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
+
 
 export const hodApi = {
   scope: (semesterId?: string) =>
@@ -90,8 +82,8 @@ export const hodApi = {
       api.delete(`/hod/students/${enrollmentNo}`).then((r) => r.data),
     uploadCsv: (form: FormData) =>
       api.post<T.CsvResult>('/hod/students/csv', form).then((r) => r.data),
-    downloadTemplate: () => download('/hod/students/csv/template', 'students-template.csv'),
-    export: (params: Params) => download('/hod/students/export', 'students.csv', params),
+    downloadTemplate: () => downloadFile('/hod/students/csv/template', 'students-template.csv'),
+    export: (params: Params, format: ExportFormat = 'csv') => downloadExport('/hod/students/export', 'students', format, params),
   },
 
   // ── Faculty ──
@@ -113,7 +105,7 @@ export const hodApi = {
       api.post('/hod/faculty/assignments', body).then((r) => r.data),
     unassign: (assignmentId: string) =>
       api.delete(`/hod/faculty/assignments/${assignmentId}`).then((r) => r.data),
-    export: (params: Params) => download('/hod/faculty/export', 'faculty.csv', params),
+    export: (params: Params, format: ExportFormat = 'csv') => downloadExport('/hod/faculty/export', 'faculty', format, params),
   },
 
   // ── Results ──
@@ -153,8 +145,8 @@ export const hodApi = {
       api.patch('/hod/attendance/unlock', { enrollmentId, subjectId }).then((r) => r.data),
     lockAll: (batchId: string, semesterId: string) =>
       api.patch('/hod/attendance/lock-all', { batchId, semesterId }).then((r) => r.data),
-    export: (batchId: string, semesterId: string) =>
-      download('/hod/attendance/export', 'attendance.csv', { batchId, semesterId }),
+    export: (batchId: string, semesterId: string, format: ExportFormat = 'csv') =>
+      downloadExport('/hod/attendance/export', 'attendance', format, { batchId, semesterId }),
   },
 
   // ── Subjects ──
@@ -223,7 +215,7 @@ export const hodApi = {
     notifyMentor: (enrollmentNo: string) =>
       api.post('/hod/analytics/at-risk/notify-mentor', { enrollmentNo }).then((r) => r.data),
     yearComparison: () => api.get('/hod/analytics/year-comparison').then((r) => r.data),
-    export: (params: Params) => download('/hod/analytics/export', 'analytics-report.pdf', params),
+    export: (params: Params, format: ExportFormat = 'pdf') => downloadExport('/hod/analytics/export', 'analytics-at-risk', format, params),
   },
 
   // ── Promotion ──
@@ -265,8 +257,8 @@ export const hodApi = {
     remove: (eventId: string) => api.delete(`/hod/calendar/events/${eventId}`).then((r) => r.data),
     phaseTimeline: (semesterId?: string) =>
       api.get<{ phases: T.PhaseTimelineItem[] }>('/hod/calendar/phase-timeline', { params: { semesterId } }).then((r) => r.data),
-    export: (academicYearId?: string) =>
-      download('/hod/calendar/export', 'calendar.pdf', { academicYearId }),
+    export: (academicYearId?: string, format: ExportFormat = 'pdf') =>
+      downloadExport('/hod/calendar/export', 'calendar', format, { academicYearId }),
   },
 
   // ── Timetable ──
@@ -276,7 +268,7 @@ export const hodApi = {
     update: (slotId: string, body: Record<string, unknown>) => api.put(`/hod/timetable/${slotId}`, body).then((r) => r.data),
     remove: (slotId: string) => api.delete(`/hod/timetable/${slotId}`).then((r) => r.data),
     uploadCsv: (form: FormData) => api.post<T.CsvResult>('/hod/timetable/csv', form).then((r) => r.data),
-    downloadTemplate: () => download('/hod/timetable/csv/template', 'timetable-template.csv'),
+    downloadTemplate: () => downloadFile('/hod/timetable/csv/template', 'timetable-template.csv'),
   },
 
   // ── Settings ──

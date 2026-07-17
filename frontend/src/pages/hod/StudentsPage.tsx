@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Download, Eye, GraduationCap, Trash2, Upload, UserPlus } from 'lucide-react'
@@ -109,9 +110,7 @@ export default function StudentsPage() {
       }
       action={
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" leftIcon={<Download size={15} />} onClick={() => hodApi.students.export(filters)}>
-            Export
-          </Button>
+          <ExportMenu onExport={(f) => hodApi.students.export(filters, f)} />
           {!readOnly && (
             <>
               {isFinalSem && (
