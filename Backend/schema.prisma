@@ -168,6 +168,8 @@ model University {
   notificationConfig  NotificationConfig[]
   archiveJobs         ArchiveJob[]
   notes               Note[]
+  subjectSyllabi      SubjectSyllabus[]
+  studentAiJobs       StudentAIJob[]
 
   @@map("universities")
 }
@@ -250,6 +252,9 @@ model Semester {
   promotionTos    PromotionMapping[]  @relation("ToSemester")
   facultyAssignments FacultyBatchAssignment[]
   quizzes         Quiz[]
+  studyPlans      StudyPlan[]
+  pyqInsights     PYQInsight[]
+  subjectSyllabi  SubjectSyllabus[]
 
   @@unique([universityId, academicYearId, number])
   @@index([academicYearId, status])
@@ -376,6 +381,10 @@ model Subject {
   facultyAssignments FacultyBatchAssignment[]
   pyqFiles           PYQFile[]
   quizzes            Quiz[]
+  studyPlanTasks     StudyPlanTask[]
+  pyqInsights        PYQInsight[]
+  chatSessions       StudentAIChatSession[]
+  syllabi            SubjectSyllabus[]
 
   @@unique([universityId, semesterNumber, code])
   @@index([universityId, semesterNumber])
@@ -519,6 +528,9 @@ model Student {
   selfNotes              SelfNote[]
   quizAttempts           QuizAttempt[]
   aiConversations        AIConversation[]
+  aiChatSessions         StudentAIChatSession[]
+  studyPlans             StudyPlan[]
+  studentAiJobs          StudentAIJob[]
   refreshTokens          RefreshToken[]
   chatMessagesAsStudent  ChatMessage[]       @relation("StudentChatMessages")
 
@@ -557,6 +569,7 @@ model StudentEnrollment {
   promotedTo    StudentEnrollment[] @relation("PromotionChain")
   results       Result[]
   attendances   AttendanceRecord[]
+  studyPlans    StudyPlan[]
 
   @@unique([studentId, semesterId])             // one enrollment per student per semester
   @@index([batchId, semesterId])               // HOD scope queries
@@ -686,6 +699,7 @@ model Note {
   university University @relation(fields: [universityId], references: [id])
   flashcards Flashcard[]
   targets    NoteBatchTarget[]
+  insight    NoteInsight?
 
   @@index([subjectId])
   @@index([facultyId])
@@ -765,6 +779,7 @@ model PYQFile {
   createdAt  DateTime  @default(now())
 
   subject    Subject  @relation(fields: [subjectId], references: [id])
+  insight    PYQInsight?
 
   @@index([subjectId])
   @@map("pyq_files")
@@ -1075,14 +1090,167 @@ model AIConversation {
   id         String   @id @default(uuid())
   studentId  String
   subjectId  String?  // null = general assistant, not subject-scoped
+  title      String?
+  deletedAt  DateTime?
   messages   Json     // [{ role: "user"|"assistant", content: "..." }]
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   student    Student  @relation(fields: [studentId], references: [id])
+  session    StudentAIChatSession?
 
   @@index([studentId])
   @@map("ai_conversations")
+}
+
+model StudentAIChatSession {
+  id             String         @id @default(uuid())
+  studentId      String
+  subjectId      String?
+  conversationId String         @unique
+  title          String
+  isDeleted      Boolean        @default(false)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  student        Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject        Subject?       @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, updatedAt])
+  @@index([subjectId])
+  @@map("student_ai_chat_sessions")
+}
+
+model StudyPlan {
+  id              String            @id @default(uuid())
+  studentId       String
+  enrollmentId    String
+  semesterId      String
+  weakSubjectIds  Json              @default("[]")
+  weakTopics      Json              @default("[]")
+  startDate       DateTime          @db.Date
+  endDate         DateTime          @db.Date
+  status          String            @default("queued")
+  regeneratedFrom DateTime?         @db.Date
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  student         Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  enrollment      StudentEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  semester        Semester          @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  tasks           StudyPlanTask[]
+
+  @@index([studentId, createdAt])
+  @@index([semesterId, createdAt])
+  @@map("study_plans")
+}
+
+model StudyPlanTask {
+  id                       String     @id @default(uuid())
+  studyPlanId              String
+  subjectId                String?
+  taskDate                 DateTime   @db.Date
+  description              String
+  estimatedDurationMinutes Int
+  priority                 String     @default("medium")
+  isCompleted              Boolean    @default(false)
+  isCustom                 Boolean    @default(false)
+  createdAt                DateTime   @default(now())
+  updatedAt                DateTime   @updatedAt
+
+  studyPlan                StudyPlan  @relation(fields: [studyPlanId], references: [id], onDelete: Cascade)
+  subject                  Subject?   @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+
+  @@index([studyPlanId, taskDate])
+  @@index([subjectId])
+  @@map("study_plan_tasks")
+}
+
+model NoteInsight {
+  id                   String    @id @default(uuid())
+  noteId               String    @unique
+  contentHash          String
+  extractedText        String    @default("")
+  shortSummary         String    @default("")
+  detailedNotes        String    @default("")
+  bulletNotes          Json      @default("[]")
+  importantDefinitions Json      @default("[]")
+  keyFormulae          Json      @default("[]")
+  importantQuestions   Json      @default("[]")
+  status               String    @default("pending")
+  lastGeneratedAt      DateTime  @updatedAt
+
+  note                 Note      @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([status, lastGeneratedAt])
+  @@map("note_insights")
+}
+
+model PYQInsight {
+  id             String    @id @default(uuid())
+  pyqFileId      String    @unique
+  subjectId      String
+  semesterId     String
+  extractedText  String    @default("")
+  topics         Json      @default("[]")
+  keywords       Json      @default("[]")
+  difficulty     String    @default("")
+  marksWeightage Json      @default("[]")
+  questionTypes  Json      @default("[]")
+  status         String    @default("pending")
+  updatedAt      DateTime  @updatedAt
+
+  pyqFile        PYQFile   @relation(fields: [pyqFileId], references: [id], onDelete: Cascade)
+  subject        Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  semester       Semester  @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@index([subjectId, updatedAt])
+  @@index([semesterId, updatedAt])
+  @@map("pyq_insights")
+}
+
+model SubjectSyllabus {
+  id             String    @id @default(uuid())
+  universityId   String
+  subjectId      String
+  semesterId     String
+  unitTitle      String
+  unitOrder      Int       @default(0)
+  topics         Json      @default("[]")
+  learningGoals  Json      @default("[]")
+  referenceLinks Json      @default("[]")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  university     University @relation(fields: [universityId], references: [id], onDelete: Cascade)
+  subject        Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  semester       Semester   @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@index([subjectId, unitOrder])
+  @@index([semesterId, unitOrder])
+  @@map("subject_syllabi")
+}
+
+model StudentAIJob {
+  id           String    @id @default(uuid())
+  universityId String
+  studentId    String?
+  jobType      String
+  status       JobStatus @default(QUEUED)
+  progress     Int       @default(0)
+  payload      Json      @default("{}")
+  result       Json      @default("{}")
+  error        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  university   University @relation(fields: [universityId], references: [id], onDelete: Cascade)
+  student      Student?   @relation(fields: [studentId], references: [id], onDelete: SetNull)
+
+  @@index([universityId, status, createdAt])
+  @@index([studentId, status, createdAt])
+  @@map("student_ai_jobs")
 }
 
 // ─────────────────────────────────────────────────────────────

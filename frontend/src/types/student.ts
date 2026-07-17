@@ -51,6 +51,8 @@ export interface StudentNote {
   fileType?: string
   fileSize?: number
   fileUrl?: string
+  hasAiSummary?: boolean
+  hasFlashcards?: boolean
   releaseAt?: string
   createdAt: string
 }
@@ -101,6 +103,8 @@ export interface StudentChatMsg {
 export interface AIConversation {
   id: string
   title: string
+  subjectName?: string | null
+  subjectCode?: string | null
   createdAt: string
   updatedAt?: string
   messageCount?: number

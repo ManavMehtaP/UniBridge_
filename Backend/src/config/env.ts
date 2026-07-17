@@ -17,6 +17,8 @@ const envSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().optional(),
   S3_BUCKET: z.string().optional(),
   S3_REGION: z.string().optional(),
+  DJANGO_AI_BASE_URL: z.string().url().optional(),
+  DJANGO_AI_SERVICE_TOKEN: z.string().optional(),
 });
 
 export const env = envSchema.parse(process.env);

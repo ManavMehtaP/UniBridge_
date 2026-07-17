@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMemo } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Sparkles, Target } from 'lucide-react'
 import { studentApi } from '@/api/student'
@@ -8,96 +8,131 @@ import { PageShell } from '@/components/shared/PageShell'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
-import { Input } from '@/components/ui/Input'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { CardSkeleton } from '@/components/ui/Skeleton'
 
-interface Session { time?: string; subject: string; topic: string; durationMins?: number; isCompleted?: boolean }
-interface DayPlan { date: string; sessions: Session[] }
+type PlannerTask = {
+  id: string
+  date: string
+  description: string
+  estimatedDurationMinutes: number
+  priority: string
+  priorityLabel: string
+  isCompleted: boolean
+  subject?: { code: string; name: string } | null
+}
 
 export default function StudyPlannerPage() {
-  const [plan, setPlan] = useState<DayPlan[]>([])
-  const saved = useQuery({ queryKey: ['student', 'planner'], queryFn: studentApi.studyPlanner })
+  const qc = useQueryClient()
+  const planner = useQuery({
+    queryKey: ['student', 'planner'],
+    queryFn: studentApi.studyPlanner,
+  })
 
-  useEffect(() => {
-    const p = (saved.data as { plan?: DayPlan[] })?.plan
-    if (p) setPlan(p)
-  }, [saved.data])
-
-  const save = useMutation({
-    mutationFn: () => studentApi.saveStudyPlanner(plan as unknown[]),
-    onSuccess: () => toast.success('Plan saved'),
+  const generate = useMutation({
+    mutationFn: () => studentApi.aiSuggest({ fromDate: '2026-07-17' }),
+    onSuccess: async () => {
+      toast.success('Planner generated from your weak subjects and PYQ trends')
+      await qc.invalidateQueries({ queryKey: ['student', 'planner'] })
+    },
     onError: (e) => toast.error(errorMessage(e)),
   })
 
-  function addDay() {
-    const nextDate = new Date()
-    nextDate.setDate(nextDate.getDate() + plan.length)
-    setPlan((p) => [...p, { date: nextDate.toISOString().slice(0, 10), sessions: [{ subject: '', topic: '', durationMins: 60 }] }])
-  }
+  const toggle = useMutation({
+    mutationFn: ({ date, index, isCompleted }: { date: string; index: number; isCompleted: boolean }) =>
+      studentApi.toggleSession(date, index, isCompleted),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['student', 'planner'] })
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
 
-  function addSession(di: number) {
-    setPlan((p) => p.map((d, i) => i === di ? { ...d, sessions: [...d.sessions, { subject: '', topic: '', durationMins: 60 }] } : d))
-  }
+  const grouped = useMemo(() => {
+    const tasks = ((planner.data as { plan?: { tasks?: PlannerTask[] } } | undefined)?.plan?.tasks ?? []) as PlannerTask[]
+    const map = new Map<string, PlannerTask[]>()
+    tasks.forEach((task) => {
+      const items = map.get(task.date) ?? []
+      items.push(task)
+      map.set(task.date, items)
+    })
+    return [...map.entries()].map(([date, tasksForDay]) => ({ date, tasks: tasksForDay }))
+  }, [planner.data])
 
-  function updateSession(di: number, si: number, patch: Partial<Session>) {
-    setPlan((p) => p.map((d, i) => i === di ? { ...d, sessions: d.sessions.map((s, j) => j === si ? { ...s, ...patch } : s) } : d))
-  }
-
-  function toggleSession(di: number, si: number) {
-    updateSession(di, si, { isCompleted: !plan[di].sessions[si].isCompleted })
-  }
-
-  function removeSession(di: number, si: number) {
-    setPlan((p) => p.map((d, i) => i === di ? { ...d, sessions: d.sessions.filter((_, j) => j !== si) } : d))
-  }
+  const weakTopics = ((planner.data as { plan?: { weakTopics?: string[] } } | undefined)?.plan?.weakTopics ?? []) as string[]
+  const planMeta = (planner.data as { plan?: { startDate?: string; endDate?: string; status?: string; semester?: { label?: string } } } | undefined)?.plan
 
   return (
     <PageShell
       title="Study Planner"
-      subtitle="Plan your study sessions week by week"
+      subtitle="Generated from your current weak subjects, PYQ signals, and upcoming exam window."
       action={
         <div className="flex gap-2">
-          <Button variant="outline" leftIcon={<Sparkles size={15} />} onClick={() => toast('AI suggestions: coming soon')}>AI Suggest</Button>
-          <Button onClick={() => save.mutate()} loading={save.isPending} disabled={plan.length === 0}>Save Plan</Button>
+          <Button variant="outline" leftIcon={<Sparkles size={15} />} onClick={() => generate.mutate()} loading={generate.isPending}>
+            Generate AI Plan
+          </Button>
         </div>
       }
     >
-      {plan.length === 0 ? (
-        <EmptyState icon={<Target size={22} />} title="No plan yet" description="Add days and sessions to organize your study." action={<Button onClick={addDay}>Add Day</Button>} />
+      {planner.isLoading ? (
+        <CardSkeleton height={240} />
+      ) : !grouped.length ? (
+        <EmptyState
+          icon={<Target size={22} />}
+          title="No generated plan yet"
+          description="Generate a study plan to create a checkbox schedule from Friday, July 17, 2026 to your exam period."
+          action={<Button leftIcon={<Sparkles size={15} />} onClick={() => generate.mutate()} loading={generate.isPending}>Generate Now</Button>}
+        />
       ) : (
         <div className="space-y-4">
-          {plan.map((day, di) => {
-            const done = day.sessions.filter((s) => s.isCompleted).length
+          <Card>
+            <CardHeader
+              title={planMeta?.semester?.label ?? 'Current semester plan'}
+              subtitle={planMeta?.startDate && planMeta?.endDate ? `Plan window: ${new Date(planMeta.startDate).toLocaleDateString('en-IN')} to ${new Date(planMeta.endDate).toLocaleDateString('en-IN')}` : 'Plan window unavailable'}
+              action={<Badge tone={planMeta?.status === 'completed' ? 'success' : 'warning'}>{planMeta?.status ?? 'unknown'}</Badge>}
+            />
+            <CardBody className="space-y-3 pt-0">
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Weak topics being tracked</div>
+                <div className="flex flex-wrap gap-2">
+                  {weakTopics.map((topic) => <Badge key={topic} tone="warning">{topic}</Badge>)}
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
+          {grouped.map((day) => {
+            const done = day.tasks.filter((task) => task.isCompleted).length
             return (
-              <Card key={di}>
+              <Card key={day.date}>
                 <CardHeader
                   title={new Date(day.date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' })}
-                  subtitle={`${done}/${day.sessions.length} sessions completed`}
-                  action={<Button variant="ghost" size="sm" onClick={() => addSession(di)}>+ Session</Button>}
+                  subtitle={`${done}/${day.tasks.length} tasks completed`}
                 />
                 <CardBody className="pt-0 space-y-2">
-                  {day.sessions.map((s, si) => (
-                    <div key={si} className={`flex flex-wrap items-center gap-2 rounded-sm border border-border p-2 ${s.isCompleted ? 'bg-success-light/40' : ''}`}>
-                      <input type="checkbox" checked={s.isCompleted ?? false} onChange={() => toggleSession(di, si)} className="h-4 w-4 accent-primary" />
-                      <Input className="max-w-32" value={s.subject} onChange={(e) => updateSession(di, si, { subject: e.target.value })} placeholder="Subject" />
-                      <Input className="flex-1 min-w-40" value={s.topic} onChange={(e) => updateSession(di, si, { topic: e.target.value })} placeholder="Topic" />
-                      <Input className="max-w-24" type="number" value={s.durationMins ?? ''} onChange={(e) => updateSession(di, si, { durationMins: Number(e.target.value) })} placeholder="Mins" />
-                      <button onClick={() => removeSession(di, si)} className="text-xs text-text-muted hover:text-danger">Remove</button>
-                    </div>
+                  {day.tasks.map((task, index) => (
+                    <label key={task.id} className={`flex items-start gap-3 rounded-sm border border-border p-3 ${task.isCompleted ? 'bg-success-light/35' : 'bg-surface'}`}>
+                      <input
+                        type="checkbox"
+                        checked={task.isCompleted}
+                        onChange={(e) => toggle.mutate({ date: day.date, index, isCompleted: e.target.checked })}
+                        className="mt-1 h-4 w-4 accent-primary"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {task.subject && <Badge tone="primary">{task.subject.code}</Badge>}
+                          <Badge tone={task.priority === 'high' ? 'danger' : task.priority === 'low' ? 'neutral' : 'warning'}>{task.priorityLabel}</Badge>
+                          <span className="text-[11px] text-text-muted">{task.estimatedDurationMinutes} mins</span>
+                        </div>
+                        <div className="mt-2 text-sm leading-6 text-text-primary">{task.description}</div>
+                        {task.subject?.name && <div className="mt-1 text-xs text-text-muted">{task.subject.name}</div>}
+                      </div>
+                    </label>
                   ))}
                 </CardBody>
               </Card>
             )
           })}
-          <div className="flex justify-center">
-            <Button variant="outline" onClick={addDay}>+ Add Day</Button>
-          </div>
         </div>
-      )}
-      {saved.data && plan.length > 0 && (
-        <Badge tone="neutral" className="mt-3">
-          {(saved.data as { updatedAt?: string }).updatedAt ? `Last saved ${new Date((saved.data as { updatedAt: string }).updatedAt).toLocaleString('en-IN')}` : 'Not saved yet'}
-        </Badge>
       )}
     </PageShell>
   )

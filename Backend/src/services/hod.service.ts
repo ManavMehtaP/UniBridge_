@@ -70,7 +70,6 @@ export class HodService {
       hod: {
         id: hod.id,
         name: hod.name,
-        department: hod.department,
         employeeId: hod.employeeId,
       },
       activeSemester: {
@@ -296,9 +295,17 @@ export class HodService {
         id: true,
         universityId: true,
         name: true,
-        department: true,
         employeeId: true,
+        email: true,
+        passwordHash: true,
         isHod: true,
+        isActive: true,
+        phone: true,
+        mentorCode: true,
+        profilePhotoUrl: true,
+        year: true,
+        createdAt: true,
+        updatedAt: true,
       },
     });
 
@@ -306,6 +313,6 @@ export class HodService {
       throw new ApiError(404, "HOD_NOT_FOUND", "HOD faculty profile not found.");
     }
 
-    return hod as Faculty;
+    return hod as unknown as Faculty;
   }
 }

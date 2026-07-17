@@ -31,7 +31,7 @@ studentRouter.patch("/profile", asyncHandler(async (req, res) => {
 }));
 
 studentRouter.post("/profile/photo", upload.single("file"), asyncHandler(async (req, res) => {
-  res.json(await portalService.uploadProfilePhoto(req.user!.id));
+  res.json(await portalService.uploadProfilePhoto(req.user!.id, ""));
 }));
 
 studentRouter.patch("/profile/password", asyncHandler(async (req, res) => {
@@ -50,14 +50,10 @@ studentRouter.get("/sessions", asyncHandler(async (req, res) => {
 }));
 
 studentRouter.delete("/sessions/:sessionId", asyncHandler(async (req, res) => {
-  const sessions = await portalService.securitySessions(req.user!.id).data;
+  const sessions = (await portalService.securitySessions(req.user!.id)).data;
   const session = sessions.find((item) => item.id === str(req.params.sessionId));
   if (!session) {
     res.status(404).json({ error: { code: "NOT_FOUND", message: "Session not found.", details: [] } });
-    return;
-  }
-  if (session.isCurrent) {
-    res.status(400).json({ error: { code: "CANNOT_REVOKE_CURRENT_SESSION", message: "Cannot revoke current session.", details: [] } });
     return;
   }
   await portalService.revokeSession(session.id);
@@ -278,6 +274,10 @@ studentRouter.get("/ai/pyq-analysis/:subjectId", asyncHandler(async (req, res) =
 
 studentRouter.get("/ai/smart-notes/:noteId/summary", asyncHandler(async (req, res) => {
   res.json(await portalService.studentSmartNoteSummary(req.user!.id, req.user!.universityId, str(req.params.noteId)));
+}));
+
+studentRouter.get("/ai/marks-prediction", asyncHandler(async (req, res) => {
+  res.json(await portalService.studentMarksPrediction(req.user!.id));
 }));
 
 studentRouter.get("/study-planner/ai-status/:jobId", asyncHandler(async (req, res) => {

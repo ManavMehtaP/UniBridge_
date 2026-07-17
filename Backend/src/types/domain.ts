@@ -36,7 +36,8 @@ export interface Faculty {
   universityId: string;
   name: string;
   email: string;
-  year: string;
+  year?: string | null;
+  department?: string;
   employeeId: string;
   isHod: boolean;
   isActive: boolean;
@@ -44,8 +45,8 @@ export interface Faculty {
   mentorCode: string | null;
   profilePhotoUrl: string | null;
   passwordHash: string;
-  createdAt?: string;
-  updatedAt?: string;
+  createdAt?: string | Date;
+  updatedAt?: string | Date;
   deletedAt?: string | null;
 }
 

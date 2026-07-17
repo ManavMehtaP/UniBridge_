@@ -69,13 +69,14 @@ export const studentApi = {
   markMentorRead: () => api.patch('/student/mentor/messages/mark-read').then((r) => r.data),
 
   aiConversations: () => api.get<{ data: T.AIConversation[] }>('/student/ai/conversations').then((r) => r.data),
-  createAiConversation: (title: string) => api.post('/student/ai/conversations', { title }).then((r) => r.data),
-  aiConversation: (id: string) => api.get<{ messages: T.AIMessage[] }>(`/student/ai/conversations/${id}`).then((r) => r.data),
+  createAiConversation: (body: { title?: string; subjectId?: string | null }) => api.post('/student/ai/conversations', body).then((r) => r.data),
+  aiConversation: (id: string) => api.get<{ id: string; title?: string; subjectId?: string | null; messages: T.AIMessage[] }>(`/student/ai/conversations/${id}`).then((r) => r.data),
   sendAiMessage: (id: string, content: string) =>
     api.post(`/student/ai/conversations/${id}/message`, { content }).then((r) => r.data),
   deleteAiConversation: (id: string) => api.delete(`/student/ai/conversations/${id}`).then((r) => r.data),
   pyqAnalysis: (subjectId: string) => api.get(`/student/ai/pyq-analysis/${subjectId}`).then((r) => r.data),
   smartNoteSummary: (noteId: string) => api.get(`/student/ai/smart-notes/${noteId}/summary`).then((r) => r.data),
+  marksPrediction: () => api.get('/student/ai/marks-prediction').then((r) => r.data),
 
   studyPlanner: () => api.get('/student/study-planner').then((r) => r.data),
   saveStudyPlanner: (plan: unknown[]) => api.put('/student/study-planner', { plan }).then((r) => r.data),

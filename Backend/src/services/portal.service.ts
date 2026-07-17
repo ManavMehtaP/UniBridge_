@@ -1,6 +1,8 @@
 import prisma from "../config/prisma.js";
 import { env } from "../config/env.js";
 import { uploadObject, presignGetUrl, storageEnabled } from "../config/storage.js";
+import { studentAiBridge } from "./studentAiBridge.service.js";
+import { generateStudyPlanForStudent, getLatestStudyPlan } from "./studyPlanner.service.js";
 import type { Role, YearLevel } from "../types/domain.js";
 import type { ExportTable } from "../utils/export.js";
 import { ApiError, buildPagination } from "../utils/http.js";
@@ -15,6 +17,47 @@ type Scope = {
   hodSemesterIds: string[];
   userId: string;
 };
+
+function planTaskTone(priority: string) {
+  if (priority === "high") return "HIGH";
+  if (priority === "low") return "LOW";
+  return "MEDIUM";
+}
+
+function formatStudyPlan(plan: Awaited<ReturnType<typeof getLatestStudyPlan>>) {
+  if (!plan) return { plan: null, updatedAt: null };
+  return {
+    plan: {
+      id: plan.id,
+      semester: plan.semester,
+      startDate: plan.startDate,
+      endDate: plan.endDate,
+      status: plan.status,
+      weakSubjectIds: plan.weakSubjectIds,
+      weakTopics: plan.weakTopics,
+      tasks: plan.tasks.map((task) => ({
+        id: task.id,
+        date: task.taskDate,
+        description: task.description,
+        estimatedDurationMinutes: task.estimatedDurationMinutes,
+        priority: task.priority,
+        priorityLabel: planTaskTone(task.priority),
+        isCompleted: task.isCompleted,
+        isCustom: task.isCustom,
+        subject: task.subject ? { id: task.subject.id, code: task.subject.code, name: task.subject.name } : null,
+      })),
+    },
+    updatedAt: plan.updatedAt,
+  };
+}
+
+async function bestEffortStudentAi(action: () => Promise<unknown>) {
+  try {
+    await action();
+  } catch {
+    // Best-effort background trigger: note/PYQ uploads should still succeed even if Django is offline.
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // Pure utility helpers (no DB calls)
@@ -94,6 +137,10 @@ function parseBatchIds(value: unknown): string[] {
     // Accept a simple comma-separated fallback for non-browser clients.
   }
   return [...new Set(value.split(",").map((id) => id.trim()).filter(Boolean))];
+}
+
+function uniq<T>(values: T[]) {
+  return [...new Set(values)];
 }
 
 function objectUrl(fileKey: string) {
@@ -1634,8 +1681,24 @@ export const portalService = {
   },
 
   async uploadPyq(subjectId: string, uploadedById: string, year: string, fileUrl: string, fileKey: string) {
-    await prisma.pYQFile.create({ data: { subjectId, uploadedById, year, fileUrl, fileKey } });
-    return { uploaded: 1, subjectId, processingStatus: "uploaded" };
+    const subject = await subjectById(subjectId);
+    const activeSemester = await prisma.semester.findFirst({
+      where: { universityId: subject.universityId, number: subject.semesterNumber, status: "ACTIVE" },
+      orderBy: { startDate: "desc" },
+    }) ?? await prisma.semester.findFirst({
+      where: { universityId: subject.universityId, number: subject.semesterNumber },
+      orderBy: { startDate: "desc" },
+    });
+    const pyq = await prisma.pYQFile.create({ data: { subjectId, uploadedById, year, fileUrl, fileKey } });
+    if (activeSemester) {
+      await prisma.pYQAnalysis.upsert({
+        where: { subjectId_semesterId: { subjectId, semesterId: activeSemester.id } },
+        update: {},
+        create: { subjectId, semesterId: activeSemester.id, topicFrequencies: {} },
+      });
+    }
+    await bestEffortStudentAi(() => studentAiBridge.triggerPyqProcessing(pyq.id));
+    return { uploaded: 1, subjectId, pyqId: pyq.id, processingStatus: studentAiBridge.isConfigured() ? "queued" : "uploaded" };
   },
 
   // ── Attendance (HOD) ──────────────────────────────────────
@@ -1756,8 +1819,8 @@ export const portalService = {
     if (!assignment) throw new ApiError(403, "NOT_ASSIGNED_TO_BATCH", "Faculty is not assigned to this batch.");
     const lectureDate = new Date(body.lectureDate);
     for (const item of body.attendance) {
-      const existing = await prisma.attendanceRecord.findUnique({
-        where: { enrollmentId_subjectId_lectureDate: { enrollmentId: item.enrollmentId, subjectId: body.subjectId, lectureDate } },
+      const existing = await prisma.attendanceRecord.findFirst({
+        where: { enrollmentId: item.enrollmentId, subjectId: body.subjectId, lectureDate, slotId: null },
       });
       if (existing?.isLocked) throw new ApiError(409, "ATTENDANCE_RECORD_LOCKED", "Attendance record is locked.");
       if (existing) {
@@ -3186,52 +3249,150 @@ export const portalService = {
   // ── Student — AI Conversations ────────────────────────────
 
   async studentAiConversations(studentId: string) {
-    const conversations = await prisma.aIConversation.findMany({ where: { studentId }, orderBy: { updatedAt: "desc" } });
-    const data = await Promise.all(conversations.map(async (c) => {
-      const subject = c.subjectId ? await prisma.subject.findUnique({ where: { id: c.subjectId }, select: { code: true, name: true } }) : null;
-      const messages = c.messages as Array<{ role: string; content: string }>;
-      return { id: c.id, subjectCode: subject?.code ?? null, subjectName: subject?.name ?? "General", lastMessage: messages[messages.length - 1]?.content ?? null, messageCount: messages.length, updatedAt: c.updatedAt };
-    }));
+    if (studentAiBridge.isConfigured()) {
+      const chats = await studentAiBridge.listChats(studentId);
+      const data = await Promise.all(chats.map(async (chat) => {
+        const subject = chat.subject_id ? await prisma.subject.findUnique({ where: { id: chat.subject_id }, select: { code: true, name: true } }) : null;
+        return {
+          id: chat.chat_id,
+          title: chat.title,
+          subjectCode: subject?.code ?? null,
+          subjectName: subject?.name ?? "General",
+          messageCount: chat.message_count,
+          updatedAt: chat.updated_at,
+          createdAt: chat.updated_at,
+        };
+      }));
+      return { data };
+    }
+
+    const sessions = await prisma.studentAIChatSession.findMany({
+      where: { studentId, isDeleted: false },
+      include: { conversation: true, subject: { select: { code: true, name: true } } },
+      orderBy: { updatedAt: "desc" },
+    });
+    const data = sessions.map((session) => {
+      const messages = session.conversation.messages as Array<{ role: string; content: string }>;
+      return {
+        id: session.id,
+        title: session.title,
+        subjectCode: session.subject?.code ?? null,
+        subjectName: session.subject?.name ?? "General",
+        lastMessage: messages[messages.length - 1]?.content ?? null,
+        messageCount: messages.length,
+        updatedAt: session.updatedAt,
+        createdAt: session.createdAt,
+      };
+    });
     return { data };
   },
 
-  async createStudentAiConversation(studentId: string, universityId: string, body: { subjectId?: string; initialMessage: string }) {
-    if (!body.initialMessage.trim()) throw new ApiError(400, "EMPTY_MESSAGE", "Message cannot be empty.");
+  async createStudentAiConversation(studentId: string, universityId: string, body: { subjectId?: string; initialMessage?: string; title?: string }) {
     if (body.subjectId) await ensureStudentSubject(studentId, universityId, body.subjectId);
-    const subject = body.subjectId ? await prisma.subject.findUnique({ where: { id: body.subjectId }, select: { code: true } }) : null;
-    const now = new Date().toISOString();
-    const messages = [
-      { role: "user", content: body.initialMessage.trim(), timestamp: now },
-      { role: "assistant", content: `Study help for ${subject?.code ?? "general topics"} is ready. Start with: ${body.initialMessage.trim()}`, timestamp: now },
-    ];
-    const conversation = await prisma.aIConversation.create({ data: { studentId, subjectId: body.subjectId ?? null, messages } });
-    return { conversationId: conversation.id, subjectCode: subject?.code ?? null, reply: messages[1].content };
+    if (studentAiBridge.isConfigured()) {
+      const created = await studentAiBridge.createChat(studentId, { title: body.title, subject_id: body.subjectId ?? null });
+      return { id: created.chat_id, title: created.title, subjectId: created.subject_id, messages: created.messages, createdAt: created.created_at };
+    }
+
+    const conversation = await prisma.aIConversation.create({
+      data: { studentId, subjectId: body.subjectId ?? null, messages: [] },
+    });
+    const session = await prisma.studentAIChatSession.create({
+      data: {
+        studentId,
+        subjectId: body.subjectId ?? null,
+        conversationId: conversation.id,
+        title: body.title?.trim() || `Chat ${new Date().toISOString().slice(0, 16).replace("T", " ")}`,
+      },
+    });
+    return { id: session.id, title: session.title, subjectId: session.subjectId, messages: [], createdAt: session.createdAt };
   },
 
   async studentAiConversation(studentId: string, conversationId: string) {
-    const c = await prisma.aIConversation.findUnique({ where: { id: conversationId } });
-    if (!c) throw new ApiError(404, "NOT_FOUND", "Conversation not found.");
-    if (c.studentId !== studentId) throw new ApiError(403, "STUDENT_NOT_OWNER", "Conversation does not belong to this student.");
-    const subject = c.subjectId ? await prisma.subject.findUnique({ where: { id: c.subjectId }, select: { code: true } }) : null;
-    return { id: c.id, subjectCode: subject?.code ?? null, messages: c.messages };
+    if (studentAiBridge.isConfigured()) {
+      const chat = await studentAiBridge.getChat(studentId, conversationId);
+      return {
+        id: chat.chat_id,
+        title: chat.title,
+        subjectId: chat.subject_id,
+        messages: (chat.messages ?? []).map((message, index) => ({
+          id: `${conversationId}-${index}`,
+          role: String(message.role).toUpperCase(),
+          content: message.content,
+          createdAt: new Date().toISOString(),
+        })),
+      };
+    }
+
+    const session = await prisma.studentAIChatSession.findFirst({
+      where: { id: conversationId, studentId, isDeleted: false },
+      include: { conversation: true, subject: { select: { code: true } } },
+    });
+    if (!session) throw new ApiError(404, "NOT_FOUND", "Conversation not found.");
+    return {
+      id: session.id,
+      title: session.title,
+      subjectId: session.subjectId,
+      subjectCode: session.subject?.code ?? null,
+      messages: (session.conversation.messages as Array<{ role: string; content: string }>).map((message, index) => ({
+        id: `${session.id}-${index}`,
+        role: String(message.role).toUpperCase(),
+        content: message.content,
+        createdAt: session.updatedAt.toISOString(),
+      })),
+    };
   },
 
   async sendStudentAiMessage(studentId: string, conversationId: string, content: string) {
-    const c = await prisma.aIConversation.findUnique({ where: { id: conversationId } });
-    if (!c) throw new ApiError(404, "NOT_FOUND", "Conversation not found.");
-    if (c.studentId !== studentId) throw new ApiError(403, "STUDENT_NOT_OWNER", "Conversation does not belong to this student.");
     if (!content.trim()) throw new ApiError(400, "EMPTY_MESSAGE", "Message cannot be empty.");
-    const messages = c.messages as Array<{ role: string; content: string; timestamp: string }>;
-    const now = new Date().toISOString();
-    messages.push({ role: "user", content: content.trim(), timestamp: now });
-    messages.push({ role: "assistant", content: `Quick explanation: ${content.trim()}`, timestamp: now });
-    await prisma.aIConversation.update({ where: { id: conversationId }, data: { messages, updatedAt: new Date() } });
-    return { conversationId, reply: messages[messages.length - 1].content };
+    if (studentAiBridge.isConfigured()) {
+      return studentAiBridge.sendChatMessage(studentId, conversationId, content.trim());
+    }
+
+    const session = await prisma.studentAIChatSession.findFirst({
+      where: { id: conversationId, studentId, isDeleted: false },
+      include: { conversation: true, subject: true },
+    });
+    if (!session) throw new ApiError(404, "NOT_FOUND", "Conversation not found.");
+    const noteInsights = await prisma.noteInsight.findMany({
+      where: { note: session.subjectId ? { subjectId: session.subjectId } : undefined },
+      include: { note: { select: { title: true } } },
+      orderBy: { lastGeneratedAt: "desc" },
+      take: 2,
+    });
+    const pyqAnalysis = session.subjectId
+      ? await prisma.pYQAnalysis.findFirst({ where: { subjectId: session.subjectId }, orderBy: { analyzedAt: "desc" } })
+      : null;
+    const enrollment = await prisma.studentEnrollment.findFirst({ where: { studentId, isCurrent: true } });
+    const subjectResults = session.subjectId && enrollment
+      ? await prisma.result.findMany({ where: { enrollmentId: enrollment.id, subjectId: session.subjectId, isPublished: true } })
+      : [];
+    const subjectPct = subjectResults.length
+      ? Math.round((subjectResults.reduce((sum, result) => sum + ((result.marksObtained / result.maxMarks) * 100), 0) / subjectResults.length))
+      : null;
+
+    const replyParts = [
+      session.subject ? `Subject focus: ${session.subject.code} ${session.subject.name}.` : "General study support is active.",
+      subjectPct === null ? "No published marks are available yet for this context." : `Your recent published average here is ${subjectPct}%.`,
+      noteInsights.length > 0 ? `Relevant note summaries: ${noteInsights.map((item) => `${item.note.title} - ${item.shortSummary || "summary pending"}`).join(" | ")}` : "No processed faculty note insights are available yet.",
+      pyqAnalysis ? `Recurring PYQ topics: ${Object.entries((pyqAnalysis.topicFrequencies as Record<string, number>) ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([topic]) => topic).join(", ") || "not enough PYQ data yet"}.` : "PYQ analysis is still building for this subject.",
+      `Question received: ${content.trim()}`,
+    ];
+
+    const messages = [...(session.conversation.messages as Array<{ role: string; content: string }>), { role: "user", content: content.trim() }, { role: "assistant", content: replyParts.join(" ") }];
+    await prisma.aIConversation.update({ where: { id: session.conversationId }, data: { messages } });
+    await prisma.studentAIChatSession.update({ where: { id: session.id }, data: { updatedAt: new Date() } });
+    return { conversationId, reply: replyParts.join(" ") };
   },
 
   async deleteStudentAiConversation(studentId: string, conversationId: string) {
-    await this.studentAiConversation(studentId, conversationId);
-    await prisma.aIConversation.delete({ where: { id: conversationId } });
+    if (studentAiBridge.isConfigured()) {
+      await studentAiBridge.deleteChat(studentId, conversationId);
+      return;
+    }
+    const session = await prisma.studentAIChatSession.findFirst({ where: { id: conversationId, studentId, isDeleted: false } });
+    if (!session) throw new ApiError(404, "NOT_FOUND", "Conversation not found.");
+    await prisma.studentAIChatSession.update({ where: { id: session.id }, data: { isDeleted: true } });
   },
 
   // ── Student — Leaderboard ─────────────────────────────────
@@ -3268,14 +3429,83 @@ export const portalService = {
   async studentPyqAnalysis(studentId: string, universityId: string, subjectId: string) {
     await ensureStudentSubject(studentId, universityId, subjectId);
     const subject = await subjectById(subjectId);
-    const analysis = await prisma.pYQAnalysis.findFirst({ where: { subjectId } });
-    return { subjectCode: subject.code, subjectName: subject.name, analyzedAt: analysis?.analyzedAt ?? new Date(), topicFrequencies: analysis ? Object.entries(analysis.topicFrequencies as Record<string, number>).map(([topic, frequency]) => ({ topic, frequency, priority: frequency >= 5 ? "HIGH" : frequency >= 3 ? "MEDIUM" : "LOW" })) : [{ topic: "Core Concepts", frequency: 3, priority: "HIGH" }, { topic: "Important Definitions", frequency: 2, priority: "MEDIUM" }], totalPYQsAnalyzed: await prisma.pYQFile.count({ where: { subjectId } }) };
+    const { enrollment } = await getStudentEnrollment(studentId, universityId);
+    const pyqFiles = await prisma.pYQFile.findMany({ where: { subjectId }, orderBy: { createdAt: "desc" } });
+    const analysis = await prisma.pYQAnalysis.findFirst({ where: { subjectId, semesterId: enrollment.semesterId } });
+    const insights = await prisma.pYQInsight.findMany({
+      where: { subjectId, semesterId: enrollment.semesterId },
+      include: { pyqFile: { select: { id: true, year: true, createdAt: true } } },
+      orderBy: { updatedAt: "desc" },
+    });
+    if (insights.length === 0 && pyqFiles.length > 0) {
+      await Promise.all(pyqFiles.slice(0, 3).map((pyqFile) => bestEffortStudentAi(() => studentAiBridge.triggerPyqProcessing(pyqFile.id))));
+    }
+    const topicFrequency = analysis ? Object.entries((analysis.topicFrequencies as Record<string, number>) ?? {}) : [];
+    const importantTopics = topicFrequency.length > 0
+      ? topicFrequency.sort((a, b) => b[1] - a[1]).slice(0, 6).map(([topic, frequency]) => ({ topic, frequency, priority: frequency >= 5 ? "HIGH" : frequency >= 3 ? "MEDIUM" : "LOW" }))
+      : uniq(insights.flatMap((insight) => [ ...((insight.topics as string[]) ?? []), ...((insight.keywords as string[]) ?? []) ])).slice(0, 6).map((topic) => ({ topic, frequency: 1, priority: "MEDIUM" }));
+    const results = await prisma.result.findMany({
+      where: { enrollmentId: enrollment.id, subjectId, isPublished: true },
+      orderBy: { createdAt: "asc" },
+    });
+    const averagePct = results.length
+      ? Number((results.reduce((sum, item) => sum + ((item.marksObtained / item.maxMarks) * 100), 0) / results.length).toFixed(1))
+      : null;
+    return {
+      subjectId,
+      subjectCode: subject.code,
+      subjectName: subject.name,
+      analyzedAt: analysis?.analyzedAt ?? insights[0]?.updatedAt ?? null,
+      averagePct,
+      totalPYQsAnalyzed: pyqFiles.length,
+      status: insights.length > 0 || analysis ? "ready" : pyqFiles.length > 0 ? "processing" : "empty",
+      importantTopics,
+      weakPoints: averagePct !== null && averagePct < 60
+        ? importantTopics.slice(0, 4).map((item) => `${item.topic} needs practice because your current published average is ${averagePct}%.`)
+        : importantTopics.slice(0, 3).map((item) => `${item.topic} is a high-value revision area.`),
+      files: insights.map((insight) => ({
+        pyqId: insight.pyqFile.id,
+        year: insight.pyqFile.year,
+        difficulty: insight.difficulty,
+        topics: insight.topics,
+        keywords: insight.keywords,
+        questionTypes: insight.questionTypes,
+        updatedAt: insight.updatedAt,
+      })),
+    };
   },
 
   async studentSmartNoteSummary(studentId: string, universityId: string, noteId: string) {
     const note = await this.studentNote(studentId, universityId, noteId);
-    if (!note.aiSummary) throw new ApiError(404, "SUMMARY_NOT_YET_GENERATED", "AI summary has not been generated yet.");
-    return { noteId, noteTitle: note.title, subjectCode: note.subjectCode, summary: note.aiSummary, generatedAt: note.createdAt };
+    const insight = await prisma.noteInsight.findUnique({ where: { noteId } });
+    if (!insight) {
+      await bestEffortStudentAi(() => studentAiBridge.triggerNoteProcessing(noteId));
+      if (!note.aiSummary) {
+        return { noteId, noteTitle: note.title, subjectCode: note.subjectCode, status: "processing", summary: null, flashcards: [] };
+      }
+      return { noteId, noteTitle: note.title, subjectCode: note.subjectCode, status: "fallback", summary: note.aiSummary, flashcards: note.flashcards ?? [] };
+    }
+    return {
+      noteId,
+      noteTitle: note.title,
+      subjectCode: note.subjectCode,
+      status: insight.status,
+      summary: insight.shortSummary || note.aiSummary,
+      detailedNotes: insight.detailedNotes,
+      bulletNotes: insight.bulletNotes,
+      importantDefinitions: insight.importantDefinitions,
+      keyFormulae: insight.keyFormulae,
+      importantQuestions: insight.importantQuestions,
+      flashcards: note.flashcards ?? [],
+      generatedAt: insight.lastGeneratedAt,
+    };
+  },
+
+  async studentMarksPrediction(studentId: string) {
+    if (!studentAiBridge.isConfigured()) {
+      throw new ApiError(503, "AI_SERVICE_NOT_CONFIGURED", "Marks prediction is unavailable because the Django AI service is not configured.");
+    }
+    return studentAiBridge.getStudentMarksPrediction(studentId);
   },
 
   // ── Faculty Dashboard / Profile ───────────────────────────
@@ -3628,6 +3858,7 @@ export const portalService = {
         status, releaseAt, targets: { create: batchIds.map((batchId) => ({ batchId })) },
       },
     });
+    await bestEffortStudentAi(() => studentAiBridge.triggerNoteProcessing(note.id));
     if (status === "PUBLISHED") await this.notifyNotePublished(note.id);
     return { id: note.id, title: note.title, fileUrl: note.fileUrl, status, releaseAt, message: status === "SCHEDULED" ? "Note scheduled." : "Note published." };
   },
@@ -3654,6 +3885,7 @@ export const portalService = {
       if (status === "PUBLISHED") { await prisma.note.update({ where: { id: noteId }, data }); await this.notifyNotePublished(noteId); return this.getFacultyNote(facultyId, noteId); }
     }
     await prisma.note.update({ where: { id: noteId }, data });
+    if (fileBuffer) await bestEffortStudentAi(() => studentAiBridge.triggerNoteProcessing(noteId));
     return this.getFacultyNote(facultyId, noteId);
   },
 
@@ -4079,9 +4311,14 @@ export const portalService = {
   },
 
   async facultyAnalyticsAttendance(facultyId: string, universityId: string, semesterId?: string, subjectId?: string, batchId?: string) {
-    const summary = (await this.facultyAttendanceSummary(facultyId, universityId, semesterId)).bySubjectAndBatch
-      .filter((r) => !subjectId || r.subjectCode === (subjectId ? (prisma.subject.findUnique({ where: { id: subjectId } }).then((s) => s?.code)) : null))
-      .filter((r) => !batchId || r.batchCode === (batchId ? (prisma.batch.findUnique({ where: { id: batchId } }).then((b) => b?.code)) : null));
+    const summaryBase = (await this.facultyAttendanceSummary(facultyId, universityId, semesterId)).bySubjectAndBatch;
+    const [subjectCode, batchCode] = await Promise.all([
+      subjectId ? prisma.subject.findUnique({ where: { id: subjectId }, select: { code: true } }).then((subject) => subject?.code ?? null) : Promise.resolve(null),
+      batchId ? prisma.batch.findUnique({ where: { id: batchId }, select: { code: true } }).then((batch) => batch?.code ?? null) : Promise.resolve(null),
+    ]);
+    const summary = summaryBase
+      .filter((row) => !subjectCode || row.subjectCode === subjectCode)
+      .filter((row) => !batchCode || row.batchCode === batchCode);
     const labels = ["Week 1", "Week 2", "Week 3", "Week 4"];
     return {
       overview: { avgAttendancePct: average(summary.map((s) => s.avgAttendancePct)), belowThresholdCount: summary.reduce((s, r) => s + r.belowThresholdCount, 0), totalLecturesDelivered: summary.reduce((s, r) => s + r.totalLecturesMarked, 0) },
@@ -4500,22 +4737,49 @@ export const portalService = {
     await prisma.result.delete({ where: { id: resultId } });
   },
 
-  // ponytail: study planner is client-persisted for now (localStorage-side).
-  // Return empty-safe shapes so the routes don't 500 until we back it with a DB table.
-  async studentStudyPlanner(_studentId: string, _universityId: string) {
-    return { plan: [], updatedAt: null };
+  async studentStudyPlanner(studentId: string, _universityId: string) {
+    return formatStudyPlan(await getLatestStudyPlan(studentId));
   },
-  async saveStudentStudyPlanner(_studentId: string, _universityId: string, plan: unknown[]) {
-    return { plan, updatedAt: new Date().toISOString(), savedCount: Array.isArray(plan) ? plan.length : 0 };
+  async saveStudentStudyPlanner(studentId: string, _universityId: string, plan: unknown[]) {
+    const latest = await getLatestStudyPlan(studentId);
+    if (!latest) throw new ApiError(404, "PLAN_NOT_FOUND", "Generate a study plan first.");
+    if (!Array.isArray(plan)) throw new ApiError(400, "VALIDATION_ERROR", "Plan payload must be an array.");
+    const customItems = plan.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object");
+    for (const item of customItems) {
+      const taskDate = item.date ? new Date(String(item.date)) : null;
+      const description = String(item.description ?? "").trim();
+      if (!taskDate || Number.isNaN(taskDate.getTime()) || !description) continue;
+      await prisma.studyPlanTask.create({
+        data: {
+          studyPlanId: latest.id,
+          subjectId: item.subjectId ? String(item.subjectId) : null,
+          taskDate,
+          description,
+          estimatedDurationMinutes: Number(item.estimatedDurationMinutes ?? item.durationMins ?? 60),
+          priority: String(item.priority ?? "medium"),
+          isCompleted: Boolean(item.isCompleted),
+          isCustom: true,
+        },
+      });
+    }
+    return formatStudyPlan(await getLatestStudyPlan(studentId));
   },
-  async updateStudentStudyPlannerSession(_studentId: string, _universityId: string, date: string, sessionIndex: number, isCompleted: boolean) {
-    return { date, sessionIndex, isCompleted };
+  async updateStudentStudyPlannerSession(studentId: string, _universityId: string, date: string, sessionIndex: number, isCompleted: boolean) {
+    const latest = await getLatestStudyPlan(studentId);
+    if (!latest) throw new ApiError(404, "PLAN_NOT_FOUND", "Generate a study plan first.");
+    const dayTasks = latest.tasks.filter((task) => task.taskDate.toISOString().slice(0, 10) === date);
+    const task = dayTasks[sessionIndex];
+    if (!task) throw new ApiError(404, "TASK_NOT_FOUND", "Planner task not found.");
+    await prisma.studyPlanTask.update({ where: { id: task.id }, data: { isCompleted } });
+    return { taskId: task.id, date, sessionIndex, isCompleted };
   },
-  async studentStudyPlannerAiSuggest(_studentId: string, _universityId: string, _body: Record<string, unknown>) {
-    return { jobId: `stub-${Date.now()}`, status: "queued" };
+  async studentStudyPlannerAiSuggest(studentId: string, universityId: string, _body: Record<string, unknown>) {
+    const created = await generateStudyPlanForStudent(studentId, universityId);
+    return { planId: created.planId, status: "completed", startDate: created.startDate, endDate: created.endDate };
   },
   async studentStudyPlannerAiStatus(jobId: string) {
-    return { jobId, status: "complete", suggestions: [] };
+    const plan = await prisma.studyPlan.findUnique({ where: { id: jobId }, select: { id: true, status: true, updatedAt: true } });
+    return plan ? { jobId: plan.id, status: plan.status, updatedAt: plan.updatedAt } : { jobId, status: "unknown" };
   },
 
   // ─── Notifications ────────────────────────────────────────

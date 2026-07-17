@@ -42,7 +42,7 @@ facultyRouter.put("/profile", asyncHandler(async (req, res) => {
 }));
 
 facultyRouter.post("/profile/photo", upload.single("file"), asyncHandler(async (req, res) => {
-  res.json(await portalService.uploadProfilePhoto(req.user!.id));
+  res.json(await portalService.uploadProfilePhoto(req.user!.id, ""));
 }));
 
 facultyRouter.patch("/profile/password", asyncHandler(async (req, res) => {
@@ -162,7 +162,7 @@ facultyRouter.get("/attendance/session", asyncHandler(async (req, res) => {
 }));
 
 facultyRouter.post("/attendance", asyncHandler(async (req, res) => {
-  res.status(201).json(await portalService.facultyAttendance(req.body, req.user!.id));
+  res.status(201).json(await portalService.facultyAttendance(req.body, req.user!.id, req.user!.universityId));
 }));
 
 facultyRouter.patch("/attendance", asyncHandler(async (req, res) => {
