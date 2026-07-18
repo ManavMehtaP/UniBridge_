@@ -30,12 +30,11 @@ enum Plan {
 // ENUMS
 // ─────────────────────────────────────────────────────────────
 
-
 enum YearLevel {
-  FY      // First Year  — Semester 1, 2
-  SY      // Second Year — Semester 3, 4
-  TY      // Third Year  — Semester 5, 6
-  FINAL   // Final Year  — Semester 7, 8
+  FY // First Year  — Semester 1, 2
+  SY // Second Year — Semester 3, 4
+  TY // Third Year  — Semester 5, 6
+  FINAL // Final Year  — Semester 7, 8
 }
 
 enum SubjectType {
@@ -46,24 +45,24 @@ enum SubjectType {
 }
 
 enum AnnouncementScope {
-  ALL           // all faculty + all students in university
-  BATCH         // specific batch only
-  YEAR_LEVEL    // all students of a year level (FY / SY / TY / FINAL)
-  FACULTY_ONLY  // faculty of the sender's HOD only — students never see this
+  ALL // all faculty + all students in university
+  BATCH // specific batch only
+  YEAR_LEVEL // all students of a year level (FY / SY / TY / FINAL)
+  FACULTY_ONLY // faculty of the sender's HOD only — students never see this
 }
 
 enum EventType {
   HOLIDAY
-  READING_HOLIDAY   // study/reading day before exams
+  READING_HOLIDAY // study/reading day before exams
   EXAM
   CULTURAL
-  PHASE       // T1 start, T2 end, etc.
+  PHASE // T1 start, T2 end, etc.
   OTHER
 }
 
 enum CalendarVisibility {
-  ALL           // HOD + Faculty + Students
-  FACULTY_HOD   // HOD + Faculty only
+  ALL // HOD + Faculty + Students
+  FACULTY_HOD // HOD + Faculty only
   HOD_ONLY
 }
 
@@ -73,9 +72,9 @@ enum SenderRole {
 }
 
 enum AcademicYearStatus {
-  DRAFT       // created but not yet active
-  ACTIVE      // current running year
-  ARCHIVED    // past year, read-only
+  DRAFT // created but not yet active
+  ACTIVE // current running year
+  ARCHIVED // past year, read-only
 }
 
 enum SemesterStatus {
@@ -144,32 +143,32 @@ enum BranchCode {
 // ─────────────────────────────────────────────────────────────
 
 model University {
-  id           String    @id @default(uuid()) @db.Uuid
+  id           String             @id @default(uuid()) @db.Uuid
   name         String
-  slug         String    @unique   // subdomain: lju.uniportal.in → "lju"
+  slug         String             @unique // subdomain: lju.uniportal.in → "lju"
   logoUrl      String?
   website      String?
   contactEmail String?
   address      String?
-  plan         Plan      @default(FREE)
+  plan         Plan               @default(FREE)
   status       AcademicYearStatus @default(ACTIVE)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
 
   // relations
-  academicYears       AcademicYear[]
-  faculties           Faculty[]
-  students            Student[]
-  announcements       Announcement[]
-  calendarEvents      CalendarEvent[]
-  activityFeed        ActivityLog[]
-  branches            UniversityBranch[]
-  attendanceRules     AttendanceRules?
-  notificationConfig  NotificationConfig[]
-  archiveJobs         ArchiveJob[]
-  notes               Note[]
-  subjectSyllabi      SubjectSyllabus[]
-  studentAiJobs       StudentAIJob[]
+  academicYears      AcademicYear[]
+  faculties          Faculty[]
+  students           Student[]
+  announcements      Announcement[]
+  calendarEvents     CalendarEvent[]
+  activityFeed       ActivityLog[]
+  branches           UniversityBranch[]
+  attendanceRules    AttendanceRules?
+  notificationConfig NotificationConfig[]
+  archiveJobs        ArchiveJob[]
+  notes              Note[]
+  subjectSyllabi     SubjectSyllabus[]
+  studentAiJobs      StudentAIJob[]
 
   @@map("universities")
 }
@@ -181,14 +180,14 @@ model University {
 // ─────────────────────────────────────────────────────────────
 
 model UniversityBranch {
-  id           String    @id @default(uuid()) @db.Uuid
-  universityId String
-  code         String    // "IT", "CSE" — matches BranchCode enum or custom string
-  name         String    // "Information Technology"
-  createdAt    DateTime  @default(now())
+  id           String   @id @default(uuid()) @db.Uuid
+  universityId String   @db.Uuid
+  code         String // "IT", "CSE" — matches BranchCode enum or custom string
+  name         String // "Information Technology"
+  createdAt    DateTime @default(now())
 
-  university   University @relation(fields: [universityId], references: [id])
-  students     Student[]  @relation("StudentBranch")
+  university University @relation(fields: [universityId], references: [id])
+  students   Student[]  @relation("StudentBranch")
 
   @@unique([universityId, code])
   @@map("university_branches")
@@ -202,15 +201,15 @@ model UniversityBranch {
 
 model AcademicYear {
   id           String             @id @default(uuid()) @db.Uuid
-  universityId String
-  label        String             // "2026-27"
+  universityId String             @db.Uuid
+  label        String // "2026-27"
   status       AcademicYearStatus @default(DRAFT)
   startDate    DateTime
   endDate      DateTime
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
-  university      University        @relation(fields: [universityId], references: [id])
+  university      University       @relation(fields: [universityId], references: [id])
   semesters       Semester[]
   batches         Batch[]
   hodBatchScopes  HodBatchScope[]
@@ -230,31 +229,31 @@ model AcademicYear {
 
 model Semester {
   id             String         @id @default(uuid()) @db.Uuid
-  universityId   String
-  academicYearId String
-  number         Int            // 1 to 8
-  label          String         // "Semester 3"
-  yearLevel      YearLevel      // FY | SY | TY | FINAL
+  universityId   String         @db.Uuid
+  academicYearId String         @db.Uuid
+  number         Int // 1 to 8
+  label          String // "Semester 3"
+  yearLevel      YearLevel // FY | SY | TY | FINAL
   status         SemesterStatus @default(UPCOMING)
   startDate      DateTime
   endDate        DateTime
-  phaseCount     Int            @default(4)   // always 4 (T1–T4)
+  phaseCount     Int            @default(4) // always 4 (T1–T4)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
-  academicYear    AcademicYear        @relation(fields: [academicYearId], references: [id])
-  phases          Phase[]
-  enrollments     StudentEnrollment[]
-  timetableSlots  TimetableSlot[]
-  calendarEvents  CalendarEvent[]
-  hodBatchScopes  HodBatchScope[]
-  promotionFroms  PromotionMapping[]  @relation("FromSemester")
-  promotionTos    PromotionMapping[]  @relation("ToSemester")
+  academicYear       AcademicYear             @relation(fields: [academicYearId], references: [id])
+  phases             Phase[]
+  enrollments        StudentEnrollment[]
+  timetableSlots     TimetableSlot[]
+  calendarEvents     CalendarEvent[]
+  hodBatchScopes     HodBatchScope[]
+  promotionFroms     PromotionMapping[]       @relation("FromSemester")
+  promotionTos       PromotionMapping[]       @relation("ToSemester")
   facultyAssignments FacultyBatchAssignment[]
-  quizzes         Quiz[]
-  studyPlans      StudyPlan[]
-  pyqInsights     PYQInsight[]
-  subjectSyllabi  SubjectSyllabus[]
+  quizzes            Quiz[]
+  studyPlans         StudyPlan[]
+  pyqInsights        PYQInsight[]
+  subjectSyllabi     SubjectSyllabus[]
 
   @@unique([universityId, academicYearId, number])
   @@index([academicYearId, status])
@@ -268,18 +267,18 @@ model Semester {
 // ─────────────────────────────────────────────────────────────
 
 model Phase {
-  id          String    @id @default(uuid()) @db.Uuid
-  semesterId  String
-  label       String    // "T1", "T2", "T3", "T4"
-  number      Int       // 1, 2, 3, 4
-  startDate   DateTime
-  endDate     DateTime
-  examDate    DateTime?
-  isComplete  Boolean   @default(false)
-  createdAt   DateTime  @default(now())
+  id         String    @id @default(uuid()) @db.Uuid
+  semesterId String    @db.Uuid
+  label      String // "T1", "T2", "T3", "T4"
+  number     Int // 1, 2, 3, 4
+  startDate  DateTime
+  endDate    DateTime
+  examDate   DateTime?
+  isComplete Boolean   @default(false)
+  createdAt  DateTime  @default(now())
 
-  semester    Semester  @relation(fields: [semesterId], references: [id])
-  results     Result[]
+  semester Semester @relation(fields: [semesterId], references: [id])
+  results  Result[]
 
   @@unique([semesterId, number])
   @@index([semesterId])
@@ -295,18 +294,18 @@ model Phase {
 
 model Batch {
   id             String    @id @default(uuid()) @db.Uuid
-  universityId   String
-  academicYearId String
-  code           String    // "C2", "B1", "SY-3"
+  universityId   String    @db.Uuid
+  academicYearId String    @db.Uuid
+  code           String // "C2", "B1", "SY-3"
   yearLevel      YearLevel
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  academicYear       AcademicYear           @relation(fields: [academicYearId], references: [id])
+  academicYear       AcademicYear             @relation(fields: [academicYearId], references: [id])
   enrollments        StudentEnrollment[]
   facultyAssignments FacultyBatchAssignment[]
   timetableSlots     TimetableSlot[]
-  hodScope           HodBatchScope?          // ONE HOD per batch — @unique on HodBatchScope.batchId
+  hodScope           HodBatchScope? // ONE HOD per batch — @unique on HodBatchScope.batchId
   noteTargets        NoteBatchTarget[]
   quizTargets        QuizBatchTarget[]
 
@@ -328,10 +327,10 @@ model Batch {
 
 model HodBatchScope {
   id             String   @id @default(uuid()) @db.Uuid
-  facultyId      String   // must be isHod = true — validated at app layer
-  batchId        String   @unique   // ONE HOD per batch — DB-level constraint
-  semesterId     String
-  academicYearId String
+  facultyId      String   @db.Uuid // must be isHod = true — validated at app layer
+  batchId        String   @unique @db.Uuid // ONE HOD per batch — DB-level constraint
+  semesterId     String   @db.Uuid
+  academicYearId String   @db.Uuid
   createdAt      DateTime @default(now())
 
   faculty      Faculty      @relation(fields: [facultyId], references: [id])
@@ -340,7 +339,7 @@ model HodBatchScope {
   academicYear AcademicYear @relation(fields: [academicYearId], references: [id])
 
   @@unique([facultyId, batchId, semesterId])
-  @@index([facultyId])            // fast lookup for hodScope middleware
+  @@index([facultyId]) // fast lookup for hodScope middleware
   @@index([facultyId, semesterId])
   @@map("hod_batch_scopes")
 }
@@ -357,21 +356,21 @@ model HodBatchScope {
 // and creates a new one so past results/attendance keep pointing at the original subject.
 model Subject {
   id             String      @id @default(uuid()) @db.Uuid
-  universityId   String
-  semesterNumber Int         // 1..8 — the semester this subject belongs to, for all batches/years
-  code           String      // "COA", "DM", "TOC"
-  name           String      // "Computer Organization & Architecture"
+  universityId   String      @db.Uuid
+  semesterNumber Int // 1..8 — the semester this subject belongs to, for all batches/years
+  code           String // "COA", "DM", "TOC"
+  name           String // "Computer Organization & Architecture"
   credits        Int         @default(4)
   type           SubjectType @default(THEORY)
-  branch         String?     // optional branch tag
+  branch         String? // optional branch tag
   // ── configuration-driven assessment (nothing hardcoded) ──
-  totalMarks     Int         @default(100)  // marks the subject is out of
-  passingMarks   Int         @default(40)   // overall passing threshold
+  totalMarks     Int         @default(100) // marks the subject is out of
+  passingMarks   Int         @default(40) // overall passing threshold
   theoryRule     String      @default("AVG_ALL") // AVG_ALL | BEST_3 | BEST_2 — how T1–T4 → Theory
   isActive       Boolean     @default(true)
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
-  deletedAt      DateTime?   // soft delete — old row retained so dependent data stays consistent
+  deletedAt      DateTime? // soft delete — old row retained so dependent data stays consistent
 
   components         SubjectComponent[]
   results            Result[]
@@ -401,10 +400,10 @@ model Subject {
 
 model SubjectComponent {
   id           String   @id @default(uuid()) @db.Uuid
-  subjectId    String
-  key          String   // "THEORY" | "IPE" | "GP" | "ASSIGNMENT" | "QUIZ" | "VIVA" | "LAB" | custom
-  label        String   // display name, e.g. "Internal Practical Exam"
-  weightagePct Float    @default(0)   // % of the subject total; enabled ones sum to 100
+  subjectId    String   @db.Uuid
+  key          String // "THEORY" | "IPE" | "GP" | "ASSIGNMENT" | "QUIZ" | "VIVA" | "LAB" | custom
+  label        String // display name, e.g. "Internal Practical Exam"
+  weightagePct Float    @default(0) // % of the subject total; enabled ones sum to 100
   isEnabled    Boolean  @default(true)
   sortOrder    Int      @default(0)
   createdAt    DateTime @default(now())
@@ -426,16 +425,16 @@ model SubjectComponent {
 
 model Faculty {
   id              String    @id @default(uuid()) @db.Uuid
-  universityId    String
-  employeeId      String    // College-assigned, e.g. "EMP001"
+  universityId    String    @db.Uuid
+  employeeId      String    @db.Uuid // College-assigned, e.g. "EMP001"
   name            String
   email           String    @unique
   passwordHash    String
-  year            String?   // FY / SY / TY / FINAL — the year this faculty teaches (null for Dean)
-  hodId           String?   // the HOD this faculty belongs to (a faculty pool per HOD)
+  year            String? // FY / SY / TY / FINAL — the year this faculty teaches (null for Dean)
+  hodId           String?   @db.Uuid // the HOD this faculty belongs to (a faculty pool per HOD)
   isHod           Boolean   @default(false)
-  isDean          Boolean   @default(false)  // University (Dean) portal access
-  mentorCode      String?   // 3-char, e.g. "SYD" — null for HOD
+  isDean          Boolean   @default(false) // University (Dean) portal access
+  mentorCode      String? // 3-char, e.g. "SYD" — null for HOD
   profilePhotoUrl String?
   phone           String?
   isActive        Boolean   @default(true)
@@ -443,23 +442,23 @@ model Faculty {
   updatedAt       DateTime  @updatedAt
   deletedAt       DateTime? // soft delete
 
-  university         University               @relation(fields: [universityId], references: [id])
-  hod                Faculty?                 @relation("HodPool", fields: [hodId], references: [id])
-  poolMembers        Faculty[]                @relation("HodPool")
-  hodBatchScopes     HodBatchScope[]          // populated only when isHod = true
-  batchAssignments   FacultyBatchAssignment[] // subjects taught
-  mentorAssignments  MentorAssignment[]       // populated only when isHod = false
-  attendanceRecords  AttendanceRecord[]       // attendance marked by this faculty
-  announcements      Announcement[]
-  uploadedNotes      Note[]
-  quizzes            Quiz[]
-  calendarEvents     CalendarEvent[]
-  activityLogs       ActivityLog[]
-  refreshTokens      RefreshToken[]
-  notificationPrefs  NotificationConfig[]
-  chatMessagesAsFaculty ChatMessage[]         @relation("FacultyChatMessages")
-  uploadedResults    Result[]                 @relation("UploadedByFaculty")
-  promotionDrafts    PromotionDraft[]
+  university            University               @relation(fields: [universityId], references: [id])
+  hod                   Faculty?                 @relation("HodPool", fields: [hodId], references: [id])
+  poolMembers           Faculty[]                @relation("HodPool")
+  hodBatchScopes        HodBatchScope[] // populated only when isHod = true
+  batchAssignments      FacultyBatchAssignment[] // subjects taught
+  mentorAssignments     MentorAssignment[] // populated only when isHod = false
+  attendanceRecords     AttendanceRecord[] // attendance marked by this faculty
+  announcements         Announcement[]
+  uploadedNotes         Note[]
+  quizzes               Quiz[]
+  calendarEvents        CalendarEvent[]
+  activityLogs          ActivityLog[]
+  refreshTokens         RefreshToken[]
+  notificationPrefs     NotificationConfig[]
+  chatMessagesAsFaculty ChatMessage[]            @relation("FacultyChatMessages")
+  uploadedResults       Result[]                 @relation("UploadedByFaculty")
+  promotionDrafts       PromotionDraft[]
 
   @@unique([universityId, employeeId])
   @@index([universityId, isHod])
@@ -477,16 +476,16 @@ model Faculty {
 
 model FacultyBatchAssignment {
   id         String   @id @default(uuid()) @db.Uuid
-  facultyId  String
-  batchId    String
-  subjectId  String
-  semesterId String
+  facultyId  String   @db.Uuid
+  batchId    String   @db.Uuid
+  subjectId  String   @db.Uuid
+  semesterId String   @db.Uuid
   createdAt  DateTime @default(now())
 
-  faculty    Faculty  @relation(fields: [facultyId], references: [id])
-  batch      Batch    @relation(fields: [batchId], references: [id])
-  subject    Subject  @relation(fields: [subjectId], references: [id])
-  semester   Semester @relation(fields: [semesterId], references: [id])
+  faculty  Faculty  @relation(fields: [facultyId], references: [id])
+  batch    Batch    @relation(fields: [batchId], references: [id])
+  subject  Subject  @relation(fields: [subjectId], references: [id])
+  semester Semester @relation(fields: [semesterId], references: [id])
 
   @@unique([facultyId, batchId, subjectId, semesterId])
   @@index([batchId, semesterId])
@@ -502,37 +501,37 @@ model FacultyBatchAssignment {
 // ─────────────────────────────────────────────────────────────
 
 model Student {
-  id              String    @id @default(uuid()) @db.Uuid
-  universityId    String
-  enrollmentNo    String    @unique   // "LJ20IT045" — permanent, college-issued
-  name            String
-  email           String    @unique
-  passwordHash    String
-  branch          String    // "IT", "CSE" — permanent, set at admission
-  branchId        String?   // FK to UniversityBranch (optional, for structured lookup)
-  admissionYear   Int       // 2023
-  profilePhotoUrl String?
-  phone           String?
-  isActive        Boolean   @default(true)
+  id               String    @id @default(uuid()) @db.Uuid
+  universityId     String    @db.Uuid
+  enrollmentNo     String    @unique // "LJ20IT045" — permanent, college-issued
+  name             String
+  email            String    @unique
+  passwordHash     String
+  branch           String // "IT", "CSE" — permanent, set at admission
+  branchId         String?   @db.Uuid // FK to UniversityBranch (optional, for structured lookup)
+  admissionYear    Int // 2023
+  profilePhotoUrl  String?
+  phone            String?
+  isActive         Boolean   @default(true)
   // ponytail: graduation is a STATUS, never a delete/archive. History stays fully accessible.
-  graduationStatus String   @default("ACTIVE")  // ACTIVE | PASS_OUT | DETAINED
+  graduationStatus String    @default("ACTIVE") // ACTIVE | PASS_OUT | DETAINED
   graduatedAt      DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  deletedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
 
-  university             University          @relation(fields: [universityId], references: [id])
-  branchRef              UniversityBranch?   @relation("StudentBranch", fields: [branchId], references: [id])
-  enrollments            StudentEnrollment[]
-  mentorAssignments      MentorAssignment[]
-  selfNotes              SelfNote[]
-  quizAttempts           QuizAttempt[]
-  aiConversations        AIConversation[]
-  aiChatSessions         StudentAIChatSession[]
-  studyPlans             StudyPlan[]
-  studentAiJobs          StudentAIJob[]
-  refreshTokens          RefreshToken[]
-  chatMessagesAsStudent  ChatMessage[]       @relation("StudentChatMessages")
+  university            University             @relation(fields: [universityId], references: [id])
+  branchRef             UniversityBranch?      @relation("StudentBranch", fields: [branchId], references: [id])
+  enrollments           StudentEnrollment[]
+  mentorAssignments     MentorAssignment[]
+  selfNotes             SelfNote[]
+  quizAttempts          QuizAttempt[]
+  aiConversations       AIConversation[]
+  aiChatSessions        StudentAIChatSession[]
+  studyPlans            StudyPlan[]
+  studentAiJobs         StudentAIJob[]
+  refreshTokens         RefreshToken[]
+  chatMessagesAsStudent ChatMessage[]          @relation("StudentChatMessages")
 
   @@index([universityId])
   @@index([universityId, branch])
@@ -551,29 +550,29 @@ model Student {
 // ─────────────────────────────────────────────────────────────
 
 model StudentEnrollment {
-  id              String    @id @default(uuid()) @db.Uuid
-  studentId       String    // FK to Student (not enrollmentNo — use id for joins)
-  semesterId      String
-  batchId         String
-  rollNo          String    // "IT-24-045" — changes every semester
-  yearLevel       YearLevel // FY | SY | TY | FINAL
-  isCurrent       Boolean   @default(true)   // only ONE per student is true
-  promotedFromId  String?   // FK to previous StudentEnrollment row (null for sem 1)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id             String    @id @default(uuid()) @db.Uuid
+  studentId      String    @db.Uuid // FK to Student (not enrollmentNo — use id for joins)
+  semesterId     String    @db.Uuid
+  batchId        String    @db.Uuid
+  rollNo         String // "IT-24-045" — changes every semester
+  yearLevel      YearLevel // FY | SY | TY | FINAL
+  isCurrent      Boolean   @default(true) // only ONE per student is true
+  promotedFromId String?   @db.Uuid // FK to previous StudentEnrollment row (null for sem 1)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  student       Student           @relation(fields: [studentId], references: [id])
-  semester      Semester          @relation(fields: [semesterId], references: [id])
-  batch         Batch             @relation(fields: [batchId], references: [id])
-  promotedFrom  StudentEnrollment?  @relation("PromotionChain", fields: [promotedFromId], references: [id])
-  promotedTo    StudentEnrollment[] @relation("PromotionChain")
-  results       Result[]
-  attendances   AttendanceRecord[]
-  studyPlans    StudyPlan[]
+  student      Student             @relation(fields: [studentId], references: [id])
+  semester     Semester            @relation(fields: [semesterId], references: [id])
+  batch        Batch               @relation(fields: [batchId], references: [id])
+  promotedFrom StudentEnrollment?  @relation("PromotionChain", fields: [promotedFromId], references: [id])
+  promotedTo   StudentEnrollment[] @relation("PromotionChain")
+  results      Result[]
+  attendances  AttendanceRecord[]
+  studyPlans   StudyPlan[]
 
-  @@unique([studentId, semesterId])             // one enrollment per student per semester
-  @@index([batchId, semesterId])               // HOD scope queries
-  @@index([studentId, isCurrent])              // fast "current enrollment" lookup
+  @@unique([studentId, semesterId]) // one enrollment per student per semester
+  @@index([batchId, semesterId]) // HOD scope queries
+  @@index([studentId, isCurrent]) // fast "current enrollment" lookup
   @@index([semesterId, yearLevel])
   @@map("student_enrollments")
 }
@@ -587,12 +586,12 @@ model StudentEnrollment {
 // ─────────────────────────────────────────────────────────────
 
 model MentorAssignment {
-  id          String   @id @default(uuid()) @db.Uuid
-  facultyId   String   // must be isHod = false
-  studentId   String
-  semesterId  String
-  mentorCode  String   // denormalized copy of faculty.mentorCode at time of assignment
-  createdAt   DateTime @default(now())
+  id         String   @id @default(uuid()) @db.Uuid
+  facultyId  String   @db.Uuid // must be isHod = false
+  studentId  String   @db.Uuid
+  semesterId String   @db.Uuid
+  mentorCode String // denormalized copy of faculty.mentorCode at time of assignment
+  createdAt  DateTime @default(now())
 
   faculty      Faculty       @relation(fields: [facultyId], references: [id])
   student      Student       @relation(fields: [studentId], references: [id])
@@ -612,27 +611,27 @@ model MentorAssignment {
 // ─────────────────────────────────────────────────────────────
 
 model Result {
-  id             String   @id @default(uuid()) @db.Uuid
-  enrollmentId   String   // FK to StudentEnrollment
-  phaseId        String   // T1 / T2 / T3 / T4
-  subjectId      String
-  marksObtained  Float
-  maxMarks       Float    @default(100)
-  grade          String?  // "A+", "B", "F"
-  isPublished    Boolean  @default(false)
-  publishedAt    DateTime?
-  uploadedById   String   // Faculty (HOD) id
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String    @id @default(uuid()) @db.Uuid
+  enrollmentId  String    @db.Uuid // FK to StudentEnrollment
+  phaseId       String    @db.Uuid // T1 / T2 / T3 / T4
+  subjectId     String    @db.Uuid
+  marksObtained Float
+  maxMarks      Float     @default(100)
+  grade         String? // "A+", "B", "F"
+  isPublished   Boolean   @default(false)
+  publishedAt   DateTime?
+  uploadedById  String    @db.Uuid // Faculty (HOD) id
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  enrollment  StudentEnrollment @relation(fields: [enrollmentId], references: [id])
-  phase       Phase             @relation(fields: [phaseId], references: [id])
-  subject     Subject           @relation(fields: [subjectId], references: [id])
-  uploadedBy  Faculty           @relation("UploadedByFaculty", fields: [uploadedById], references: [id])
+  enrollment StudentEnrollment @relation(fields: [enrollmentId], references: [id])
+  phase      Phase             @relation(fields: [phaseId], references: [id])
+  subject    Subject           @relation(fields: [subjectId], references: [id])
+  uploadedBy Faculty           @relation("UploadedByFaculty", fields: [uploadedById], references: [id])
 
   @@unique([enrollmentId, phaseId, subjectId])
-  @@index([phaseId, subjectId])          // analytics queries
-  @@index([enrollmentId])                // student results page
+  @@index([phaseId, subjectId]) // analytics queries
+  @@index([enrollmentId]) // student results page
   @@map("results")
 }
 
@@ -645,10 +644,10 @@ model Result {
 
 model AttendanceRecord {
   id           String   @id @default(uuid()) @db.Uuid
-  enrollmentId String
-  subjectId    String
-  slotId       String?  // timetable slot — distinguishes paired lectures (TOC,TOC)
-  facultyId    String   // who marked this lecture
+  enrollmentId String   @db.Uuid
+  subjectId    String   @db.Uuid
+  slotId       String?  @db.Uuid // timetable slot — distinguishes paired lectures (TOC,TOC)
+  facultyId    String   @db.Uuid // who marked this lecture
   lectureDate  DateTime @db.Date
   isPresent    Boolean
   isLocked     Boolean  @default(false)
@@ -656,13 +655,13 @@ model AttendanceRecord {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  enrollment  StudentEnrollment @relation(fields: [enrollmentId], references: [id])
-  subject     Subject           @relation(fields: [subjectId], references: [id])
-  faculty     Faculty           @relation(fields: [facultyId], references: [id])
+  enrollment StudentEnrollment @relation(fields: [enrollmentId], references: [id])
+  subject    Subject           @relation(fields: [subjectId], references: [id])
+  faculty    Faculty           @relation(fields: [facultyId], references: [id])
 
   @@unique([enrollmentId, subjectId, lectureDate, slotId])
-  @@index([enrollmentId, subjectId])    // student attendance % calculation
-  @@index([subjectId, lectureDate])     // faculty attendance view
+  @@index([enrollmentId, subjectId]) // student attendance % calculation
+  @@index([subjectId, lectureDate]) // faculty attendance view
   @@index([enrollmentId, isLocked])
   @@map("attendance_records")
 }
@@ -675,28 +674,28 @@ model AttendanceRecord {
 // ─────────────────────────────────────────────────────────────
 
 model Note {
-  id          String    @id @default(uuid()) @db.Uuid
-  universityId String
-  subjectId   String
-  facultyId   String
-  title       String
-  description String?
-  fileUrl     String    // S3 public/presigned URL
-  fileKey     String    // S3 object key for deletion
+  id               String    @id @default(uuid()) @db.Uuid
+  universityId     String    @db.Uuid
+  subjectId        String    @db.Uuid
+  facultyId        String    @db.Uuid
+  title            String
+  description      String?
+  fileUrl          String // S3 public/presigned URL
+  fileKey          String // S3 object key for deletion
   originalFileName String? // original client filename for display/download metadata
-  mimeType    String    // "application/pdf", "video/mp4"
-  fileSizeKb  Int?
-  aiSummary   String?   // populated by Django after processing
-  aiJobId     String?   // async job ID for tracking
-  status      String    @default("PUBLISHED") // PUBLISHED | SCHEDULED — students only see PUBLISHED
-  releaseAt   DateTime  @default(now())        // when it goes live; future for SCHEDULED notes
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  deletedAt   DateTime?
+  mimeType         String // "application/pdf", "video/mp4"
+  fileSizeKb       Int?
+  aiSummary        String? // populated by Django after processing
+  aiJobId          String?   @db.Uuid // async job ID for tracking
+  status           String    @default("PUBLISHED") // PUBLISHED | SCHEDULED — students only see PUBLISHED
+  releaseAt        DateTime  @default(now()) // when it goes live; future for SCHEDULED notes
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
 
-  subject    Subject    @relation(fields: [subjectId], references: [id])
-  faculty    Faculty    @relation(fields: [facultyId], references: [id])
-  university University @relation(fields: [universityId], references: [id])
+  subject    Subject           @relation(fields: [subjectId], references: [id])
+  faculty    Faculty           @relation(fields: [facultyId], references: [id])
+  university University        @relation(fields: [universityId], references: [id])
   flashcards Flashcard[]
   targets    NoteBatchTarget[]
   insight    NoteInsight?
@@ -711,11 +710,11 @@ model Note {
 // Explicit audience metadata for a faculty note. A note must have at least
 // one target at the application layer; students can only access their batch.
 model NoteBatchTarget {
-  noteId  String
-  batchId String
+  noteId  String @db.Uuid
+  batchId String @db.Uuid
 
-  note    Note  @relation(fields: [noteId], references: [id], onDelete: Cascade)
-  batch   Batch @relation(fields: [batchId], references: [id])
+  note  Note  @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  batch Batch @relation(fields: [batchId], references: [id])
 
   @@id([noteId, batchId])
   @@index([batchId])
@@ -730,12 +729,12 @@ model NoteBatchTarget {
 
 model Flashcard {
   id       String @id @default(uuid()) @db.Uuid
-  noteId   String
+  noteId   String @db.Uuid
   question String
   answer   String
   order    Int    @default(0)
 
-  note     Note   @relation(fields: [noteId], references: [id])
+  note Note @relation(fields: [noteId], references: [id])
 
   @@index([noteId])
   @@map("flashcards")
@@ -747,15 +746,15 @@ model Flashcard {
 
 model SelfNote {
   id        String    @id @default(uuid()) @db.Uuid
-  studentId String
-  subjectId String?   // optional — can be a general note
+  studentId String    @db.Uuid
+  subjectId String?   @db.Uuid // optional — can be a general note
   title     String
-  content   String    // rich text (TipTap JSON or HTML)
+  content   String // rich text (TipTap JSON or HTML)
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?
 
-  student   Student  @relation(fields: [studentId], references: [id])
+  student Student @relation(fields: [studentId], references: [id])
 
   @@index([studentId])
   @@map("self_notes")
@@ -768,18 +767,18 @@ model SelfNote {
 // ─────────────────────────────────────────────────────────────
 
 model PYQFile {
-  id         String    @id @default(uuid()) @db.Uuid
-  subjectId  String
-  uploadedById String  // HOD faculty id
-  year       String    // "2023-24" — the year the question paper is from
-  fileUrl    String
-  fileKey    String
-  aiJobId    String?   // async analysis job id
-  isAnalyzed Boolean   @default(false)
-  createdAt  DateTime  @default(now())
+  id           String   @id @default(uuid()) @db.Uuid
+  subjectId    String   @db.Uuid
+  uploadedById String   @db.Uuid // HOD faculty id
+  year         String // "2023-24" — the year the question paper is from
+  fileUrl      String
+  fileKey      String
+  aiJobId      String?  @db.Uuid // async analysis job id
+  isAnalyzed   Boolean  @default(false)
+  createdAt    DateTime @default(now())
 
-  subject    Subject  @relation(fields: [subjectId], references: [id])
-  insight    PYQInsight?
+  subject Subject     @relation(fields: [subjectId], references: [id])
+  insight PYQInsight?
 
   @@index([subjectId])
   @@map("pyq_files")
@@ -792,11 +791,11 @@ model PYQFile {
 // ─────────────────────────────────────────────────────────────
 
 model PYQAnalysis {
-  id              String   @id @default(uuid()) @db.Uuid
-  subjectId       String
-  semesterId      String
-  topicFrequencies Json    // { "Pipelining": 8, "Cache Memory": 5, ... }
-  analyzedAt      DateTime @default(now())
+  id               String   @id @default(uuid()) @db.Uuid
+  subjectId        String   @db.Uuid
+  semesterId       String   @db.Uuid
+  topicFrequencies Json // { "Pipelining": 8, "Cache Memory": 5, ... }
+  analyzedAt       DateTime @default(now())
 
   @@unique([subjectId, semesterId])
   @@index([subjectId])
@@ -812,25 +811,25 @@ model PYQAnalysis {
 
 model Quiz {
   id            String    @id @default(uuid()) @db.Uuid
-  facultyId     String
-  subjectId     String
-  semesterId    String
+  facultyId     String    @db.Uuid
+  subjectId     String    @db.Uuid
+  semesterId    String    @db.Uuid
   title         String
   description   String?
   isAiGenerated Boolean   @default(false)
   isPublished   Boolean   @default(false)
   dueDate       DateTime?
-  timeLimitMins Int?      // null = untimed
+  timeLimitMins Int? // null = untimed
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   deletedAt     DateTime?
 
-  faculty    Faculty       @relation(fields: [facultyId], references: [id])
-  subject    Subject       @relation(fields: [subjectId], references: [id])
-  semester   Semester      @relation(fields: [semesterId], references: [id])
-  questions  Question[]
-  attempts   QuizAttempt[]
-  targets    QuizBatchTarget[]
+  faculty   Faculty           @relation(fields: [facultyId], references: [id])
+  subject   Subject           @relation(fields: [subjectId], references: [id])
+  semester  Semester          @relation(fields: [semesterId], references: [id])
+  questions Question[]
+  attempts  QuizAttempt[]
+  targets   QuizBatchTarget[]
 
   @@index([subjectId, semesterId])
   @@index([facultyId])
@@ -840,11 +839,11 @@ model Quiz {
 // Quizzes follow the same batch audience rule as notes. This also prevents a
 // student from starting a published quiz intended for another division.
 model QuizBatchTarget {
-  quizId  String
-  batchId String
+  quizId  String @db.Uuid
+  batchId String @db.Uuid
 
-  quiz    Quiz  @relation(fields: [quizId], references: [id], onDelete: Cascade)
-  batch   Batch @relation(fields: [batchId], references: [id])
+  quiz  Quiz  @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  batch Batch @relation(fields: [batchId], references: [id])
 
   @@id([quizId, batchId])
   @@index([batchId])
@@ -859,14 +858,14 @@ model QuizBatchTarget {
 
 model Question {
   id            String  @id @default(uuid()) @db.Uuid
-  quizId        String
+  quizId        String  @db.Uuid
   text          String
-  options       Json    // [{ "id": "A", "text": "..." }, ...]
-  correctOption String  // "A" | "B" | "C" | "D"
+  options       Json // [{ "id": "A", "text": "..." }, ...]
+  correctOption String // "A" | "B" | "C" | "D"
   explanation   String?
   order         Int     @default(0)
 
-  quiz          Quiz    @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
 
   @@index([quizId])
   @@map("questions")
@@ -880,14 +879,14 @@ model Question {
 
 model QuizAttempt {
   id          String   @id @default(uuid()) @db.Uuid
-  studentId   String
-  quizId      String
-  score       Float    // percentage score
-  answers     Json     // { "q_id_1": "B", "q_id_2": "A" }
+  studentId   String   @db.Uuid
+  quizId      String   @db.Uuid
+  score       Float // percentage score
+  answers     Json // { "q_id_1": "B", "q_id_2": "A" }
   submittedAt DateTime @default(now())
 
-  student     Student  @relation(fields: [studentId], references: [id])
-  quiz        Quiz     @relation(fields: [quizId], references: [id])
+  student Student @relation(fields: [studentId], references: [id])
+  quiz    Quiz    @relation(fields: [quizId], references: [id])
 
   @@unique([studentId, quizId])
   @@index([quizId])
@@ -901,20 +900,20 @@ model QuizAttempt {
 // ─────────────────────────────────────────────────────────────
 
 model TimetableSlot {
-  id         String @id @default(uuid()) @db.Uuid
-  semesterId String
-  batchId    String
-  subjectId  String
-  facultyId  String?      // optional — faculty may not be assigned yet
-  dayOfWeek  Int          // 1–6 (Mon–Sat)
-  slotStart  String       // "09:00"
-  slotEnd    String       // "10:00"
-  room       String?      // "Lab 3", "Hall B"
-  createdAt  DateTime     @default(now())
+  id         String   @id @default(uuid()) @db.Uuid
+  semesterId String   @db.Uuid
+  batchId    String   @db.Uuid
+  subjectId  String   @db.Uuid
+  facultyId  String?  @db.Uuid // optional — faculty may not be assigned yet
+  dayOfWeek  Int // 1–6 (Mon–Sat)
+  slotStart  String // "09:00"
+  slotEnd    String // "10:00"
+  room       String? // "Lab 3", "Hall B"
+  createdAt  DateTime @default(now())
 
-  semester   Semester @relation(fields: [semesterId], references: [id])
-  batch      Batch    @relation(fields: [batchId], references: [id])
-  subject    Subject  @relation(fields: [subjectId], references: [id])
+  semester Semester @relation(fields: [semesterId], references: [id])
+  batch    Batch    @relation(fields: [batchId], references: [id])
+  subject  Subject  @relation(fields: [subjectId], references: [id])
 
   @@index([batchId, semesterId])
   @@index([semesterId, dayOfWeek])
@@ -929,23 +928,23 @@ model TimetableSlot {
 // ─────────────────────────────────────────────────────────────
 
 model CalendarEvent {
-  id           String            @id @default(uuid()) @db.Uuid
-  universityId String
-  semesterId   String?           // optional — some events span semesters
+  id           String             @id @default(uuid()) @db.Uuid
+  universityId String             @db.Uuid
+  semesterId   String?            @db.Uuid // optional — some events span semesters
   title        String
   description  String?
-  startDate    DateTime          @db.Date
-  endDate      DateTime          @db.Date
+  startDate    DateTime           @db.Date
+  endDate      DateTime           @db.Date
   eventType    EventType
   visibleTo    CalendarVisibility @default(ALL)
-  createdById  String            // Faculty (HOD) who created it
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  createdById  String             @db.Uuid // Faculty (HOD) who created it
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
   deletedAt    DateTime?
 
-  university  University @relation(fields: [universityId], references: [id])
-  semester    Semester?  @relation(fields: [semesterId], references: [id])
-  createdBy   Faculty    @relation(fields: [createdById], references: [id])
+  university University @relation(fields: [universityId], references: [id])
+  semester   Semester?  @relation(fields: [semesterId], references: [id])
+  createdBy  Faculty    @relation(fields: [createdById], references: [id])
 
   @@index([universityId, startDate])
   @@index([semesterId])
@@ -961,20 +960,20 @@ model CalendarEvent {
 
 model Announcement {
   id           String            @id @default(uuid()) @db.Uuid
-  universityId String
-  facultyId    String            // sender
+  universityId String            @db.Uuid
+  facultyId    String            @db.Uuid // sender
   title        String
   body         String
   scope        AnnouncementScope @default(ALL)
-  scopeValue   String?           // batchId or "SY" when scope != ALL
+  scopeValue   String? // batchId or "SY" when scope != ALL
   isRead       Boolean           @default(false)
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
   deletedAt    DateTime?
 
-  university   University @relation(fields: [universityId], references: [id])
-  faculty      Faculty    @relation(fields: [facultyId], references: [id])
-  reads        AnnouncementRead[]
+  university University         @relation(fields: [universityId], references: [id])
+  faculty    Faculty            @relation(fields: [facultyId], references: [id])
+  reads      AnnouncementRead[]
 
   @@index([universityId, createdAt])
   @@index([scope, scopeValue])
@@ -987,11 +986,11 @@ model Announcement {
 
 model AnnouncementRead {
   id             String   @id @default(uuid()) @db.Uuid
-  announcementId String
-  studentId      String
+  announcementId String   @db.Uuid
+  studentId      String   @db.Uuid
   readAt         DateTime @default(now())
 
-  announcement   Announcement @relation(fields: [announcementId], references: [id])
+  announcement Announcement @relation(fields: [announcementId], references: [id])
 
   @@unique([announcementId, studentId])
   @@index([studentId])
@@ -1001,11 +1000,11 @@ model AnnouncementRead {
 // Exam coordinators: HOD appoints exactly two faculty per semester (slot 1 and 2).
 model ExamCoordinator {
   id           String   @id @default(uuid()) @db.Uuid
-  universityId String
-  semesterId   String
-  slot         Int      // 1 = Exam-Coordinator-1, 2 = Exam-Coordinator-2
-  facultyId    String
-  assignedById String   // HOD faculty id
+  universityId String   @db.Uuid
+  semesterId   String   @db.Uuid
+  slot         Int // 1 = Exam-Coordinator-1, 2 = Exam-Coordinator-2
+  facultyId    String   @db.Uuid
+  assignedById String   @db.Uuid // HOD faculty id
   createdAt    DateTime @default(now())
 
   @@unique([semesterId, slot])
@@ -1017,15 +1016,15 @@ model ExamCoordinator {
 // batch+subject+phase to a faculty. Marks land in Result keyed the same way.
 model PaperCheckAssignment {
   id               String   @id @default(uuid()) @db.Uuid
-  universityId     String
-  semesterId       String
-  phaseId          String
-  subjectId        String
-  batchId          String?  // optional — checker students are derived from the subject's batches
-  facultyId        String   // the checker
+  universityId     String   @db.Uuid
+  semesterId       String   @db.Uuid
+  phaseId          String   @db.Uuid
+  subjectId        String   @db.Uuid
+  batchId          String?  @db.Uuid // optional — checker students are derived from the subject's batches
+  facultyId        String   @db.Uuid // the checker
   fromEnrollmentNo String
   toEnrollmentNo   String
-  assignedById     String   // coordinator faculty id
+  assignedById     String   @db.Uuid // coordinator faculty id
   createdAt        DateTime @default(now())
 
   @@index([facultyId, phaseId])
@@ -1036,14 +1035,14 @@ model PaperCheckAssignment {
 // Per-user event notifications (Result Out, Attendance Marked, etc.). Distinct from broadcast Announcements.
 model Notification {
   id           String   @id @default(uuid()) @db.Uuid
-  universityId String
+  universityId String   @db.Uuid
   // Exactly one of these is set:
-  facultyId    String?
-  studentId    String?
-  type         String   // NotificationKey enum value as string (loose to allow custom types)
+  facultyId    String?  @db.Uuid
+  studentId    String?  @db.Uuid
+  type         String // NotificationKey enum value as string (loose to allow custom types)
   title        String
   body         String
-  linkPath     String?  // frontend route to open when clicked
+  linkPath     String? // frontend route to open when clicked
   isRead       Boolean  @default(false)
   createdAt    DateTime @default(now())
 
@@ -1060,22 +1059,22 @@ model Notification {
 // ─────────────────────────────────────────────────────────────
 
 model ChatMessage {
-  id                  String     @id @default(uuid()) @db.Uuid
-  mentorAssignmentId  String
-  senderRole          SenderRole
-  facultyId           String?    // set when senderRole = FACULTY
-  studentId           String?    // set when senderRole = STUDENT
-  content             String
-  isRead              Boolean    @default(false)
-  sentAt              DateTime   @default(now())
-  editedAt            DateTime?
+  id                 String     @id @default(uuid()) @db.Uuid
+  mentorAssignmentId String     @db.Uuid
+  senderRole         SenderRole
+  facultyId          String?    @db.Uuid // set when senderRole = FACULTY
+  studentId          String?    @db.Uuid // set when senderRole = STUDENT
+  content            String
+  isRead             Boolean    @default(false)
+  sentAt             DateTime   @default(now())
+  editedAt           DateTime?
 
-  mentorAssignment    MentorAssignment @relation(fields: [mentorAssignmentId], references: [id])
-  faculty             Faculty?         @relation("FacultyChatMessages", fields: [facultyId], references: [id])
-  student             Student?         @relation("StudentChatMessages", fields: [studentId], references: [id])
+  mentorAssignment MentorAssignment @relation(fields: [mentorAssignmentId], references: [id])
+  faculty          Faculty?         @relation("FacultyChatMessages", fields: [facultyId], references: [id])
+  student          Student?         @relation("StudentChatMessages", fields: [studentId], references: [id])
 
-  @@index([mentorAssignmentId, sentAt])   // paginated message history
-  @@index([mentorAssignmentId, isRead])   // unread count queries
+  @@index([mentorAssignmentId, sentAt]) // paginated message history
+  @@index([mentorAssignmentId, isRead]) // unread count queries
   @@map("chat_messages")
 }
 
@@ -1087,35 +1086,35 @@ model ChatMessage {
 // ─────────────────────────────────────────────────────────────
 
 model AIConversation {
-  id         String   @id @default(uuid()) @db.Uuid
-  studentId  String
-  subjectId  String?  // null = general assistant, not subject-scoped
-  title      String?
-  deletedAt  DateTime?
-  messages   Json     // [{ role: "user"|"assistant", content: "..." }]
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String    @id @default(uuid()) @db.Uuid
+  studentId String    @db.Uuid
+  subjectId String?   @db.Uuid // null = general assistant, not subject-scoped
+  title     String?
+  deletedAt DateTime?
+  messages  Json // [{ role: "user"|"assistant", content: "..." }]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
-  student    Student  @relation(fields: [studentId], references: [id])
-  session    StudentAIChatSession?
+  student Student               @relation(fields: [studentId], references: [id])
+  session StudentAIChatSession?
 
   @@index([studentId])
   @@map("ai_conversations")
 }
 
 model StudentAIChatSession {
-  id             String         @id @default(uuid()) @db.Uuid
-  studentId      String
-  subjectId      String?
-  conversationId String         @unique
+  id             String   @id @default(uuid()) @db.Uuid
+  studentId      String   @db.Uuid
+  subjectId      String?  @db.Uuid
+  conversationId String   @unique @db.Uuid
   title          String
-  isDeleted      Boolean        @default(false)
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  isDeleted      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  student        Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  subject        Subject?       @relation(fields: [subjectId], references: [id], onDelete: SetNull)
-  conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  student      Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject      Subject?       @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  conversation AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([studentId, updatedAt])
   @@index([subjectId])
@@ -1123,23 +1122,23 @@ model StudentAIChatSession {
 }
 
 model StudyPlan {
-  id              String            @id @default(uuid()) @db.Uuid
-  studentId       String
-  enrollmentId    String
-  semesterId      String
-  weakSubjectIds  Json              @default("[]")
-  weakTopics      Json              @default("[]")
-  startDate       DateTime          @db.Date
-  endDate         DateTime          @db.Date
-  status          String            @default("queued")
-  regeneratedFrom DateTime?         @db.Date
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  id              String    @id @default(uuid()) @db.Uuid
+  studentId       String    @db.Uuid
+  enrollmentId    String    @db.Uuid
+  semesterId      String    @db.Uuid
+  weakSubjectIds  Json      @default("[]")
+  weakTopics      Json      @default("[]")
+  startDate       DateTime  @db.Date
+  endDate         DateTime  @db.Date
+  status          String    @default("queued")
+  regeneratedFrom DateTime? @db.Date
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  student         Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  enrollment      StudentEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  semester        Semester          @relation(fields: [semesterId], references: [id], onDelete: Cascade)
-  tasks           StudyPlanTask[]
+  student    Student           @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  enrollment StudentEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  semester   Semester          @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  tasks      StudyPlanTask[]
 
   @@index([studentId, createdAt])
   @@index([semesterId, createdAt])
@@ -1147,20 +1146,20 @@ model StudyPlan {
 }
 
 model StudyPlanTask {
-  id                       String     @id @default(uuid()) @db.Uuid
-  studyPlanId              String
-  subjectId                String?
-  taskDate                 DateTime   @db.Date
+  id                       String   @id @default(uuid()) @db.Uuid
+  studyPlanId              String   @db.Uuid
+  subjectId                String?  @db.Uuid
+  taskDate                 DateTime @db.Date
   description              String
   estimatedDurationMinutes Int
-  priority                 String     @default("medium")
-  isCompleted              Boolean    @default(false)
-  isCustom                 Boolean    @default(false)
-  createdAt                DateTime   @default(now())
-  updatedAt                DateTime   @updatedAt
+  priority                 String   @default("medium")
+  isCompleted              Boolean  @default(false)
+  isCustom                 Boolean  @default(false)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
-  studyPlan                StudyPlan  @relation(fields: [studyPlanId], references: [id], onDelete: Cascade)
-  subject                  Subject?   @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  studyPlan StudyPlan @relation(fields: [studyPlanId], references: [id], onDelete: Cascade)
+  subject   Subject?  @relation(fields: [subjectId], references: [id], onDelete: SetNull)
 
   @@index([studyPlanId, taskDate])
   @@index([subjectId])
@@ -1168,42 +1167,42 @@ model StudyPlanTask {
 }
 
 model NoteInsight {
-  id                   String    @id @default(uuid()) @db.Uuid
-  noteId               String    @unique
+  id                   String   @id @default(uuid()) @db.Uuid
+  noteId               String   @unique @db.Uuid
   contentHash          String
-  extractedText        String    @default("")
-  shortSummary         String    @default("")
-  detailedNotes        String    @default("")
-  bulletNotes          Json      @default("[]")
-  importantDefinitions Json      @default("[]")
-  keyFormulae          Json      @default("[]")
-  importantQuestions   Json      @default("[]")
-  status               String    @default("pending")
-  lastGeneratedAt      DateTime  @updatedAt
+  extractedText        String   @default("")
+  shortSummary         String   @default("")
+  detailedNotes        String   @default("")
+  bulletNotes          Json     @default("[]")
+  importantDefinitions Json     @default("[]")
+  keyFormulae          Json     @default("[]")
+  importantQuestions   Json     @default("[]")
+  status               String   @default("pending")
+  lastGeneratedAt      DateTime @updatedAt
 
-  note                 Note      @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
 
   @@index([status, lastGeneratedAt])
   @@map("note_insights")
 }
 
 model PYQInsight {
-  id             String    @id @default(uuid()) @db.Uuid
-  pyqFileId      String    @unique
-  subjectId      String
-  semesterId     String
-  extractedText  String    @default("")
-  topics         Json      @default("[]")
-  keywords       Json      @default("[]")
-  difficulty     String    @default("")
-  marksWeightage Json      @default("[]")
-  questionTypes  Json      @default("[]")
-  status         String    @default("pending")
-  updatedAt      DateTime  @updatedAt
+  id             String   @id @default(uuid()) @db.Uuid
+  pyqFileId      String   @unique @db.Uuid
+  subjectId      String   @db.Uuid
+  semesterId     String   @db.Uuid
+  extractedText  String   @default("")
+  topics         Json     @default("[]")
+  keywords       Json     @default("[]")
+  difficulty     String   @default("")
+  marksWeightage Json     @default("[]")
+  questionTypes  Json     @default("[]")
+  status         String   @default("pending")
+  updatedAt      DateTime @updatedAt
 
-  pyqFile        PYQFile   @relation(fields: [pyqFileId], references: [id], onDelete: Cascade)
-  subject        Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  semester       Semester  @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  pyqFile  PYQFile  @relation(fields: [pyqFileId], references: [id], onDelete: Cascade)
+  subject  Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  semester Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
 
   @@index([subjectId, updatedAt])
   @@index([semesterId, updatedAt])
@@ -1211,21 +1210,21 @@ model PYQInsight {
 }
 
 model SubjectSyllabus {
-  id             String    @id @default(uuid()) @db.Uuid
-  universityId   String
-  subjectId      String
-  semesterId     String
+  id             String   @id @default(uuid()) @db.Uuid
+  universityId   String   @db.Uuid
+  subjectId      String   @db.Uuid
+  semesterId     String   @db.Uuid
   unitTitle      String
-  unitOrder      Int       @default(0)
-  topics         Json      @default("[]")
-  learningGoals  Json      @default("[]")
-  referenceLinks Json      @default("[]")
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  unitOrder      Int      @default(0)
+  topics         Json     @default("[]")
+  learningGoals  Json     @default("[]")
+  referenceLinks Json     @default("[]")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  university     University @relation(fields: [universityId], references: [id], onDelete: Cascade)
-  subject        Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  semester       Semester   @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  university University @relation(fields: [universityId], references: [id], onDelete: Cascade)
+  subject    Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  semester   Semester   @relation(fields: [semesterId], references: [id], onDelete: Cascade)
 
   @@index([subjectId, unitOrder])
   @@index([semesterId, unitOrder])
@@ -1234,8 +1233,8 @@ model SubjectSyllabus {
 
 model StudentAIJob {
   id           String    @id @default(uuid()) @db.Uuid
-  universityId String
-  studentId    String?
+  universityId String    @db.Uuid
+  studentId    String?   @db.Uuid
   jobType      String
   status       JobStatus @default(QUEUED)
   progress     Int       @default(0)
@@ -1245,8 +1244,8 @@ model StudentAIJob {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  university   University @relation(fields: [universityId], references: [id], onDelete: Cascade)
-  student      Student?   @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  university University @relation(fields: [universityId], references: [id], onDelete: Cascade)
+  student    Student?   @relation(fields: [studentId], references: [id], onDelete: SetNull)
 
   @@index([universityId, status, createdAt])
   @@index([studentId, status, createdAt])
@@ -1261,14 +1260,14 @@ model StudentAIJob {
 // ─────────────────────────────────────────────────────────────
 
 model PromotionDraft {
-  id               String               @id @default(uuid()) @db.Uuid
-  hodId            String               // faculty with isHod=true
-  fromAcademicYearId String
-  toAcademicYearId   String
-  status           PromotionDraftStatus @default(IN_PROGRESS)
-  executedAt       DateTime?
-  createdAt        DateTime             @default(now())
-  updatedAt        DateTime             @updatedAt
+  id                 String               @id @default(uuid()) @db.Uuid
+  hodId              String               @db.Uuid // faculty with isHod=true
+  fromAcademicYearId String               @db.Uuid
+  toAcademicYearId   String               @db.Uuid
+  status             PromotionDraftStatus @default(IN_PROGRESS)
+  executedAt         DateTime?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
 
   hod              Faculty            @relation(fields: [hodId], references: [id])
   fromAcademicYear AcademicYear       @relation(fields: [fromAcademicYearId], references: [id])
@@ -1287,20 +1286,20 @@ model PromotionDraft {
 
 model PromotionMapping {
   id               String   @id @default(uuid()) @db.Uuid
-  draftId          String
-  enrollmentNo     String   // denormalized for CSV upload matching
-  fromEnrollmentId String   // StudentEnrollment in source semester
-  fromSemesterId   String
-  toSemesterId     String
-  toBatchId        String
-  toRollNo         String?  // assigned in Step 3 of wizard
-  isHeld           Boolean  @default(false)  // true = detained, not promoted
+  draftId          String   @db.Uuid
+  enrollmentNo     String // denormalized for CSV upload matching
+  fromEnrollmentId String   @db.Uuid // StudentEnrollment in source semester
+  fromSemesterId   String   @db.Uuid
+  toSemesterId     String   @db.Uuid
+  toBatchId        String   @db.Uuid
+  toRollNo         String? // assigned in Step 3 of wizard
+  isHeld           Boolean  @default(false) // true = detained, not promoted
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  draft          PromotionDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
-  fromSemester   Semester       @relation("FromSemester", fields: [fromSemesterId], references: [id])
-  toSemester     Semester       @relation("ToSemester", fields: [toSemesterId], references: [id])
+  draft        PromotionDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  fromSemester Semester       @relation("FromSemester", fields: [fromSemesterId], references: [id])
+  toSemester   Semester       @relation("ToSemester", fields: [toSemesterId], references: [id])
 
   @@unique([draftId, fromEnrollmentId])
   @@index([draftId])
@@ -1315,20 +1314,20 @@ model PromotionMapping {
 
 model RefreshToken {
   id        String   @id @default(uuid()) @db.Uuid
-  token     String   @unique    // hashed before storage in production
-  facultyId String?
-  studentId String?
+  token     String   @unique // hashed before storage in production
+  facultyId String?  @db.Uuid
+  studentId String?  @db.Uuid
   expiresAt DateTime
-  userAgent String?  // browser/device info
+  userAgent String? // browser/device info
   ipAddress String?
   createdAt DateTime @default(now())
 
-  faculty   Faculty? @relation(fields: [facultyId], references: [id])
-  student   Student? @relation(fields: [studentId], references: [id])
+  faculty Faculty? @relation(fields: [facultyId], references: [id])
+  student Student? @relation(fields: [studentId], references: [id])
 
   @@index([facultyId])
   @@index([studentId])
-  @@index([expiresAt])   // for TTL cleanup job
+  @@index([expiresAt]) // for TTL cleanup job
   @@map("refresh_tokens")
 }
 
@@ -1340,14 +1339,14 @@ model RefreshToken {
 
 model NotificationConfig {
   id           String          @id @default(uuid()) @db.Uuid
-  universityId String
-  facultyId    String
+  universityId String          @db.Uuid
+  facultyId    String          @db.Uuid
   key          NotificationKey
   enabled      Boolean         @default(true)
   updatedAt    DateTime        @updatedAt
 
-  university   University @relation(fields: [universityId], references: [id])
-  faculty      Faculty    @relation(fields: [facultyId], references: [id])
+  university University @relation(fields: [universityId], references: [id])
+  faculty    Faculty    @relation(fields: [facultyId], references: [id])
 
   @@unique([facultyId, key])
   @@map("notification_configs")
@@ -1361,11 +1360,11 @@ model NotificationConfig {
 
 model AttendanceRules {
   id                  String   @id @default(uuid()) @db.Uuid
-  universityId        String   @unique
-  minThresholdPct     Float    @default(75)   // below = AT_RISK
-  warningThresholdPct Float    @default(80)   // below = warning notification
+  universityId        String   @unique @db.Uuid
+  minThresholdPct     Float    @default(75) // below = AT_RISK
+  warningThresholdPct Float    @default(80) // below = warning notification
   autoNotifyMentor    Boolean  @default(true)
-  autoLockAfterDays   Int      @default(7)    // lock after N days
+  autoLockAfterDays   Int      @default(7) // lock after N days
   updatedAt           DateTime @updatedAt
 
   university University @relation(fields: [universityId], references: [id])
@@ -1381,16 +1380,16 @@ model AttendanceRules {
 
 model ActivityLog {
   id           String       @id @default(uuid()) @db.Uuid
-  universityId String
-  facultyId    String
+  universityId String       @db.Uuid
+  facultyId    String       @db.Uuid
   type         ActivityType
-  title        String       // "T2 Result uploaded"
-  description  String       // "T2 results for 12 subjects uploaded."
-  metadata     Json?        // arbitrary extra context
+  title        String // "T2 Result uploaded"
+  description  String // "T2 results for 12 subjects uploaded."
+  metadata     Json? // arbitrary extra context
   createdAt    DateTime     @default(now())
 
-  university   University @relation(fields: [universityId], references: [id])
-  faculty      Faculty    @relation(fields: [facultyId], references: [id])
+  university University @relation(fields: [universityId], references: [id])
+  faculty    Faculty    @relation(fields: [facultyId], references: [id])
 
   @@index([universityId, createdAt])
   @@index([facultyId, createdAt])
@@ -1405,11 +1404,11 @@ model ActivityLog {
 
 model ArchiveJob {
   id             String    @id @default(uuid()) @db.Uuid
-  universityId   String
-  academicYearId String
-  requestedById  String    // HOD faculty id
+  universityId   String    @db.Uuid
+  academicYearId String    @db.Uuid
+  requestedById  String    @db.Uuid // HOD faculty id
   status         JobStatus @default(QUEUED)
-  downloadUrl    String?   // S3 presigned URL when complete
+  downloadUrl    String? // S3 presigned URL when complete
   errorMessage   String?
   createdAt      DateTime  @default(now())
   completedAt    DateTime?
@@ -1427,12 +1426,12 @@ model ArchiveJob {
 // ─────────────────────────────────────────────────────────────
 
 model PasswordResetToken {
-  id        String   @id @default(uuid()) @db.Uuid
-  token     String   @unique    // hashed
-  facultyId String
+  id        String    @id @default(uuid()) @db.Uuid
+  token     String    @unique // hashed
+  facultyId String    @db.Uuid
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([facultyId])
   @@index([expiresAt])
