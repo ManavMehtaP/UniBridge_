@@ -38,6 +38,8 @@ class StudentContextMixin:
         student_id = request.headers.get("X-Student-Id") or getattr(request.user, "student_id", None)
         if not student_id:
             raise Http404("Student context missing.")
+        print("Student ID:", student_id)
+        print("Type:", type(student_id))
         return Student.objects.get(pk=student_id)
 
     def success(self, message: str, data: dict | list, status_code: int = status.HTTP_200_OK) -> Response:

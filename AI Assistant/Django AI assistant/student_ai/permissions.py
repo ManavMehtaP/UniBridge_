@@ -1,5 +1,6 @@
 import os
 
+from django.conf import settings
 from rest_framework.permissions import BasePermission
 
 
@@ -16,5 +17,5 @@ class InternalServicePermission(BasePermission):
     def has_permission(self, request, view) -> bool:
         expected = os.getenv("SERVICE_TOKEN") or os.getenv("DJANGO_AI_SERVICE_TOKEN")
         if not expected:
-            return False
+            return bool(settings.DEBUG)
         return request.headers.get("X-Service-Token") == expected

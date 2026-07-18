@@ -288,16 +288,23 @@ studentRouter.post("/study-planner/ai-suggest", asyncHandler(async (req, res) =>
   res.status(202).json(await portalService.studentStudyPlannerAiSuggest(req.user!.id, req.user!.universityId, req.body));
 }));
 
-studentRouter.patch("/study-planner/session", asyncHandler(async (req, res) => {
+studentRouter.post("/study-planner/tasks", asyncHandler(async (req, res) => {
+  res.status(201).json(await portalService.addStudentStudyPlannerTask(req.user!.id, req.user!.universityId, req.body));
+}));
+
+studentRouter.patch("/study-planner/tasks/:taskId", asyncHandler(async (req, res) => {
   res.json(
-    await portalService.updateStudentStudyPlannerSession(
+    await portalService.updateStudentStudyPlannerTask(
       req.user!.id,
       req.user!.universityId,
-      String(req.body.date),
-      Number(req.body.sessionIndex),
+      str(req.params.taskId),
       Boolean(req.body.isCompleted),
     ),
   );
+}));
+
+studentRouter.delete("/study-planner/tasks/:taskId", asyncHandler(async (req, res) => {
+  res.json(await portalService.deleteStudentStudyPlannerTask(req.user!.id, str(req.params.taskId)));
 }));
 
 studentRouter.put("/study-planner", asyncHandler(async (req, res) => {

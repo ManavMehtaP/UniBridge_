@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from student_ai.models import CalendarEvent, Note, NoteInsight, PYQAnalysis, PYQFile, Student, StudentEnrollment, Subject
+from student_ai.models import CalendarEvent, Note, NoteInsight, PYQAnalysis, PYQFile, StudyPlan, Student, StudentEnrollment, Subject
 
 
 def get_student_context(student: Student) -> dict:
@@ -16,6 +16,7 @@ def get_student_context(student: Student) -> dict:
         )
     ) if enrollment else []
     events = list(CalendarEvent.objects.filter(semester=enrollment.semester).order_by("start_date")[:10]) if enrollment else []
+    latest_plan = StudyPlan.objects.filter(student=student).prefetch_related("tasks__subject").order_by("-created_at").first()
     return {
         "student": {
             "id": str(student.id),
@@ -31,6 +32,23 @@ def get_student_context(student: Student) -> dict:
         } if enrollment else None,
         "subjects": [{"id": str(subject.id), "code": subject.code, "name": subject.name} for subject in subjects],
         "calendar_events": [{"title": event.title, "event_type": event.event_type, "start_date": str(event.start_date), "end_date": str(event.end_date)} for event in events],
+        "study_plan": {
+            "status": latest_plan.status,
+            "start_date": str(latest_plan.start_date),
+            "end_date": str(latest_plan.end_date),
+            "completed_tasks": sum(1 for task in latest_plan.tasks.all() if task.is_completed),
+            "pending_tasks": sum(1 for task in latest_plan.tasks.all() if not task.is_completed),
+            "recent_tasks": [
+                {
+                    "date": str(task.task_date),
+                    "subject": task.subject.code if task.subject else None,
+                    "description": task.description,
+                    "is_completed": task.is_completed,
+                    "is_custom": task.is_custom,
+                }
+                for task in list(latest_plan.tasks.all())[:12]
+            ],
+        } if latest_plan else None,
     }
 
 
@@ -59,4 +77,16 @@ def build_chat_sources(student: Student, subject: Subject | None = None) -> tupl
         sources.append({"type": "pyq", "id": str(pyq.id), "year": pyq.year})
     if topic_counter:
         chunks.append(f"PYQ frequency hints: {dict(topic_counter.most_common(10))}")
+    latest_plan = StudyPlan.objects.filter(student=student).prefetch_related("tasks__subject").order_by("-created_at").first()
+    if latest_plan:
+        completed = [task for task in latest_plan.tasks.all() if task.is_completed][:5]
+        pending = [task for task in latest_plan.tasks.all() if not task.is_completed][:5]
+        if completed:
+            chunks.append("Completed planner work:\n" + "\n".join(
+                f"- {task.task_date}: {task.description}" for task in completed
+            ))
+        if pending:
+            chunks.append("Pending planner work:\n" + "\n".join(
+                f"- {task.task_date}: {task.description}" for task in pending
+            ))
     return "\n\n".join(chunks), sources

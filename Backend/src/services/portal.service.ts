@@ -26,6 +26,8 @@ function planTaskTone(priority: string) {
 
 function formatStudyPlan(plan: Awaited<ReturnType<typeof getLatestStudyPlan>>) {
   if (!plan) return { plan: null, updatedAt: null };
+  const totalTasks = plan.tasks.length;
+  const completedTasks = plan.tasks.filter((task) => task.isCompleted).length;
   return {
     plan: {
       id: plan.id,
@@ -35,6 +37,11 @@ function formatStudyPlan(plan: Awaited<ReturnType<typeof getLatestStudyPlan>>) {
       status: plan.status,
       weakSubjectIds: plan.weakSubjectIds,
       weakTopics: plan.weakTopics,
+      progress: {
+        completedTasks,
+        totalTasks,
+        percent: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+      },
       tasks: plan.tasks.map((task) => ({
         id: task.id,
         date: task.taskDate,
@@ -4764,14 +4771,53 @@ export const portalService = {
     }
     return formatStudyPlan(await getLatestStudyPlan(studentId));
   },
-  async updateStudentStudyPlannerSession(studentId: string, _universityId: string, date: string, sessionIndex: number, isCompleted: boolean) {
+  async addStudentStudyPlannerTask(studentId: string, _universityId: string, body: Record<string, unknown>) {
     const latest = await getLatestStudyPlan(studentId);
     if (!latest) throw new ApiError(404, "PLAN_NOT_FOUND", "Generate a study plan first.");
-    const dayTasks = latest.tasks.filter((task) => task.taskDate.toISOString().slice(0, 10) === date);
-    const task = dayTasks[sessionIndex];
+    const description = String(body.description ?? "").trim();
+    const taskDate = body.date ? new Date(String(body.date)) : null;
+    const estimatedDurationMinutes = Number(body.estimatedDurationMinutes ?? 30);
+    const priority = String(body.priority ?? "medium").toLowerCase();
+    if (!description) throw new ApiError(400, "VALIDATION_ERROR", "Task description is required.");
+    if (!taskDate || Number.isNaN(taskDate.getTime())) throw new ApiError(400, "VALIDATION_ERROR", "Task date is invalid.");
+    if (!Number.isFinite(estimatedDurationMinutes) || estimatedDurationMinutes < 5 || estimatedDurationMinutes > 180) {
+      throw new ApiError(400, "VALIDATION_ERROR", "Task duration must be between 5 and 180 minutes.");
+    }
+    if (!["low", "medium", "high"].includes(priority)) throw new ApiError(400, "VALIDATION_ERROR", "Task priority is invalid.");
+    await prisma.studyPlanTask.create({
+      data: {
+        studyPlanId: latest.id,
+        subjectId: body.subjectId ? String(body.subjectId) : null,
+        taskDate,
+        description,
+        estimatedDurationMinutes,
+        priority,
+        isCustom: true,
+      },
+    });
+    return formatStudyPlan(await getLatestStudyPlan(studentId));
+  },
+  async updateStudentStudyPlannerTask(studentId: string, _universityId: string, taskId: string, isCompleted: boolean) {
+    const task = await prisma.studyPlanTask.findFirst({
+      where: { id: taskId, studyPlan: { studentId } },
+      include: { studyPlan: { include: { tasks: true } } },
+    });
     if (!task) throw new ApiError(404, "TASK_NOT_FOUND", "Planner task not found.");
     await prisma.studyPlanTask.update({ where: { id: task.id }, data: { isCompleted } });
-    return { taskId: task.id, date, sessionIndex, isCompleted };
+    const remaining = task.studyPlan.tasks.filter((item) => item.id !== task.id ? !item.isCompleted : !isCompleted).length;
+    await prisma.studyPlan.update({
+      where: { id: task.studyPlanId },
+      data: { status: remaining === 0 ? "completed" : "active" },
+    });
+    return formatStudyPlan(await getLatestStudyPlan(studentId));
+  },
+  async deleteStudentStudyPlannerTask(studentId: string, taskId: string) {
+    const task = await prisma.studyPlanTask.findFirst({
+      where: { id: taskId, isCustom: true, studyPlan: { studentId } },
+    });
+    if (!task) throw new ApiError(404, "TASK_NOT_FOUND", "Custom planner task not found.");
+    await prisma.studyPlanTask.delete({ where: { id: task.id } });
+    return formatStudyPlan(await getLatestStudyPlan(studentId));
   },
   async studentStudyPlannerAiSuggest(studentId: string, universityId: string, _body: Record<string, unknown>) {
     const created = await generateStudyPlanForStudent(studentId, universityId);

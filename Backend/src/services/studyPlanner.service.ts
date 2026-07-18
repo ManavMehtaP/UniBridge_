@@ -9,6 +9,13 @@ type RankedSubject = {
   syllabusUnits: string[];
 };
 
+type PhaseWindow = {
+  number: number;
+  startDate: Date;
+  endDate: Date;
+  examDate: Date | null;
+};
+
 function startOfDay(value: Date) {
   return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
 }
@@ -19,10 +26,6 @@ function addDays(value: Date, days: number) {
   return next;
 }
 
-function dateKey(value: Date) {
-  return value.toISOString().slice(0, 10);
-}
-
 function priorityFromPct(averagePct: number) {
   if (averagePct < 45) return "high";
   if (averagePct < 60) return "medium";
@@ -31,6 +34,35 @@ function priorityFromPct(averagePct: number) {
 
 function uniq(values: Array<string | null | undefined>) {
   return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+}
+
+function activePhaseForToday(phases: PhaseWindow[]) {
+  const today = startOfDay(new Date());
+  return phases.find((phase) => startOfDay(phase.startDate) <= today && startOfDay(phase.endDate) >= today)
+    ?? phases.find((phase) => startOfDay(phase.endDate) >= today)
+    ?? phases[phases.length - 1]
+    ?? { number: 4, startDate: today, endDate: today, examDate: null };
+}
+
+function nearestExamDate(semester: { endDate: Date }, phases: PhaseWindow[]) {
+  const today = startOfDay(new Date());
+  const future = phases
+    .map((phase) => phase.examDate)
+    .filter((examDate): examDate is Date => {
+      if (!examDate) return false;
+      return startOfDay(examDate) >= today;
+    })
+    .sort((a, b) => a.getTime() - b.getTime());
+  if (future[0]) return startOfDay(future[0]);
+  const semesterEnd = startOfDay(semester.endDate);
+  return semesterEnd >= today ? semesterEnd : addDays(today, 14);
+}
+
+function taskDuration(priority: string, isWeekend: boolean, isRevision = false) {
+  if (isRevision) return isWeekend ? 40 : 30;
+  if (priority === "high") return isWeekend ? 60 : 45;
+  if (priority === "low") return isWeekend ? 35 : 25;
+  return isWeekend ? 45 : 35;
 }
 
 async function rankedSubjectsForStudent(studentId: string, universityId: string) {
@@ -46,24 +78,31 @@ async function rankedSubjectsForStudent(studentId: string, universityId: string)
     where: { universityId, semesterNumber: enrollment.semester.number, deletedAt: null, isActive: true },
     orderBy: { code: "asc" },
   });
+  const subjectIds = subjects.map((subject) => subject.id);
 
-  const results = await prisma.result.findMany({
-    where: { enrollmentId: enrollment.id, isPublished: true, subjectId: { in: subjects.map((subject) => subject.id) } },
-    include: { subject: true, phase: true },
-    orderBy: [{ subjectId: "asc" }, { phase: { number: "asc" } }],
-  });
-
-  const pyqAnalyses = await prisma.pYQAnalysis.findMany({
-    where: { semesterId: enrollment.semesterId, subjectId: { in: subjects.map((subject) => subject.id) } },
-  });
-  const pyqInsights = await prisma.pYQInsight.findMany({
-    where: { semesterId: enrollment.semesterId, subjectId: { in: subjects.map((subject) => subject.id) } },
-    orderBy: { updatedAt: "desc" },
-  });
-  const syllabi = await prisma.subjectSyllabus.findMany({
-    where: { semesterId: enrollment.semesterId, subjectId: { in: subjects.map((subject) => subject.id) } },
-    orderBy: [{ subjectId: "asc" }, { unitOrder: "asc" }],
-  });
+  const [results, pyqAnalyses, pyqInsights, syllabi, phases] = await Promise.all([
+    prisma.result.findMany({
+      where: { enrollmentId: enrollment.id, isPublished: true, subjectId: { in: subjectIds } },
+      include: { phase: true },
+      orderBy: [{ subjectId: "asc" }, { phase: { number: "asc" } }],
+    }),
+    prisma.pYQAnalysis.findMany({
+      where: { semesterId: enrollment.semesterId, subjectId: { in: subjectIds } },
+    }),
+    prisma.pYQInsight.findMany({
+      where: { semesterId: enrollment.semesterId, subjectId: { in: subjectIds } },
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.subjectSyllabus.findMany({
+      where: { semesterId: enrollment.semesterId, subjectId: { in: subjectIds } },
+      orderBy: [{ subjectId: "asc" }, { unitOrder: "asc" }],
+    }),
+    prisma.phase.findMany({
+      where: { semesterId: enrollment.semesterId },
+      select: { number: true, startDate: true, endDate: true, examDate: true },
+      orderBy: { number: "asc" },
+    }),
+  ]);
 
   const resultsBySubject = new Map<string, { got: number; max: number }>();
   for (const result of results) {
@@ -80,49 +119,47 @@ async function rankedSubjectsForStudent(studentId: string, universityId: string)
   }
   for (const analysis of pyqAnalyses) {
     const topicFreq = (analysis.topicFrequencies as Record<string, number>) ?? {};
-    const ranked = Object.entries(topicFreq)
+    const rankedTopics = Object.entries(topicFreq)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 4)
       .map(([topic]) => topic);
     const current = pyqTopics.get(analysis.subjectId) ?? [];
-    pyqTopics.set(analysis.subjectId, uniq([...current, ...ranked]));
+    pyqTopics.set(analysis.subjectId, uniq([...current, ...rankedTopics]));
+  }
+
+  const activePhase = activePhaseForToday(phases);
+  const syllabusRowsBySubject = new Map<string, typeof syllabi>();
+  for (const item of syllabi) {
+    const current = syllabusRowsBySubject.get(item.subjectId) ?? [];
+    current.push(item);
+    syllabusRowsBySubject.set(item.subjectId, current);
   }
 
   const syllabusBySubject = new Map<string, string[]>();
-  for (const item of syllabi) {
-    const topics = ((item.topics as string[]) ?? []).slice(0, 2);
-    const current = syllabusBySubject.get(item.subjectId) ?? [];
-    syllabusBySubject.set(item.subjectId, uniq([...current, item.unitTitle, ...topics]));
+  for (const [subjectId, items] of syllabusRowsBySubject.entries()) {
+    const limit = Math.max(1, Math.ceil(items.length * Math.min(activePhase.number, 4) / 4));
+    for (const item of items.slice(0, limit)) {
+      const topics = ((item.topics as string[]) ?? []).slice(0, 2);
+      const current = syllabusBySubject.get(subjectId) ?? [];
+      syllabusBySubject.set(subjectId, uniq([...current, item.unitTitle, ...topics]));
+    }
   }
 
   const ranked = subjects.map<RankedSubject>((subject) => {
     const marks = resultsBySubject.get(subject.id);
     const averagePct = marks && marks.max > 0 ? Number(((marks.got / marks.max) * 100).toFixed(1)) : 55;
+    const phaseAwareUnits = (syllabusBySubject.get(subject.id) ?? []).slice(-4);
     return {
       id: subject.id,
       code: subject.code,
       name: subject.name,
       averagePct,
-      weakTopics: (pyqTopics.get(subject.id) ?? []).slice(0, 5),
-      syllabusUnits: (syllabusBySubject.get(subject.id) ?? []).slice(0, 5),
+      weakTopics: uniq([...(pyqTopics.get(subject.id) ?? []).slice(0, 3), ...phaseAwareUnits]).slice(0, 5),
+      syllabusUnits: phaseAwareUnits,
     };
   }).sort((a, b) => a.averagePct - b.averagePct);
 
-  return { enrollment, ranked };
-}
-
-function nearestExamDate(semester: { endDate: Date }, phases: Array<{ examDate: Date | null }>) {
-  const today = startOfDay(new Date());
-  const future = phases
-    .map((phase) => phase.examDate)
-    .filter((examDate): examDate is Date => {
-      if (!examDate) return false;
-      return startOfDay(examDate) >= today;
-    })
-    .sort((a, b) => a.getTime() - b.getTime());
-  if (future[0]) return startOfDay(future[0]);
-  const semesterEnd = startOfDay(semester.endDate);
-  return semesterEnd >= today ? semesterEnd : addDays(today, 14);
+  return { enrollment, ranked, phases };
 }
 
 function buildTasks(days: Date[], ranked: RankedSubject[]) {
@@ -140,42 +177,44 @@ function buildTasks(days: Date[], ranked: RankedSubject[]) {
     const nextTopic = subject.weakTopics[index % Math.max(subject.weakTopics.length, 1)] ?? subject.syllabusUnits[index % Math.max(subject.syllabusUnits.length, 1)] ?? `Revise ${subject.code}`;
     const isWeekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
     const daysLeft = days.length - index - 1;
+    const primaryPriority = priorityFromPct(subject.averagePct);
 
     tasks.push({
       taskDate: day,
       subjectId: subject.id,
-      description: `Strengthen ${subject.code}: study ${nextTopic}. Focus on low-scoring areas and write short recall notes.`,
-      estimatedDurationMinutes: isWeekend ? 105 : 90,
-      priority: priorityFromPct(subject.averagePct),
+      description: `Focus on ${subject.code}: revise ${nextTopic} and finish one short recall check.`,
+      estimatedDurationMinutes: taskDuration(primaryPriority, isWeekend),
+      priority: primaryPriority,
     });
 
     if (daysLeft <= 2) {
       tasks.push({
         taskDate: day,
         subjectId: subject.id,
-        description: `Final revision for ${subject.code}: attempt a timed PYQ set and review mistakes.`,
-        estimatedDurationMinutes: 75,
+        description: `Exam finish for ${subject.code}: solve a timed PYQ set and review errors.`,
+        estimatedDurationMinutes: taskDuration("high", isWeekend, true),
         priority: "high",
       });
       return;
     }
 
     const secondary = ranked[(index + 1) % ranked.length];
+    const secondaryPriority = priorityFromPct(secondary.averagePct);
     const secondaryTopic = secondary.weakTopics[0] ?? secondary.syllabusUnits[0] ?? `important questions in ${secondary.code}`;
     tasks.push({
       taskDate: day,
       subjectId: secondary.id,
-      description: `Practice for ${secondary.code}: solve PYQ questions on ${secondaryTopic}.`,
-      estimatedDurationMinutes: isWeekend ? 75 : 60,
-      priority: priorityFromPct(secondary.averagePct),
+      description: `Practice ${secondary.code}: attempt PYQ questions on ${secondaryTopic}.`,
+      estimatedDurationMinutes: taskDuration(secondaryPriority, isWeekend, true),
+      priority: secondaryPriority,
     });
 
     if (isWeekend) {
       tasks.push({
         taskDate: day,
         subjectId: null,
-        description: "Weekly consolidation: review formulas, definitions, and unfinished checklist items.",
-        estimatedDurationMinutes: 45,
+        description: "Weekly review: close pending checklist items, formulas, and definitions.",
+        estimatedDurationMinutes: 25,
         priority: "medium",
       });
     }
@@ -185,13 +224,7 @@ function buildTasks(days: Date[], ranked: RankedSubject[]) {
 }
 
 export async function generateStudyPlanForStudent(studentId: string, universityId: string) {
-  const { enrollment, ranked } = await rankedSubjectsForStudent(studentId, universityId);
-  const phases = await prisma.phase.findMany({
-    where: { semesterId: enrollment.semesterId },
-    select: { examDate: true },
-    orderBy: { number: "asc" },
-  });
-
+  const { enrollment, ranked, phases } = await rankedSubjectsForStudent(studentId, universityId);
   const startDate = startOfDay(new Date());
   const endDate = nearestExamDate(enrollment.semester, phases);
   const dayCount = Math.max(1, Math.min(60, Math.floor((endDate.getTime() - startDate.getTime()) / 86400000) + 1));
@@ -213,7 +246,7 @@ export async function generateStudyPlanForStudent(studentId: string, universityI
       weakTopics: uniq(ranked.flatMap((subject) => subject.weakTopics).slice(0, 12)),
       startDate,
       endDate,
-      status: "completed",
+      status: "active",
     },
   });
 

@@ -144,7 +144,7 @@ enum BranchCode {
 // ─────────────────────────────────────────────────────────────
 
 model University {
-  id           String    @id @default(uuid())
+  id           String    @id @default(uuid()) @db.Uuid
   name         String
   slug         String    @unique   // subdomain: lju.uniportal.in → "lju"
   logoUrl      String?
@@ -181,7 +181,7 @@ model University {
 // ─────────────────────────────────────────────────────────────
 
 model UniversityBranch {
-  id           String    @id @default(uuid())
+  id           String    @id @default(uuid()) @db.Uuid
   universityId String
   code         String    // "IT", "CSE" — matches BranchCode enum or custom string
   name         String    // "Information Technology"
@@ -201,7 +201,7 @@ model UniversityBranch {
 // ─────────────────────────────────────────────────────────────
 
 model AcademicYear {
-  id           String             @id @default(uuid())
+  id           String             @id @default(uuid()) @db.Uuid
   universityId String
   label        String             // "2026-27"
   status       AcademicYearStatus @default(DRAFT)
@@ -229,7 +229,7 @@ model AcademicYear {
 // ─────────────────────────────────────────────────────────────
 
 model Semester {
-  id             String         @id @default(uuid())
+  id             String         @id @default(uuid()) @db.Uuid
   universityId   String
   academicYearId String
   number         Int            // 1 to 8
@@ -268,7 +268,7 @@ model Semester {
 // ─────────────────────────────────────────────────────────────
 
 model Phase {
-  id          String    @id @default(uuid())
+  id          String    @id @default(uuid()) @db.Uuid
   semesterId  String
   label       String    // "T1", "T2", "T3", "T4"
   number      Int       // 1, 2, 3, 4
@@ -294,7 +294,7 @@ model Phase {
 // ─────────────────────────────────────────────────────────────
 
 model Batch {
-  id             String    @id @default(uuid())
+  id             String    @id @default(uuid()) @db.Uuid
   universityId   String
   academicYearId String
   code           String    // "C2", "B1", "SY-3"
@@ -327,7 +327,7 @@ model Batch {
 // ─────────────────────────────────────────────────────────────
 
 model HodBatchScope {
-  id             String   @id @default(uuid())
+  id             String   @id @default(uuid()) @db.Uuid
   facultyId      String   // must be isHod = true — validated at app layer
   batchId        String   @unique   // ONE HOD per batch — DB-level constraint
   semesterId     String
@@ -356,7 +356,7 @@ model HodBatchScope {
 // and shared across every batch/year. No per-academic-year rows. Editing soft-deletes the old row
 // and creates a new one so past results/attendance keep pointing at the original subject.
 model Subject {
-  id             String      @id @default(uuid())
+  id             String      @id @default(uuid()) @db.Uuid
   universityId   String
   semesterNumber Int         // 1..8 — the semester this subject belongs to, for all batches/years
   code           String      // "COA", "DM", "TOC"
@@ -400,7 +400,7 @@ model Subject {
 // ─────────────────────────────────────────────────────────────
 
 model SubjectComponent {
-  id           String   @id @default(uuid())
+  id           String   @id @default(uuid()) @db.Uuid
   subjectId    String
   key          String   // "THEORY" | "IPE" | "GP" | "ASSIGNMENT" | "QUIZ" | "VIVA" | "LAB" | custom
   label        String   // display name, e.g. "Internal Practical Exam"
@@ -425,7 +425,7 @@ model SubjectComponent {
 // ─────────────────────────────────────────────────────────────
 
 model Faculty {
-  id              String    @id @default(uuid())
+  id              String    @id @default(uuid()) @db.Uuid
   universityId    String
   employeeId      String    // College-assigned, e.g. "EMP001"
   name            String
@@ -476,7 +476,7 @@ model Faculty {
 // ─────────────────────────────────────────────────────────────
 
 model FacultyBatchAssignment {
-  id         String   @id @default(uuid())
+  id         String   @id @default(uuid()) @db.Uuid
   facultyId  String
   batchId    String
   subjectId  String
@@ -502,7 +502,7 @@ model FacultyBatchAssignment {
 // ─────────────────────────────────────────────────────────────
 
 model Student {
-  id              String    @id @default(uuid())
+  id              String    @id @default(uuid()) @db.Uuid
   universityId    String
   enrollmentNo    String    @unique   // "LJ20IT045" — permanent, college-issued
   name            String
@@ -551,7 +551,7 @@ model Student {
 // ─────────────────────────────────────────────────────────────
 
 model StudentEnrollment {
-  id              String    @id @default(uuid())
+  id              String    @id @default(uuid()) @db.Uuid
   studentId       String    // FK to Student (not enrollmentNo — use id for joins)
   semesterId      String
   batchId         String
@@ -587,7 +587,7 @@ model StudentEnrollment {
 // ─────────────────────────────────────────────────────────────
 
 model MentorAssignment {
-  id          String   @id @default(uuid())
+  id          String   @id @default(uuid()) @db.Uuid
   facultyId   String   // must be isHod = false
   studentId   String
   semesterId  String
@@ -612,7 +612,7 @@ model MentorAssignment {
 // ─────────────────────────────────────────────────────────────
 
 model Result {
-  id             String   @id @default(uuid())
+  id             String   @id @default(uuid()) @db.Uuid
   enrollmentId   String   // FK to StudentEnrollment
   phaseId        String   // T1 / T2 / T3 / T4
   subjectId      String
@@ -644,7 +644,7 @@ model Result {
 // ─────────────────────────────────────────────────────────────
 
 model AttendanceRecord {
-  id           String   @id @default(uuid())
+  id           String   @id @default(uuid()) @db.Uuid
   enrollmentId String
   subjectId    String
   slotId       String?  // timetable slot — distinguishes paired lectures (TOC,TOC)
@@ -675,7 +675,7 @@ model AttendanceRecord {
 // ─────────────────────────────────────────────────────────────
 
 model Note {
-  id          String    @id @default(uuid())
+  id          String    @id @default(uuid()) @db.Uuid
   universityId String
   subjectId   String
   facultyId   String
@@ -729,7 +729,7 @@ model NoteBatchTarget {
 // ─────────────────────────────────────────────────────────────
 
 model Flashcard {
-  id       String @id @default(uuid())
+  id       String @id @default(uuid()) @db.Uuid
   noteId   String
   question String
   answer   String
@@ -746,7 +746,7 @@ model Flashcard {
 // ─────────────────────────────────────────────────────────────
 
 model SelfNote {
-  id        String    @id @default(uuid())
+  id        String    @id @default(uuid()) @db.Uuid
   studentId String
   subjectId String?   // optional — can be a general note
   title     String
@@ -768,7 +768,7 @@ model SelfNote {
 // ─────────────────────────────────────────────────────────────
 
 model PYQFile {
-  id         String    @id @default(uuid())
+  id         String    @id @default(uuid()) @db.Uuid
   subjectId  String
   uploadedById String  // HOD faculty id
   year       String    // "2023-24" — the year the question paper is from
@@ -792,7 +792,7 @@ model PYQFile {
 // ─────────────────────────────────────────────────────────────
 
 model PYQAnalysis {
-  id              String   @id @default(uuid())
+  id              String   @id @default(uuid()) @db.Uuid
   subjectId       String
   semesterId      String
   topicFrequencies Json    // { "Pipelining": 8, "Cache Memory": 5, ... }
@@ -811,7 +811,7 @@ model PYQAnalysis {
 // ─────────────────────────────────────────────────────────────
 
 model Quiz {
-  id            String    @id @default(uuid())
+  id            String    @id @default(uuid()) @db.Uuid
   facultyId     String
   subjectId     String
   semesterId    String
@@ -858,7 +858,7 @@ model QuizBatchTarget {
 // ─────────────────────────────────────────────────────────────
 
 model Question {
-  id            String  @id @default(uuid())
+  id            String  @id @default(uuid()) @db.Uuid
   quizId        String
   text          String
   options       Json    // [{ "id": "A", "text": "..." }, ...]
@@ -879,7 +879,7 @@ model Question {
 // ─────────────────────────────────────────────────────────────
 
 model QuizAttempt {
-  id          String   @id @default(uuid())
+  id          String   @id @default(uuid()) @db.Uuid
   studentId   String
   quizId      String
   score       Float    // percentage score
@@ -901,7 +901,7 @@ model QuizAttempt {
 // ─────────────────────────────────────────────────────────────
 
 model TimetableSlot {
-  id         String @id @default(uuid())
+  id         String @id @default(uuid()) @db.Uuid
   semesterId String
   batchId    String
   subjectId  String
@@ -929,7 +929,7 @@ model TimetableSlot {
 // ─────────────────────────────────────────────────────────────
 
 model CalendarEvent {
-  id           String            @id @default(uuid())
+  id           String            @id @default(uuid()) @db.Uuid
   universityId String
   semesterId   String?           // optional — some events span semesters
   title        String
@@ -960,7 +960,7 @@ model CalendarEvent {
 // ─────────────────────────────────────────────────────────────
 
 model Announcement {
-  id           String            @id @default(uuid())
+  id           String            @id @default(uuid()) @db.Uuid
   universityId String
   facultyId    String            // sender
   title        String
@@ -986,7 +986,7 @@ model Announcement {
 // ─────────────────────────────────────────────────────────────
 
 model AnnouncementRead {
-  id             String   @id @default(uuid())
+  id             String   @id @default(uuid()) @db.Uuid
   announcementId String
   studentId      String
   readAt         DateTime @default(now())
@@ -1000,7 +1000,7 @@ model AnnouncementRead {
 
 // Exam coordinators: HOD appoints exactly two faculty per semester (slot 1 and 2).
 model ExamCoordinator {
-  id           String   @id @default(uuid())
+  id           String   @id @default(uuid()) @db.Uuid
   universityId String
   semesterId   String
   slot         Int      // 1 = Exam-Coordinator-1, 2 = Exam-Coordinator-2
@@ -1016,7 +1016,7 @@ model ExamCoordinator {
 // Paper-checking duty: coordinator assigns an enrollment-no range of one
 // batch+subject+phase to a faculty. Marks land in Result keyed the same way.
 model PaperCheckAssignment {
-  id               String   @id @default(uuid())
+  id               String   @id @default(uuid()) @db.Uuid
   universityId     String
   semesterId       String
   phaseId          String
@@ -1035,7 +1035,7 @@ model PaperCheckAssignment {
 
 // Per-user event notifications (Result Out, Attendance Marked, etc.). Distinct from broadcast Announcements.
 model Notification {
-  id           String   @id @default(uuid())
+  id           String   @id @default(uuid()) @db.Uuid
   universityId String
   // Exactly one of these is set:
   facultyId    String?
@@ -1060,7 +1060,7 @@ model Notification {
 // ─────────────────────────────────────────────────────────────
 
 model ChatMessage {
-  id                  String     @id @default(uuid())
+  id                  String     @id @default(uuid()) @db.Uuid
   mentorAssignmentId  String
   senderRole          SenderRole
   facultyId           String?    // set when senderRole = FACULTY
@@ -1087,7 +1087,7 @@ model ChatMessage {
 // ─────────────────────────────────────────────────────────────
 
 model AIConversation {
-  id         String   @id @default(uuid())
+  id         String   @id @default(uuid()) @db.Uuid
   studentId  String
   subjectId  String?  // null = general assistant, not subject-scoped
   title      String?
@@ -1104,7 +1104,7 @@ model AIConversation {
 }
 
 model StudentAIChatSession {
-  id             String         @id @default(uuid())
+  id             String         @id @default(uuid()) @db.Uuid
   studentId      String
   subjectId      String?
   conversationId String         @unique
@@ -1123,7 +1123,7 @@ model StudentAIChatSession {
 }
 
 model StudyPlan {
-  id              String            @id @default(uuid())
+  id              String            @id @default(uuid()) @db.Uuid
   studentId       String
   enrollmentId    String
   semesterId      String
@@ -1147,7 +1147,7 @@ model StudyPlan {
 }
 
 model StudyPlanTask {
-  id                       String     @id @default(uuid())
+  id                       String     @id @default(uuid()) @db.Uuid
   studyPlanId              String
   subjectId                String?
   taskDate                 DateTime   @db.Date
@@ -1168,7 +1168,7 @@ model StudyPlanTask {
 }
 
 model NoteInsight {
-  id                   String    @id @default(uuid())
+  id                   String    @id @default(uuid()) @db.Uuid
   noteId               String    @unique
   contentHash          String
   extractedText        String    @default("")
@@ -1188,7 +1188,7 @@ model NoteInsight {
 }
 
 model PYQInsight {
-  id             String    @id @default(uuid())
+  id             String    @id @default(uuid()) @db.Uuid
   pyqFileId      String    @unique
   subjectId      String
   semesterId     String
@@ -1211,7 +1211,7 @@ model PYQInsight {
 }
 
 model SubjectSyllabus {
-  id             String    @id @default(uuid())
+  id             String    @id @default(uuid()) @db.Uuid
   universityId   String
   subjectId      String
   semesterId     String
@@ -1233,7 +1233,7 @@ model SubjectSyllabus {
 }
 
 model StudentAIJob {
-  id           String    @id @default(uuid())
+  id           String    @id @default(uuid()) @db.Uuid
   universityId String
   studentId    String?
   jobType      String
@@ -1261,7 +1261,7 @@ model StudentAIJob {
 // ─────────────────────────────────────────────────────────────
 
 model PromotionDraft {
-  id               String               @id @default(uuid())
+  id               String               @id @default(uuid()) @db.Uuid
   hodId            String               // faculty with isHod=true
   fromAcademicYearId String
   toAcademicYearId   String
@@ -1286,7 +1286,7 @@ model PromotionDraft {
 // ─────────────────────────────────────────────────────────────
 
 model PromotionMapping {
-  id               String   @id @default(uuid())
+  id               String   @id @default(uuid()) @db.Uuid
   draftId          String
   enrollmentNo     String   // denormalized for CSV upload matching
   fromEnrollmentId String   // StudentEnrollment in source semester
@@ -1314,7 +1314,7 @@ model PromotionMapping {
 // ─────────────────────────────────────────────────────────────
 
 model RefreshToken {
-  id        String   @id @default(uuid())
+  id        String   @id @default(uuid()) @db.Uuid
   token     String   @unique    // hashed before storage in production
   facultyId String?
   studentId String?
@@ -1339,7 +1339,7 @@ model RefreshToken {
 // ─────────────────────────────────────────────────────────────
 
 model NotificationConfig {
-  id           String          @id @default(uuid())
+  id           String          @id @default(uuid()) @db.Uuid
   universityId String
   facultyId    String
   key          NotificationKey
@@ -1360,7 +1360,7 @@ model NotificationConfig {
 // ─────────────────────────────────────────────────────────────
 
 model AttendanceRules {
-  id                  String   @id @default(uuid())
+  id                  String   @id @default(uuid()) @db.Uuid
   universityId        String   @unique
   minThresholdPct     Float    @default(75)   // below = AT_RISK
   warningThresholdPct Float    @default(80)   // below = warning notification
@@ -1380,7 +1380,7 @@ model AttendanceRules {
 // ─────────────────────────────────────────────────────────────
 
 model ActivityLog {
-  id           String       @id @default(uuid())
+  id           String       @id @default(uuid()) @db.Uuid
   universityId String
   facultyId    String
   type         ActivityType
@@ -1404,7 +1404,7 @@ model ActivityLog {
 // ─────────────────────────────────────────────────────────────
 
 model ArchiveJob {
-  id             String    @id @default(uuid())
+  id             String    @id @default(uuid()) @db.Uuid
   universityId   String
   academicYearId String
   requestedById  String    // HOD faculty id
@@ -1427,7 +1427,7 @@ model ArchiveJob {
 // ─────────────────────────────────────────────────────────────
 
 model PasswordResetToken {
-  id        String   @id @default(uuid())
+  id        String   @id @default(uuid()) @db.Uuid
   token     String   @unique    // hashed
   facultyId String
   expiresAt DateTime

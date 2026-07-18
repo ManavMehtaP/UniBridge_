@@ -80,8 +80,12 @@ export const studentApi = {
 
   studyPlanner: () => api.get('/student/study-planner').then((r) => r.data),
   saveStudyPlanner: (plan: unknown[]) => api.put('/student/study-planner', { plan }).then((r) => r.data),
-  toggleSession: (date: string, sessionIndex: number, isCompleted: boolean) =>
-    api.patch('/student/study-planner/session', { date, sessionIndex, isCompleted }).then((r) => r.data),
+  addStudyPlannerTask: (body: { date: string; subjectId?: string | null; description: string; estimatedDurationMinutes: number; priority: string }) =>
+    api.post('/student/study-planner/tasks', body).then((r) => r.data),
+  toggleSession: (taskId: string, isCompleted: boolean) =>
+    api.patch(`/student/study-planner/tasks/${taskId}`, { isCompleted }).then((r) => r.data),
+  deleteStudyPlannerTask: (taskId: string) =>
+    api.delete(`/student/study-planner/tasks/${taskId}`).then((r) => r.data),
   aiSuggest: (body: Record<string, unknown>) =>
     api.post('/student/study-planner/ai-suggest', body).then((r) => r.data),
 

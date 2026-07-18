@@ -21,7 +21,8 @@ export default function AIAssistantPage() {
   const qc = useQueryClient()
   const [tab, setTab] = useState('chat')
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [selectedSubjectId, setSelectedSubjectId] = useState('')
+  const [chatSubjectId, setChatSubjectId] = useState('')
+  const [analysisSubjectId, setAnalysisSubjectId] = useState('')
   const [text, setText] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -41,25 +42,32 @@ export default function AIAssistantPage() {
     retry: false,
   })
   const pyqAnalysis = useQuery({
-    queryKey: ['student', 'pyq-analysis', selectedSubjectId],
-    queryFn: () => studentApi.pyqAnalysis(selectedSubjectId),
-    enabled: !!selectedSubjectId,
+    queryKey: ['student', 'pyq-analysis', analysisSubjectId],
+    queryFn: () => studentApi.pyqAnalysis(analysisSubjectId),
+    enabled: !!analysisSubjectId,
     retry: false,
   })
 
   const subjectOptions: SubjectOption[] = (subjects.data as { subjects?: SubjectOption[] } | undefined)?.subjects ?? []
 
   useEffect(() => {
-    if (!selectedSubjectId && subjectOptions[0]) {
-      setSelectedSubjectId(subjectOptions[0].id)
+    if (!selectedId && conversations.data?.data?.[0]) {
+      setSelectedId(conversations.data.data[0].id)
     }
-  }, [selectedSubjectId, subjectOptions])
+  }, [conversations.data, selectedId])
+
+  useEffect(() => {
+    if (!analysisSubjectId && subjectOptions[0]) {
+      setAnalysisSubjectId(subjectOptions[0].id)
+    }
+  }, [analysisSubjectId, subjectOptions])
 
   const create = useMutation({
-    mutationFn: () => studentApi.createAiConversation({ title: `Chat ${new Date().toLocaleString('en-IN')}`, subjectId: selectedSubjectId || null }),
-    onSuccess: (created: { id: string }) => {
+    mutationFn: () => studentApi.createAiConversation({ title: `Chat ${new Date().toLocaleString('en-IN')}`, subjectId: chatSubjectId || null }),
+    onSuccess: async (created: { id: string }) => {
       setSelectedId(created.id)
-      qc.invalidateQueries({ queryKey: ['student', 'ai-convs'] })
+      await qc.invalidateQueries({ queryKey: ['student', 'ai-convs'] })
+      await qc.invalidateQueries({ queryKey: ['student', 'ai-conv', created.id] })
     },
     onError: (e) => toast.error(errorMessage(e)),
   })
@@ -87,6 +95,18 @@ export default function AIAssistantPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [conversation.data?.messages?.length])
 
+  const marksData = marksPrediction.data as {
+    predicted_percentage?: number
+    prediction_confidence?: string
+    predicted_average?: number
+    predicted_badge?: string
+    model_r2?: number
+    model_mae?: number
+    predictions?: Array<{ subject_code: string; subject_name: string; predicted_marks: number; predicted_percentage: number; trend: string; confidence_note: string }>
+    subject_predictions?: Array<{ subject_code: string; subject_name: string; predicted_marks: number; predicted_percentage: number; trend: string; confidence_note: string }>
+  } | undefined
+  const subjectPredictions = marksData?.predictions ?? marksData?.subject_predictions ?? []
+
   return (
     <PageShell
       title="AI Assistant"
@@ -109,14 +129,14 @@ export default function AIAssistantPage() {
             <div className="flex items-center justify-between border-b border-border p-3">
               <div>
                 <div className="text-sm font-semibold text-text-primary">Conversations</div>
-                <div className="text-[11px] text-text-muted">Subject-aware study help</div>
+                <div className="text-[11px] text-text-muted">General or subject-aware study help</div>
               </div>
               <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => create.mutate()} loading={create.isPending}>New</Button>
             </div>
             <div className="border-b border-border px-3 py-3">
               <Select
-                value={selectedSubjectId}
-                onChange={(e) => setSelectedSubjectId(e.target.value)}
+                value={chatSubjectId}
+                onChange={(e) => setChatSubjectId(e.target.value)}
                 options={subjectOptions.map((subject) => ({ value: subject.id, label: `${subject.code} - ${subject.name}` }))}
                 placeholder="General chat"
               />
@@ -143,7 +163,7 @@ export default function AIAssistantPage() {
                       </div>
                       <button
                         onClick={(e) => { e.stopPropagation(); del.mutate(item.id) }}
-                        className="opacity-0 transition group-hover:opacity-100 text-text-muted hover:text-danger"
+                        className="text-text-muted opacity-0 transition group-hover:opacity-100 hover:text-danger"
                       >
                         <Trash2 size={13} />
                       </button>
@@ -159,9 +179,9 @@ export default function AIAssistantPage() {
               <EmptyState
                 icon={<BrainCircuit size={24} />}
                 title="Start a study chat"
-                description="Pick a subject if you want context from notes, PYQ analysis, and your weak areas."
+                description="Leave the subject as General chat or pick one subject for note, PYQ, and marks context."
                 action={<Button leftIcon={<Plus size={14} />} onClick={() => create.mutate()} loading={create.isPending}>Create Chat</Button>}
-                className="border-0 flex-1"
+                className="flex-1 border-0"
               />
             ) : (
               <>
@@ -190,7 +210,7 @@ export default function AIAssistantPage() {
                   }}
                   className="flex items-center gap-2 border-t border-border p-3"
                 >
-                  <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask about a weak topic, PYQ trend, or revision plan..." />
+                  <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask about a concept, your weak areas, or how to study next..." />
                   <Button type="submit" disabled={!text.trim()} loading={send.isPending} leftIcon={<Send size={14} />}>Send</Button>
                 </form>
               </>
@@ -202,7 +222,7 @@ export default function AIAssistantPage() {
       {tab === 'marks' && (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[320px_1fr]">
           <Card>
-            <CardHeader title="T4 Prediction" subtitle="Predicted using your existing T1, T2, and T3 performance." />
+            <CardHeader title="T4 Prediction" subtitle="Predicted using your published T1, T2, and T3 marks." />
             <CardBody className="space-y-3">
               {marksPrediction.isLoading ? (
                 <CardSkeleton height={220} />
@@ -212,14 +232,14 @@ export default function AIAssistantPage() {
                 <>
                   <div className="rounded-card bg-surface-2 p-4">
                     <div className="text-[11px] uppercase tracking-wide text-text-muted">Predicted Overall</div>
-                    <div className="mt-1 text-3xl font-bold text-text-primary">{String((marksPrediction.data as { predicted_percentage?: number }).predicted_percentage ?? '--')}%</div>
-                    <div className="mt-1 text-xs text-text-muted">{String((marksPrediction.data as { prediction_confidence?: string }).prediction_confidence ?? 'Confidence unavailable')}</div>
+                    <div className="mt-1 text-3xl font-bold text-text-primary">{String(marksData?.predicted_percentage ?? '--')}%</div>
+                    <div className="mt-1 text-xs text-text-muted">{String(marksData?.prediction_confidence ?? 'Confidence unavailable')}</div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <MetricCard label="Predicted Avg" value={String((marksPrediction.data as { predicted_average?: number }).predicted_average ?? '--')} />
-                    <MetricCard label="Badge" value={String((marksPrediction.data as { predicted_badge?: string }).predicted_badge ?? '--')} />
-                    <MetricCard label="Model R²" value={String((marksPrediction.data as { model_r2?: number }).model_r2 ?? '--')} />
-                    <MetricCard label="Model MAE" value={String((marksPrediction.data as { model_mae?: number }).model_mae ?? '--')} />
+                    <MetricCard label="Predicted Avg" value={String(marksData?.predicted_average ?? '--')} />
+                    <MetricCard label="Badge" value={String(marksData?.predicted_badge ?? '--')} />
+                    <MetricCard label="Model R²" value={String(marksData?.model_r2 ?? '--')} />
+                    <MetricCard label="Model MAE" value={String(marksData?.model_mae ?? '--')} />
                   </div>
                 </>
               )}
@@ -231,9 +251,9 @@ export default function AIAssistantPage() {
             <CardBody>
               {marksPrediction.isLoading ? (
                 <CardSkeleton height={260} />
-              ) : (marksPrediction.data as { predictions?: Array<Record<string, unknown>> } | undefined)?.predictions?.length ? (
+              ) : subjectPredictions.length ? (
                 <div className="space-y-3">
-                  {(marksPrediction.data as { predictions: Array<{ subject_code: string; subject_name: string; predicted_marks: number; predicted_percentage: number; trend: string; confidence_note: string }> }).predictions.map((prediction) => (
+                  {subjectPredictions.map((prediction) => (
                     <div key={prediction.subject_code} className="rounded-card border border-border p-4">
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -253,7 +273,7 @@ export default function AIAssistantPage() {
                   ))}
                 </div>
               ) : (
-                <EmptyState icon={<Target size={22} />} title="No T4 prediction yet" description="Published T1, T2, and T3 marks are required before the model can project T4 output." className="border-0" />
+                <EmptyState icon={<Target size={22} />} title="No T4 prediction yet" description="Published T1, T2, and T3 marks are required for each subject before the model can project T4 output." className="border-0" />
               )}
             </CardBody>
           </Card>
@@ -269,8 +289,8 @@ export default function AIAssistantPage() {
               action={
                 <div className="w-[320px] max-w-full">
                   <Select
-                    value={selectedSubjectId}
-                    onChange={(e) => setSelectedSubjectId(e.target.value)}
+                    value={analysisSubjectId}
+                    onChange={(e) => setAnalysisSubjectId(e.target.value)}
                     options={subjectOptions.map((subject) => ({ value: subject.id, label: `${subject.code} - ${subject.name}` }))}
                     placeholder="Select subject"
                   />
@@ -278,7 +298,7 @@ export default function AIAssistantPage() {
               }
             />
             <CardBody>
-              {!selectedSubjectId ? (
+              {!analysisSubjectId ? (
                 <EmptyState icon={<Target size={22} />} title="Select a subject" description="Choose a subject to load its PYQ analysis." className="border-0" />
               ) : pyqAnalysis.isLoading ? (
                 <CardSkeleton height={280} />

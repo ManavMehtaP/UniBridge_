@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from pathlib import Path
+from urllib.parse import urlparse
 
 from django.conf import settings
 
@@ -11,7 +12,10 @@ from student_ai.services.ai_service import SharedAIService
 from student_ai.services.documents import extract_text
 
 
-def resolve_local_path(file_url: str, file_key: str) -> Path:
+def resolve_local_path(file_url: str, file_key: str) -> str | Path:
+    parsed = urlparse(file_url or "")
+    if parsed.scheme in {"http", "https"}:
+        return file_url
     candidate = Path(file_url)
     if candidate.exists():
         return candidate

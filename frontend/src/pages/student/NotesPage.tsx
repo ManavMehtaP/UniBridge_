@@ -43,6 +43,10 @@ export default function StudentNotesPage() {
     queryFn: () => studentApi.smartNoteSummary(activeNoteId!),
     enabled: !!activeNoteId,
     retry: false,
+    refetchInterval: (query) => {
+      const status = (query.state.data as SummaryPayload | undefined)?.status
+      return status === 'processing' ? 5000 : false
+    },
   })
 
   return (
@@ -115,7 +119,7 @@ export default function StudentNotesPage() {
         ) : summary.isError ? (
           <EmptyState icon={<Sparkles size={22} />} title="Summary unavailable" description={errorMessage(summary.error)} className="border-0" />
         ) : (summary.data as SummaryPayload | undefined)?.status === 'processing' ? (
-          <EmptyState icon={<Sparkles size={22} />} title="Summary is processing" description="The faculty note has been queued for AI extraction. Open it again after processing finishes." className="border-0" />
+          <EmptyState icon={<Sparkles size={22} />} title="Summary is processing" description="The faculty note is being processed now. This window refreshes automatically every 5 seconds." className="border-0" />
         ) : (
           <div className="space-y-4">
             <Section title="Short Summary">

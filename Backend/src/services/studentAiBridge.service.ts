@@ -8,7 +8,7 @@ type DjangoResponse<T> = {
 };
 
 function baseUrl() {
-  return env.DJANGO_AI_BASE_URL?.replace(/\/$/, "");
+  return (env.DJANGO_AI_BASE_URL ?? (process.env.NODE_ENV === "production" ? undefined : "http://127.0.0.1:8000"))?.replace(/\/$/, "");
 }
 
 function serviceHeaders(extra?: Record<string, string>) {
