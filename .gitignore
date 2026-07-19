@@ -12,6 +12,10 @@ venv/
 # Environment files
 frontend/.env
 Backend/.env
+**/.env
+
+# Local dev databases
+*.sqlite3
 
 # macOS
 .DS_Store
