@@ -139,7 +139,13 @@ class ChatMessageView(StudentContextMixin, APIView):
         prompt = [
             {
                 "role": "system",
-                "content": "You are UniBridge student AI assistant. Answer for students only. Prefer university context over general knowledge.",
+                "content": (
+                    "You are UniBridge student AI assistant. Answer for students only. "
+                    "Prefer university context over general knowledge. "
+                    "Respond in clean, organized Markdown with short sections when useful. "
+                    "Use bullet points or numbered steps for study advice, keep explanations concise, "
+                    "and avoid dumping one long paragraph unless the user explicitly asks for it."
+                ),
             },
             {
                 "role": "system",

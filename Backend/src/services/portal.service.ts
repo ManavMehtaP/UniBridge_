@@ -84,6 +84,34 @@ function average(values: number[]) {
   return Number((values.reduce((sum, v) => sum + v, 0) / values.length).toFixed(1));
 }
 
+function standardDeviation(values: number[]) {
+  if (values.length === 0) return 0;
+  const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance = values.reduce((sum, value) => sum + ((value - avg) ** 2), 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function performanceLabel(percentage: number) {
+  if (percentage >= 85) return "Excellent";
+  if (percentage >= 70) return "Good";
+  if (percentage >= 50) return "Average";
+  return "Needs Improvement";
+}
+
+function to30Scale(percentage: number) {
+  return Number(((percentage / 100) * 30).toFixed(2));
+}
+
+function normalizePhaseKey(label: string, number: number) {
+  const normalized = label.toUpperCase().replace(/\s+/g, "");
+  if (normalized.startsWith("T")) return normalized;
+  return `T${number}`;
+}
+
 function matchesPassword(hash: string | null | undefined, candidate: string) {
   return (hash ?? "") === candidate;
 }
@@ -3257,20 +3285,27 @@ export const portalService = {
 
   async studentAiConversations(studentId: string) {
     if (studentAiBridge.isConfigured()) {
-      const chats = await studentAiBridge.listChats(studentId);
-      const data = await Promise.all(chats.map(async (chat) => {
-        const subject = chat.subject_id ? await prisma.subject.findUnique({ where: { id: chat.subject_id }, select: { code: true, name: true } }) : null;
-        return {
-          id: chat.chat_id,
-          title: chat.title,
-          subjectCode: subject?.code ?? null,
-          subjectName: subject?.name ?? "General",
-          messageCount: chat.message_count,
-          updatedAt: chat.updated_at,
-          createdAt: chat.updated_at,
-        };
-      }));
-      return { data };
+      try {
+        const chats = await studentAiBridge.listChats(studentId);
+        const data = await Promise.all(chats.map(async (chat) => {
+          const fullChat = await studentAiBridge.getChat(studentId, chat.chat_id).catch(() => null);
+          const subject = chat.subject_id ? await prisma.subject.findUnique({ where: { id: chat.subject_id }, select: { code: true, name: true } }) : null;
+          const messages = fullChat?.messages ?? [];
+          return {
+            id: chat.chat_id,
+            title: chat.title,
+            subjectCode: subject?.code ?? null,
+            subjectName: subject?.name ?? "General",
+            lastMessage: messages.length > 0 ? messages[messages.length - 1]?.content ?? null : null,
+            messageCount: chat.message_count,
+            updatedAt: chat.updated_at,
+            createdAt: chat.updated_at,
+          };
+        }));
+        return { data: data.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()) };
+      } catch {
+        // The chat history is mirrored in Prisma; keep the UI usable if Django AI is offline.
+      }
     }
 
     const sessions = await prisma.studentAIChatSession.findMany({
@@ -3297,8 +3332,12 @@ export const portalService = {
   async createStudentAiConversation(studentId: string, universityId: string, body: { subjectId?: string; initialMessage?: string; title?: string }) {
     if (body.subjectId) await ensureStudentSubject(studentId, universityId, body.subjectId);
     if (studentAiBridge.isConfigured()) {
-      const created = await studentAiBridge.createChat(studentId, { title: body.title, subject_id: body.subjectId ?? null });
-      return { id: created.chat_id, title: created.title, subjectId: created.subject_id, messages: created.messages, createdAt: created.created_at };
+      try {
+        const created = await studentAiBridge.createChat(studentId, { title: body.title, subject_id: body.subjectId ?? null });
+        return { id: created.chat_id, title: created.title, subjectId: created.subject_id, messages: created.messages, createdAt: created.created_at };
+      } catch {
+        // Fall back to the local mirror so creating a thread does not depend on AI service uptime.
+      }
     }
 
     const conversation = await prisma.aIConversation.create({
@@ -3317,18 +3356,22 @@ export const portalService = {
 
   async studentAiConversation(studentId: string, conversationId: string) {
     if (studentAiBridge.isConfigured()) {
-      const chat = await studentAiBridge.getChat(studentId, conversationId);
-      return {
-        id: chat.chat_id,
-        title: chat.title,
-        subjectId: chat.subject_id,
-        messages: (chat.messages ?? []).map((message, index) => ({
-          id: `${conversationId}-${index}`,
-          role: String(message.role).toUpperCase(),
-          content: message.content,
-          createdAt: new Date().toISOString(),
-        })),
-      };
+      try {
+        const chat = await studentAiBridge.getChat(studentId, conversationId);
+        return {
+          id: chat.chat_id,
+          title: chat.title,
+          subjectId: chat.subject_id,
+          messages: (chat.messages ?? []).map((message, index) => ({
+            id: `${conversationId}-${index}`,
+            role: String(message.role).toUpperCase(),
+            content: message.content,
+            createdAt: new Date().toISOString(),
+          })),
+        };
+      } catch {
+        // Fall through to Prisma; this also supports older chats created while Django was down.
+      }
     }
 
     const session = await prisma.studentAIChatSession.findFirst({
@@ -3353,7 +3396,11 @@ export const portalService = {
   async sendStudentAiMessage(studentId: string, conversationId: string, content: string) {
     if (!content.trim()) throw new ApiError(400, "EMPTY_MESSAGE", "Message cannot be empty.");
     if (studentAiBridge.isConfigured()) {
-      return studentAiBridge.sendChatMessage(studentId, conversationId, content.trim());
+      try {
+        return await studentAiBridge.sendChatMessage(studentId, conversationId, content.trim());
+      } catch {
+        // Save the message locally and return a structured context response if AI is unavailable.
+      }
     }
 
     const session = await prisma.studentAIChatSession.findFirst({
@@ -3379,23 +3426,35 @@ export const portalService = {
       : null;
 
     const replyParts = [
-      session.subject ? `Subject focus: ${session.subject.code} ${session.subject.name}.` : "General study support is active.",
-      subjectPct === null ? "No published marks are available yet for this context." : `Your recent published average here is ${subjectPct}%.`,
-      noteInsights.length > 0 ? `Relevant note summaries: ${noteInsights.map((item) => `${item.note.title} - ${item.shortSummary || "summary pending"}`).join(" | ")}` : "No processed faculty note insights are available yet.",
-      pyqAnalysis ? `Recurring PYQ topics: ${Object.entries((pyqAnalysis.topicFrequencies as Record<string, number>) ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([topic]) => topic).join(", ") || "not enough PYQ data yet"}.` : "PYQ analysis is still building for this subject.",
-      `Question received: ${content.trim()}`,
+      "AI service is not reachable right now, so I saved your message and used the available student context.",
+      "",
+      "Current context:",
+      `- ${session.subject ? `Subject focus: ${session.subject.code} ${session.subject.name}` : "General study support"}`,
+      `- ${subjectPct === null ? "No published marks are available yet for this context" : `Recent published average: ${subjectPct}%`}`,
+      noteInsights.length > 0
+        ? `- Relevant note summaries: ${noteInsights.map((item) => `${item.note.title}: ${item.shortSummary || "summary pending"}`).join("; ")}`
+        : "- No processed faculty note insights are available yet",
+      pyqAnalysis
+        ? `- Recurring PYQ topics: ${Object.entries((pyqAnalysis.topicFrequencies as Record<string, number>) ?? {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([topic]) => topic).join(", ") || "not enough PYQ data yet"}`
+        : "- PYQ analysis is still building for this subject",
+      "",
+      `Your question: ${content.trim()}`,
     ];
 
-    const messages = [...(session.conversation.messages as Array<{ role: string; content: string }>), { role: "user", content: content.trim() }, { role: "assistant", content: replyParts.join(" ") }];
+    const messages = [...(session.conversation.messages as Array<{ role: string; content: string }>), { role: "user", content: content.trim() }, { role: "assistant", content: replyParts.join("\n") }];
     await prisma.aIConversation.update({ where: { id: session.conversationId }, data: { messages } });
     await prisma.studentAIChatSession.update({ where: { id: session.id }, data: { updatedAt: new Date() } });
-    return { conversationId, reply: replyParts.join(" ") };
+    return { conversationId, reply: replyParts.join("\n") };
   },
 
   async deleteStudentAiConversation(studentId: string, conversationId: string) {
     if (studentAiBridge.isConfigured()) {
-      await studentAiBridge.deleteChat(studentId, conversationId);
-      return;
+      try {
+        await studentAiBridge.deleteChat(studentId, conversationId);
+        return;
+      } catch {
+        // Fall through to the local mirror.
+      }
     }
     const session = await prisma.studentAIChatSession.findFirst({ where: { id: conversationId, studentId, isDeleted: false } });
     if (!session) throw new ApiError(404, "NOT_FOUND", "Conversation not found.");
@@ -3509,10 +3568,139 @@ export const portalService = {
   },
 
   async studentMarksPrediction(studentId: string) {
-    if (!studentAiBridge.isConfigured()) {
-      throw new ApiError(503, "AI_SERVICE_NOT_CONFIGURED", "Marks prediction is unavailable because the Django AI service is not configured.");
+    const student = await prisma.student.findUnique({
+      where: { id: studentId },
+      select: { id: true, enrollmentNo: true, name: true },
+    });
+    if (!student) {
+      throw new ApiError(404, "NOT_FOUND", "Student not found.");
     }
-    return studentAiBridge.getStudentMarksPrediction(studentId);
+
+    const enrollments = await prisma.studentEnrollment.findMany({
+      where: { studentId: student.id },
+      select: {
+        id: true,
+        semester: { select: { number: true } },
+      },
+    });
+    if (enrollments.length === 0) {
+      throw new ApiError(404, "INSUFFICIENT_MARKS_DATA", "Not enough marks data to generate a prediction.");
+    }
+
+    const enrollmentSemesterById = new Map(enrollments.map((enrollment) => [enrollment.id, enrollment.semester.number]));
+    const results = await prisma.result.findMany({
+      where: { enrollmentId: { in: enrollments.map((enrollment) => enrollment.id) }, isPublished: true },
+      select: {
+        enrollmentId: true,
+        marksObtained: true,
+        maxMarks: true,
+        phase: { select: { label: true, number: true } },
+        subject: { select: { id: true, code: true, name: true } },
+      },
+      orderBy: [{ enrollment: { semester: { number: "asc" } } }, { subject: { name: "asc" } }, { phase: { number: "asc" } }],
+    });
+
+    if (results.length === 0) {
+      throw new ApiError(404, "INSUFFICIENT_MARKS_DATA", "Not enough marks data to generate a prediction.");
+    }
+
+    const grouped = new Map<string, Array<(typeof results)[number]>>();
+    for (const result of results) {
+      const key = `${result.enrollmentId}:${result.subject.id}`;
+      const bucket = grouped.get(key);
+      if (bucket) bucket.push(result);
+      else grouped.set(key, [result]);
+    }
+
+    const predictions: Array<{
+      semester: number;
+      academic_year: string;
+      subject_id: string;
+      subject_code: string;
+      subject_name: string;
+      test_id: null;
+      test_type: string;
+      predicted_final_score: number;
+      predicted_marks: number;
+      max_marks: number;
+      predicted_percentage: number;
+      trend: string;
+      confidence_note: string;
+    }> = [];
+
+    for (const group of grouped.values()) {
+      const first = group[0];
+      const tests = new Map<string, number>();
+
+      for (const row of group) {
+        tests.set(normalizePhaseKey(row.phase.label, row.phase.number), Number(row.marksObtained));
+      }
+
+      if (tests.has("T4") || !["T1", "T2", "T3"].every((name) => tests.has(name))) {
+        continue;
+      }
+
+      const t1 = tests.get("T1") ?? 0;
+      const t2 = tests.get("T2") ?? 0;
+      const t3 = tests.get("T3") ?? 0;
+      const scoreStd = standardDeviation([t1, t2, t3]);
+      const weightedAverage = (0.25 * t1) + (0.30 * t2) + (0.45 * t3);
+      const predictedScore = clamp(Number((2.0 * weightedAverage).toFixed(2)), 0, 50);
+
+      let confidenceNote = "Low - high variation; prediction may be less accurate.";
+      if (scoreStd < 2) confidenceNote = "High - consistent performance across tests.";
+      else if (scoreStd < 4.5) confidenceNote = "Medium - moderate variation across tests.";
+
+      const actualObtained = group.reduce((sum, row) => sum + Number(row.marksObtained), 0);
+      const actualMax = group.reduce((sum, row) => sum + Number(row.maxMarks), 0);
+      const projectedPercentage = Number((((actualObtained + predictedScore) / (actualMax + 50)) * 100).toFixed(2));
+      const baselineT4 = (average([t1, t2, t3]) / 25) * 50;
+      let trend = "Stable";
+      if (predictedScore > baselineT4 + 2) trend = "Improving";
+      else if (predictedScore < baselineT4 - 2) trend = "Declining";
+
+      predictions.push({
+        semester: enrollmentSemesterById.get(first.enrollmentId) ?? 0,
+        academic_year: String(first.enrollmentId),
+        subject_id: String(first.subject.id),
+        subject_code: first.subject.code,
+        subject_name: first.subject.name,
+        test_id: null,
+        test_type: "T4",
+        predicted_final_score: predictedScore,
+        predicted_marks: predictedScore,
+        max_marks: 50,
+        predicted_percentage: projectedPercentage,
+        trend,
+        confidence_note: confidenceNote,
+      });
+    }
+
+    if (predictions.length === 0) {
+      throw new ApiError(404, "INSUFFICIENT_MARKS_DATA", "Not enough marks data to generate a prediction.");
+    }
+
+    const latestSemester = Math.max(...predictions.map((prediction) => prediction.semester));
+    const latestPredictions = predictions.filter((prediction) => prediction.semester === latestSemester);
+    const predictedPercentage = average(latestPredictions.map((prediction) => prediction.predicted_percentage));
+
+    return {
+      student_id: String(student.id),
+      enrollment_no: student.enrollmentNo,
+      name: student.name,
+      semester: latestSemester,
+      predicted_average: to30Scale(predictedPercentage),
+      predicted_percentage: predictedPercentage,
+      predicted_rank: null,
+      predicted_badge: performanceLabel(predictedPercentage),
+      prediction_confidence: latestPredictions.length >= 3 ? "High" : "Medium",
+      model_name: "Main backend prediction",
+      model_r2: null,
+      model_mae: null,
+      model_rmse: null,
+      predictions: latestPredictions,
+      subject_predictions: latestPredictions,
+    };
   },
 
   // ── Faculty Dashboard / Profile ───────────────────────────
