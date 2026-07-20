@@ -1,0 +1,66 @@
+version: "3.9"
+
+services:
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+
+    ports:
+      - "5173:5173"
+
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+    env_file:
+      - ./frontend/.env
+
+    depends_on:
+      - backend
+      - django
+
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile.dev
+
+    ports:
+      - "4000:4000"
+
+    volumes:
+      - ./Backend:/app
+      - /app/node_modules
+
+    env_file:
+      - ./Backend/.env
+
+  freellmapi:
+    build:
+      context: ./AI Assistant/freellmapi
+      dockerfile: Dockerfile.dev
+
+    ports:
+      - "3001:3001"
+
+    volumes:
+      - "./AI Assistant/freellmapi:/app"
+      - /app/node_modules
+
+    env_file:
+      - "./AI Assistant/freellmapi/.env"
+
+  django:
+    build:
+      context: "./AI Assistant/Django AI assistant"
+      dockerfile: Dockerfile.dev
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - "./AI Assistant/Django AI assistant:/app"
+
+    env_file:
+      - "./AI Assistant/Django AI assistant/.env"

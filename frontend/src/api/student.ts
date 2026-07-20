@@ -1,7 +1,95 @@
 import { api } from './client'
+import { djangoAiDelete, djangoAiGet, djangoAiPost } from './djangoAiClient'
 import type * as T from '@/types/student'
 
 type Params = Record<string, string | number | boolean | undefined>
+
+type DjangoChat = {
+  chat_id: string
+  title: string
+  subject_id?: string | null
+  updated_at?: string
+  created_at?: string
+  message_count?: number
+  messages?: Array<{ role: string; content: string }>
+}
+
+type DjangoNoteInsight = {
+  note_id: string
+  short_summary?: string
+  detailed_notes?: string
+  bullet_notes?: string[]
+  important_definitions?: string[]
+  key_formulae?: string[]
+  important_questions?: string[]
+  status?: string
+  flashcards?: Array<{ question: string; answer: string }>
+}
+
+type DjangoPyqPrediction = {
+  important_topics?: string[]
+  frequently_asked_topics?: string[]
+  topic_ranking?: Array<{ topic: string; rank: number; probability: number }>
+  trend_analysis?: string
+}
+
+function normalizeChat(item: DjangoChat): T.AIConversation {
+  return {
+    id: item.chat_id,
+    title: item.title,
+    subjectName: item.subject_id ? null : 'General',
+    createdAt: item.created_at ?? item.updated_at ?? new Date().toISOString(),
+    updatedAt: item.updated_at ?? item.created_at,
+    messageCount: item.message_count ?? item.messages?.length ?? 0,
+    lastMessage: item.messages?.at(-1)?.content ?? null,
+  }
+}
+
+function normalizeMessages(chatId: string, messages: Array<{ role: string; content: string }> = []): T.AIMessage[] {
+  return messages.map((message, index) => ({
+    id: `${chatId}-${index}`,
+    role: String(message.role).toUpperCase() === 'USER' ? 'USER' : 'ASSISTANT',
+    content: message.content,
+    createdAt: new Date().toISOString(),
+  }))
+}
+
+function normalizeNoteInsight(data: DjangoNoteInsight) {
+  return {
+    noteId: data.note_id,
+    status: data.status ?? 'completed',
+    summary: data.short_summary ?? null,
+    detailedNotes: data.detailed_notes,
+    bulletNotes: data.bullet_notes ?? [],
+    importantDefinitions: data.important_definitions ?? [],
+    keyFormulae: data.key_formulae ?? [],
+    importantQuestions: data.important_questions ?? [],
+    flashcards: data.flashcards ?? [],
+  }
+}
+
+function normalizePyqPrediction(data: DjangoPyqPrediction, subjectId: string) {
+  const ranking = data.topic_ranking ?? []
+  return {
+    subjectId,
+    subjectCode: '',
+    subjectName: '',
+    status: ranking.length || data.important_topics?.length ? 'ready' : 'empty',
+    totalPYQsAnalyzed: ranking.length,
+    averagePct: null,
+    importantTopics: (data.important_topics ?? data.frequently_asked_topics ?? []).map((topic) => {
+      const ranked = ranking.find((item) => item.topic === topic)
+      return {
+        topic,
+        frequency: ranked ? Math.round(ranked.probability * 100) : 1,
+        priority: ranked && ranked.rank <= 3 ? 'HIGH' : 'MEDIUM',
+      }
+    }),
+    weakPoints: (data.important_topics ?? []).slice(0, 4).map((topic) => `${topic} is a high-value PYQ revision area.`),
+    files: [],
+    trendAnalysis: data.trend_analysis,
+  }
+}
 
 export const studentApi = {
   dashboard: () => api.get<T.StudentDashboard>('/student/dashboard').then((r) => r.data),
@@ -68,15 +156,35 @@ export const studentApi = {
   mentorUnreadCount: () => api.get('/student/mentor/messages/unread-count').then((r) => r.data),
   markMentorRead: () => api.patch('/student/mentor/messages/mark-read').then((r) => r.data),
 
-  aiConversations: () => api.get<{ data: T.AIConversation[] }>('/student/ai/conversations').then((r) => r.data),
-  createAiConversation: (body: { title?: string; subjectId?: string | null }) => api.post('/student/ai/conversations', body).then((r) => r.data),
-  aiConversation: (id: string) => api.get<{ id: string; title?: string; subjectId?: string | null; messages: T.AIMessage[] }>(`/student/ai/conversations/${id}`).then((r) => r.data),
+  aiConversations: async () => {
+    const data = await djangoAiGet<DjangoChat[]>('/chats')
+    return { data: data.map(normalizeChat) }
+  },
+  createAiConversation: async (body: { title?: string; subjectId?: string | null }) => {
+    const created = await djangoAiPost<DjangoChat>('/chats', { title: body.title, subject_id: body.subjectId ?? null })
+    return { id: created.chat_id, title: created.title, subjectId: created.subject_id ?? null, messages: [], createdAt: created.created_at }
+  },
+  aiConversation: async (id: string) => {
+    const chat = await djangoAiGet<DjangoChat>(`/chats/${id}`)
+    return {
+      id: chat.chat_id,
+      title: chat.title,
+      subjectId: chat.subject_id ?? null,
+      messages: normalizeMessages(chat.chat_id, chat.messages),
+    }
+  },
   sendAiMessage: (id: string, content: string) =>
-    api.post(`/student/ai/conversations/${id}/message`, { content }).then((r) => r.data),
-  deleteAiConversation: (id: string) => api.delete(`/student/ai/conversations/${id}`).then((r) => r.data),
-  pyqAnalysis: (subjectId: string) => api.get(`/student/ai/pyq-analysis/${subjectId}`).then((r) => r.data),
-  smartNoteSummary: (noteId: string) => api.get(`/student/ai/smart-notes/${noteId}/summary`).then((r) => r.data),
-  marksPrediction: () => api.get('/student/ai/marks-prediction').then((r) => r.data),
+    djangoAiPost(`/chats/${id}/messages`, { message: content }),
+  deleteAiConversation: (id: string) => djangoAiDelete(`/chats/${id}`),
+  pyqAnalysis: async (subjectId: string) => {
+    const data = await djangoAiGet<DjangoPyqPrediction>(`/pyqs/subjects/${subjectId}/predictions`)
+    return normalizePyqPrediction(data, subjectId)
+  },
+  smartNoteSummary: async (noteId: string) => {
+    const data = await djangoAiGet<DjangoNoteInsight>(`/notes/${noteId}`)
+    return normalizeNoteInsight(data)
+  },
+  marksPrediction: () => djangoAiGet('/students/me/marks/prediction'),
 
   studyPlanner: () => api.get('/student/study-planner').then((r) => r.data),
   saveStudyPlanner: (plan: unknown[]) => api.put('/student/study-planner', { plan }).then((r) => r.data),

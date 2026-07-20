@@ -293,7 +293,7 @@ class StudentMarksPredictionView(StudentContextMixin, APIView):
         student = self.get_student(request)
         result = predict_student_marks(student)
         if result is None:
-            return self.error("Prediction unavailable.", "INSUFFICIENT_MARKS_DATA", "Not enough marks data to generate a prediction.", status.HTTP_404_NOT_FOUND)
+            return self.error("Prediction unavailable.","INSUFFICIENT_MARKS_DATA","Not enough marks data to generate a prediction.",status.HTTP_200_OK)
         return self.success("Student prediction generated.", result)
 
 
