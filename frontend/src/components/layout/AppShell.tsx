@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { portalOf, useUser } from '@/stores/authStore'
@@ -83,7 +84,9 @@ export default function AppShell() {
       <div className={cn('flex min-w-0 flex-1 flex-col')}>
         <Topbar />
         <main className="scrollbar-thin flex-1 overflow-y-auto p-4 md:p-6">
-          <Outlet />
+          <Suspense fallback={<div className="flex h-full items-center justify-center py-20 text-text-muted"><Loader2 className="animate-spin" size={22} /></div>}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

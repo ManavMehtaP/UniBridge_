@@ -7,7 +7,14 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 60_000,
-      retry: 1,
+      // Retry only transient failures (network / 5xx) once. A 401/403/404/422 won't
+      // succeed on retry — retrying just doubles the load and delays the error.
+      retry: (failureCount, error) => {
+        const status = (error as { response?: { status?: number } })?.response?.status
+        if (status && status >= 400 && status < 500) return false
+        return failureCount < 1
+      },
+      retryDelay: 500,
       refetchOnWindowFocus: false,
     },
   },

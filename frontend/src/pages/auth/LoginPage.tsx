@@ -5,21 +5,11 @@ import toast from 'react-hot-toast'
 import { authApi } from '@/api/auth'
 import { errorMessage } from '@/api/client'
 import { homePathOf, useAuthStore } from '@/stores/authStore'
-import type { LoginRole } from '@/types/auth'
-import { cn } from '@/lib/utils'
-
-const ROLES: { key: LoginRole; label: string }[] = [
-  { key: 'HOD', label: 'HOD' },
-  { key: 'FACULTY', label: 'Faculty' },
-  { key: 'STUDENT', label: 'Student' },
-  { key: 'SUPER_ADMIN', label: 'University' },
-]
 
 export default function LoginPage() {
   const navigate = useNavigate()
   const setAuth = useAuthStore((s) => s.setAuth)
 
-  const [role, setRole] = useState<LoginRole>('HOD')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPw, setShowPw] = useState(false)
@@ -36,7 +26,8 @@ export default function LoginPage() {
     }
     setLoading(true)
     try {
-      const res = await authApi.login(email.trim(), password, role)
+      // The backend resolves the role from the account — no role is sent.
+      const res = await authApi.login(email.trim(), password)
       setAuth({
         user: res.user,
         accessToken: res.accessToken,
@@ -82,25 +73,6 @@ export default function LoginPage() {
             Sign in to continue to your dashboard
           </p>
 
-          {/* Role tabs */}
-          <div className="mb-6 flex gap-1 rounded-[10px] bg-[#F1F5F9] p-1">
-            {ROLES.map((r) => (
-              <button
-                key={r.key}
-                type="button"
-                onClick={() => setRole(r.key)}
-                className={cn(
-                  'flex-1 rounded-[7px] px-1.5 py-2.5 text-[12.5px] font-semibold transition-all',
-                  role === r.key
-                    ? 'bg-white text-primary shadow-[0_1px_3px_rgba(0,0,0,0.08)]'
-                    : 'text-text-muted hover:text-text-secondary',
-                )}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-
           {error && (
             <div className="mb-4 flex items-center gap-2 rounded-sm bg-danger-light px-3.5 py-2.5 text-[12.5px] font-medium text-danger">
               <AlertCircle size={14} />
@@ -111,7 +83,7 @@ export default function LoginPage() {
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
               <label className="mb-2 block text-[13px] font-bold text-text-primary">
-                {role === 'STUDENT' ? 'Enrollment No. or Email' : 'Email or Username'}
+                Email or Enrollment No.
               </label>
               <div className="relative flex items-center">
                 <User size={17} className="pointer-events-none absolute left-3.5 text-text-muted" />
@@ -120,11 +92,7 @@ export default function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   autoComplete="username"
-                  placeholder={
-                    role === 'STUDENT'
-                      ? 'Enter enrollment no. or email'
-                      : 'Enter your email or username'
-                  }
+                  placeholder="Enter your email or enrollment no."
                   className="h-[46px] w-full rounded-[10px] border-[1.5px] border-border bg-[#FAFBFC] pl-[42px] pr-3.5 text-sm text-text-primary outline-none transition focus:border-primary focus:bg-white focus:ring-4 focus:ring-primary/10"
                 />
               </div>

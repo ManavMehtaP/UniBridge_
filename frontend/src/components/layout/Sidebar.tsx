@@ -48,12 +48,12 @@ export function Sidebar({
     >
       {/* Brand */}
       <div className="flex h-topbar items-center gap-2.5 border-b border-border px-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-sm bg-primary text-sm font-bold text-white">
+        <div className="flex h-9 w-9 items-center justify-center rounded-[11px] bg-brand font-serif text-sm font-semibold text-white shadow-md">
           LJ
         </div>
         <div className="leading-tight">
-          <div className="text-sm font-bold text-text-primary">UniPortal</div>
-          <div className="text-[11px] font-medium text-text-muted">{roleLabel[role]}</div>
+          <div className="font-serif text-[17px] font-semibold text-text-primary">UniPortal</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">{roleLabel[role]}</div>
         </div>
       </div>
 

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useQuery } from '@tanstack/react-query'
 import { facultyApi } from '@/api/faculty'
@@ -39,6 +40,9 @@ export default function FacultyResultsPage() {
       .map((a) => ({ value: a.batch.id, label: a.batch.code })) ?? []
   }, [scope.data])
 
+  const sort = useTableSort(list.data?.data ?? [])
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
+
   return (
     <PageShell title="Results" subtitle="View published results for your subjects"
       action={<ExportMenu onExport={(f) => facultyApi.resultsExport({ subjectId: subjectId || undefined, batchId: batchId || undefined, phase: phase || undefined }, f)} />}
@@ -73,18 +77,18 @@ export default function FacultyResultsPage() {
             <Table>
               <thead>
                 <tr>
-                  <Th>Student</Th>
-                  <Th>Enrollment</Th>
-                  <Th>Subject</Th>
-                  <Th>Batch</Th>
-                  <Th>Phase</Th>
-                  <Th>Marks</Th>
-                  <Th>Grade</Th>
-                  <Th>Status</Th>
+                  <Th sortKey="studentName" {...th}>Student</Th>
+                  <Th sortKey="enrollmentNo" {...th}>Enrollment</Th>
+                  <Th sortKey="subjectCode" {...th}>Subject</Th>
+                  <Th sortKey="batchCode" {...th}>Batch</Th>
+                  <Th sortKey="phase" {...th}>Phase</Th>
+                  <Th sortKey="marksObtained" {...th}>Marks</Th>
+                  <Th sortKey="grade" {...th}>Grade</Th>
+                  <Th sortKey="isPublished" {...th}>Status</Th>
                 </tr>
               </thead>
               <tbody>
-                {list.data?.data.map((r, i) => (
+                {sort.rows.map((r, i) => (
                   <Tr key={i}>
                     <Td className="font-medium">{r.studentName}</Td>
                     <Td className="font-mono text-xs text-text-secondary">{r.enrollmentNo}</Td>

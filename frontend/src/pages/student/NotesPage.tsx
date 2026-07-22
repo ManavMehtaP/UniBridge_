@@ -1,19 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Download, FileText, Sparkles } from 'lucide-react'
+import { FileText, Sparkles } from 'lucide-react'
 import { studentApi } from '@/api/student'
 import { errorMessage } from '@/api/client'
 import { PageShell } from '@/components/shared/PageShell'
 import { FilterBar } from '@/components/shared/FilterBar'
 import { SearchInput } from '@/components/shared/SearchInput'
-import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { CardSkeleton } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
-import { format } from 'date-fns'
+import { NoteDrive } from '@/components/shared/NoteDrive'
 
 type SummaryPayload = {
   noteId: string
@@ -29,15 +28,13 @@ type SummaryPayload = {
   flashcards?: Array<{ question: string; answer: string }>
 }
 
-function fmtSize(kb?: number) {
-  if (!kb) return null
-  return kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb} KB`
-}
-
 export default function StudentNotesPage() {
   const [search, setSearch] = useState('')
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
-  const list = useQuery({ queryKey: ['student', 'notes', search], queryFn: () => studentApi.notes({ search: search || undefined, limit: 100 }) })
+  const subjects = useQuery({ queryKey: ['student', 'subjects'], queryFn: studentApi.subjects })
+  const [subjectId, setSubjectId] = useState('')
+  const [parentId, setParentId] = useState<string | null>(null)
+  const drive = useQuery({ queryKey: ['student', 'note-drive', subjectId, parentId, search], queryFn: () => studentApi.noteDrive({ subjectId, parentId: parentId ?? undefined, search: search || undefined }), enabled: !!subjectId })
   const summary = useQuery({
     queryKey: ['student', 'note-summary', activeNoteId],
     queryFn: () => studentApi.smartNoteSummary(activeNoteId!),
@@ -48,62 +45,24 @@ export default function StudentNotesPage() {
       return status === 'processing' ? 5000 : false
     },
   })
+  const subjectOptions = (subjects.data?.subjects ?? []) as Array<{ id: string; code: string; name: string }>
+  useEffect(() => { if (!subjectId && subjectOptions[0]) setSubjectId(subjectOptions[0].id) }, [subjectId, subjectOptions])
 
   return (
-    <PageShell title="Notes" subtitle={list.data ? `${list.data.total} notes shared by your faculty` : 'Study materials with AI summaries'}>
+    <PageShell title="Notes" subtitle="Study materials organised like a shared drive">
       <FilterBar>
         <div className="w-64 max-w-full">
           <SearchInput value={search} onChange={setSearch} placeholder="Search notes" />
         </div>
       </FilterBar>
 
-      {list.isLoading ? (
+      <div className="mb-4 max-w-md"><select className="h-10 w-full rounded-sm border border-border bg-surface px-3 text-sm text-text-primary" value={subjectId} onChange={(e) => { setSubjectId(e.target.value); setParentId(null) }}><option value="">Select subject</option>{subjectOptions.map((subject) => <option key={subject.id} value={subject.id}>{subject.code} — {subject.name}</option>)}</select></div>
+      {drive.isLoading || subjects.isLoading ? (
         <CardSkeleton height={200} />
-      ) : list.data && list.data.data.length === 0 ? (
-        <EmptyState icon={<FileText size={22} />} title="No notes yet" description="Notes will appear here as your faculty upload them." />
+      ) : drive.data ? (
+        <NoteDrive breadcrumbs={drive.data.breadcrumbs} folders={drive.data.folders} files={drive.data.files} onOpenFolder={(id) => setParentId(id)} onBreadcrumb={setParentId} onDownload={async (file) => { try { const { downloadUrl } = await studentApi.noteDownload(file.id); if (downloadUrl) window.open(downloadUrl, '_blank', 'noreferrer') } catch { toast.error('Could not open file') } }} onSummary={(file) => setActiveNoteId(file.id)} />
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {list.data?.data.map((note) => (
-            <Card key={note.id} className="flex flex-col p-4">
-              <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-sm bg-primary-light text-primary">
-                <FileText size={18} />
-              </div>
-              <div className="text-sm font-semibold text-text-primary line-clamp-2">{note.title}</div>
-              <div className="mt-0.5 text-xs text-text-muted">{note.subject.code} · {note.facultyName}</div>
-              {note.description && <p className="mt-2 line-clamp-2 text-xs text-text-secondary">{note.description}</p>}
-              <div className="mt-2 space-y-0.5 text-[11px] text-text-muted">
-                <div>Released {format(new Date(note.releaseAt ?? note.createdAt), 'dd MMM yyyy, HH:mm')}</div>
-                {fmtSize(note.fileSize) && <div>Size {fmtSize(note.fileSize)}</div>}
-              </div>
-              <div className="mt-3 flex items-center justify-between border-t border-border-light pt-2">
-                <Badge tone="neutral">{(note.fileType ?? 'file').split('/').pop()}</Badge>
-                <Badge tone={note.hasAiSummary ? 'success' : 'warning'}>{note.hasAiSummary ? 'AI Ready' : 'Processing'}</Badge>
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <Button
-                  variant="outline"
-                  leftIcon={<Sparkles size={13} />}
-                  onClick={() => setActiveNoteId(note.id)}
-                >
-                  AI Summary
-                </Button>
-                <Button
-                  leftIcon={<Download size={13} />}
-                  onClick={async () => {
-                    try {
-                      const { downloadUrl } = await studentApi.noteDownload(note.id)
-                      if (downloadUrl) window.open(downloadUrl, '_blank', 'noreferrer')
-                    } catch {
-                      toast.error('Could not open file')
-                    }
-                  }}
-                >
-                  Download
-                </Button>
-              </div>
-            </Card>
-          ))}
-        </div>
+        <EmptyState icon={<FileText size={22} />} title="Select a subject" description="Choose a subject to browse its folders." />
       )}
 
       <Modal

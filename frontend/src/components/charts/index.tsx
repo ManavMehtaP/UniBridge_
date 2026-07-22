@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   Area,
   AreaChart,
@@ -20,15 +21,15 @@ import {
   YAxis,
 } from 'recharts'
 
-const COLORS = ['#2563EB', '#7C3AED', '#0891B2', '#16A34A', '#D97706', '#DC2626', '#EA580C']
-const axis = { fontSize: 11, fill: '#94A3B8' }
-const gridStroke = '#E2E8F0'
+const COLORS = ['#2563EB', '#7C3AED', '#0891B2', '#16A34A', '#D97706', '#DC2626', '#DB2777', '#0D9488', '#4F46E5', '#CA8A04']
+const axis = { fontSize: 11, fill: '#8DA0B4' }
+const gridStroke = '#EDF2F7'
 
 const tooltipStyle = {
-  borderRadius: 8,
-  border: '1px solid #E2E8F0',
+  borderRadius: 12,
+  border: '1px solid #E5EDF4',
   fontSize: 12,
-  boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+  boxShadow: '0 6px 16px rgba(21,34,50,0.10)',
 }
 
 /** Single-series area/line trend (e.g. attendance over months). */
@@ -63,40 +64,83 @@ export function TrendAreaChart({
   )
 }
 
-/** Multi-series line chart (e.g. attendance trend per batch). */
+/** Tooltip that lists every series at the hovered point, highest first, with colour chips. */
+function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: { name?: string; value?: number | null; color?: string }[]; label?: string }) {
+  if (!active || !payload?.length) return null
+  const rows = payload.filter((p) => p.value != null).sort((a, b) => (b.value as number) - (a.value as number))
+  if (rows.length === 0) return null
+  return (
+    <div style={{ ...tooltipStyle, background: '#fff', padding: '8px 10px' }}>
+      <div style={{ fontWeight: 600, marginBottom: 4, color: '#334155' }}>{label}</div>
+      {rows.map((r) => (
+        <div key={r.name} style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: '18px' }}>
+          <span style={{ width: 8, height: 8, borderRadius: 8, background: r.color, flex: '0 0 auto' }} />
+          <span style={{ color: '#64748B', minWidth: 24 }}>{r.name}</span>
+          <span style={{ fontWeight: 600, color: '#0F172A', marginLeft: 'auto' }}>{(r.value as number).toFixed(1)}%</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Multi-series line chart (e.g. attendance trend per batch). Auto-zooms the Y-axis to
+ *  the data range so clustered lines separate, and dims the others when you hover one. */
 export function MultiLineChart({
   labels = [],
   series = [],
-  height = 260,
+  height = 300,
 }: {
   labels?: string[]
   series?: { name: string; data: (number | null)[] }[]
   height?: number
 }) {
+  const [active, setActive] = useState<string | null>(null)
+
   const chartData = (labels ?? []).map((label, i) => {
     const row: Record<string, number | string | null> = { label }
     ;(series ?? []).forEach((s) => (row[s.name] = s.data?.[i] ?? null))
     return row
   })
+
+  // Zoom the axis to the actual values (padded, snapped to 5) instead of a flat 0–100,
+  // which is what made every batch look identical.
+  const values = (series ?? []).flatMap((s) => s.data ?? []).filter((v): v is number => typeof v === 'number')
+  const lo = values.length ? Math.max(0, Math.floor((Math.min(...values) - 4) / 5) * 5) : 0
+  const hi = values.length ? Math.min(100, Math.ceil((Math.max(...values) + 4) / 5) * 5) : 100
+
+  const colorFor = (i: number) => COLORS[i % COLORS.length]
+
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <LineChart data={chartData} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+      <LineChart data={chartData} margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
-        <XAxis dataKey="label" tick={axis} axisLine={false} tickLine={false} />
-        <YAxis tick={axis} axisLine={false} tickLine={false} />
-        <Tooltip contentStyle={tooltipStyle} />
-        <Legend wrapperStyle={{ fontSize: 12 }} />
-        {series.map((s, i) => (
-          <Line
-            key={s.name}
-            type="monotone"
-            dataKey={s.name}
-            stroke={COLORS[i % COLORS.length]}
-            strokeWidth={2}
-            dot={false}
-            connectNulls
-          />
-        ))}
+        <XAxis dataKey="label" tick={axis} axisLine={false} tickLine={false} padding={{ left: 10, right: 10 }} />
+        <YAxis tick={axis} axisLine={false} tickLine={false} domain={[lo, hi]} width={40} tickFormatter={(v) => `${v}%`} />
+        <Tooltip content={<TrendTooltip />} cursor={{ stroke: '#CBD5E1', strokeWidth: 1, strokeDasharray: '4 4' }} />
+        <Legend
+          wrapperStyle={{ fontSize: 12, paddingTop: 8, cursor: 'pointer' }}
+          onMouseEnter={(e: { value?: string }) => setActive(e.value ?? null)}
+          onMouseLeave={() => setActive(null)}
+        />
+        {(series ?? []).map((s, i) => {
+          const dim = active !== null && active !== s.name
+          const isActive = active === s.name
+          return (
+            <Line
+              key={s.name}
+              type="monotone"
+              dataKey={s.name}
+              stroke={colorFor(i)}
+              strokeWidth={isActive ? 3.25 : 2}
+              strokeOpacity={dim ? 0.16 : 1}
+              dot={isActive ? { r: 3, fill: colorFor(i), strokeWidth: 0 } : false}
+              activeDot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
+              connectNulls
+              onMouseEnter={() => setActive(s.name)}
+              onMouseLeave={() => setActive(null)}
+            />
+          )
+        })}
       </LineChart>
     </ResponsiveContainer>
   )

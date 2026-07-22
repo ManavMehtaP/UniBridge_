@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -55,6 +56,11 @@ export default function AnalyticsPage() {
   const k = kpi.data
   const batchOptions = scope.data?.batches.map((b) => ({ value: b.id, label: `Batch ${b.code}` })) ?? []
   const phaseOptions = ctx.data?.phases.map((p) => ({ value: p.id, label: p.label })) ?? []
+
+  const riskSort = useTableSort(atRisk.data?.data ?? [])
+  const riskSortTh = { activeKey: riskSort.sortKey, dir: riskSort.sortDir, onSort: riskSort.onSort }
+  const lbSort = useTableSort(leaderboard.data?.data ?? [])
+  const lbSortTh = { activeKey: lbSort.sortKey, dir: lbSort.sortDir, onSort: lbSort.onSort }
 
   return (
     <PageShell
@@ -130,9 +136,9 @@ export default function AnalyticsPage() {
             <EmptyState icon={<AlertTriangle size={22} />} title="No at-risk students" description="Every student in this view is above the attendance and marks thresholds." className="border-0" />
           ) : (
             <Table>
-              <thead><tr><Th>Student</Th><Th>Batch</Th><Th>Mentor</Th><Th>Attendance</Th><Th>Marks</Th><Th>Risk</Th><Th className="text-right">Action</Th></tr></thead>
+              <thead><tr><Th sortKey="name" {...riskSortTh}>Student</Th><Th sortKey="batchCode" {...riskSortTh}>Batch</Th><Th sortKey="mentorCode" {...riskSortTh}>Mentor</Th><Th sortKey="avgAttendancePct" {...riskSortTh}>Attendance</Th><Th sortKey="latestPhaseMarksPct" {...riskSortTh}>Marks</Th><Th sortKey="riskFactor" {...riskSortTh}>Risk</Th><Th className="text-right">Action</Th></tr></thead>
               <tbody>
-                {atRisk.data?.data.map((r) => (
+                {riskSort.rows.map((r) => (
                   <Tr key={r.enrollmentNo}>
                     <Td><div className="font-medium">{r.name}</div><div className="font-mono text-[11px] text-text-muted">{r.enrollmentNo}</div></Td>
                     <Td>{r.batchCode}</Td>
@@ -157,9 +163,9 @@ export default function AnalyticsPage() {
               <EmptyState icon={<Award size={22} />} title="No ranked students yet" description="Once marks are published for this phase, the leaderboard fills in." className="border-0" />
             ) : (
               <Table>
-                <thead><tr><Th>Rank</Th><Th>Student</Th><Th>Batch</Th><Th className="text-right">Avg %</Th></tr></thead>
+                <thead><tr><Th sortKey="rank" {...lbSortTh}>Rank</Th><Th sortKey="name" {...lbSortTh}>Student</Th><Th sortKey="batchCode" {...lbSortTh}>Batch</Th><Th sortKey="avgPct" {...lbSortTh} className="text-right">Avg %</Th></tr></thead>
                 <tbody>
-                  {leaderboard.data?.data.map((r) => (
+                  {lbSort.rows.map((r) => (
                     <Tr key={r.enrollmentNo}>
                       <Td><Badge tone={r.rank <= 3 ? 'warning' : 'neutral'}>#{r.rank}</Badge></Td>
                       <Td><div className="font-medium">{r.name}</div><div className="font-mono text-[11px] text-text-muted">{r.enrollmentNo}</div></Td>

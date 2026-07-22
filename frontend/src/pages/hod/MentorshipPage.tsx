@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Sparkles, Upload, UserCheck, UserPlus, Users, UserX } from 'lucide-react'
@@ -67,6 +68,11 @@ export default function MentorshipPage() {
     [facultyList.data],
   )
 
+  const aSort = useTableSort(assignments.data?.data ?? [])
+  const aSortTh = { activeKey: aSort.sortKey, dir: aSort.sortDir, onSort: aSort.onSort }
+  const uSort = useTableSort(unassigned.data?.data ?? [])
+  const uSortTh = { activeKey: uSort.sortKey, dir: uSort.sortDir, onSort: uSort.onSort }
+
   return (
     <PageShell
       title="Mentorship"
@@ -134,9 +140,9 @@ export default function MentorshipPage() {
             {assignments.isLoading ? <div className="p-4"><TableSkeleton rows={8} cols={4} /></div> : (
               <>
                 <Table>
-                  <thead><tr><Th>Student</Th><Th>Enrollment No.</Th><Th>Batch</Th><Th>Mentor</Th></tr></thead>
+                  <thead><tr><Th sortKey="studentName" {...aSortTh}>Student</Th><Th sortKey="enrollmentNo" {...aSortTh}>Enrollment No.</Th><Th sortKey="batchCode" {...aSortTh}>Batch</Th><Th sortKey="mentorName" {...aSortTh}>Mentor</Th></tr></thead>
                   <tbody>
-                    {assignments.data?.data.map((a) => (
+                    {aSort.rows.map((a) => (
                       <Tr key={a.enrollmentNo}>
                         <Td className="font-medium">{a.studentName}</Td>
                         <Td className="font-mono text-xs text-text-secondary">{a.enrollmentNo}</Td>
@@ -163,9 +169,9 @@ export default function MentorshipPage() {
             <EmptyState title="All students have mentors 🎉" className="border-0" />
           ) : (
             <Table>
-              <thead><tr><Th>Student</Th><Th>Enrollment No.</Th><Th>Batch</Th><Th>Branch</Th><Th className="text-right">Assign</Th></tr></thead>
+              <thead><tr><Th sortKey="name" {...uSortTh}>Student</Th><Th sortKey="enrollmentNo" {...uSortTh}>Enrollment No.</Th><Th sortKey="batchCode" {...uSortTh}>Batch</Th><Th sortKey="branch" {...uSortTh}>Branch</Th><Th className="text-right">Assign</Th></tr></thead>
               <tbody>
-                {unassigned.data?.data.map((u) => (
+                {uSort.rows.map((u) => (
                   <Tr key={u.enrollmentNo}>
                     <Td className="font-medium">{u.name}</Td>
                     <Td className="font-mono text-xs text-text-secondary">{u.enrollmentNo}</Td>

@@ -20,24 +20,28 @@
   --orange: #ea580c;
   --orange-light: #fff7ed;
 
-  --bg: #f1f5f9;
+  --bg: #f5f7fa;
   --surface: #ffffff;
-  --surface-2: #f8fafc;
-  --border: #e2e8f0;
-  --border-light: #f1f5f9;
+  --surface-2: #f1f6fb;
+  --border: #e5edf4;
+  --border-light: #edf2f7;
 
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
+  --text-primary: #152232;
+  --text-secondary: #5b6b7b;
+  --text-muted: #8da0b4;
+
+  --brand-grad: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
 
   --sidebar-w: 220px;
   --topbar-h: 64px;
-  --radius: 12px;
-  --radius-sm: 8px;
-  --radius-xs: 6px;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.12);
+  --radius: 16px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+  --shadow: 0 1px 2px rgba(21, 34, 50, 0.04), 0 1px 3px rgba(21, 34, 50, 0.03);
+  --shadow-md: 0 6px 16px rgba(37, 99, 235, 0.1);
+  --shadow-lg: 0 30px 70px rgba(21, 34, 50, 0.2);
+
+  --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
 }
 
 @layer base {
@@ -51,9 +55,17 @@
   }
   body {
     @apply bg-bg text-text-primary antialiased;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: 'Instrument Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 14px;
     line-height: 1.5;
+  }
+  /* Section & card titles render in Newsreader serif — the redesign's display face.
+     Applies app-wide via the shared PageShell/CardHeader/StatCard headings. */
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-serif);
+    letter-spacing: -0.01em;
   }
 }
 

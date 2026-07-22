@@ -1,3 +1,4 @@
+import { lazy } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import AppShell from '@/components/layout/AppShell'
 import LoginPage from '@/pages/auth/LoginPage'
@@ -7,63 +8,63 @@ import ProtectedRoute from './ProtectedRoute'
 import RoleRouter from './RoleRouter'
 
 // HOD portal pages
-import HodDashboard from '@/pages/hod/DashboardPage'
-import HodStudents from '@/pages/hod/StudentsPage'
-import HodFaculty from '@/pages/hod/FacultyPage'
-import HodResults from '@/pages/hod/ResultsPage'
-import HodAttendance from '@/pages/hod/AttendancePage'
-import HodSubjects from '@/pages/hod/SubjectsPage'
-import HodMentorship from '@/pages/hod/MentorshipPage'
-import HodAnalytics from '@/pages/hod/AnalyticsPage'
-import HodPromotion from '@/pages/hod/PromotionPage'
-import HodCalendar from '@/pages/hod/CalendarPage'
-import HodSettings from '@/pages/hod/SettingsPage'
-import HodTimetable from '@/pages/hod/TimetablePage'
-import HodAnnouncements from '@/pages/hod/AnnouncementsPage'
-import HodExamPanel from '@/pages/hod/ExamPanelPage'
-import NotificationsPage from '@/pages/NotificationsPage'
+const HodDashboard = lazy(() => import('@/pages/hod/DashboardPage'))
+const HodStudents = lazy(() => import('@/pages/hod/StudentsPage'))
+const HodFaculty = lazy(() => import('@/pages/hod/FacultyPage'))
+const HodResults = lazy(() => import('@/pages/hod/ResultsPage'))
+const HodAttendance = lazy(() => import('@/pages/hod/AttendancePage'))
+const HodSubjects = lazy(() => import('@/pages/hod/SubjectsPage'))
+const HodMentorship = lazy(() => import('@/pages/hod/MentorshipPage'))
+const HodAnalytics = lazy(() => import('@/pages/hod/AnalyticsPage'))
+const HodPromotion = lazy(() => import('@/pages/hod/PromotionPage'))
+const HodCalendar = lazy(() => import('@/pages/hod/CalendarPage'))
+const HodSettings = lazy(() => import('@/pages/hod/SettingsPage'))
+const HodTimetable = lazy(() => import('@/pages/hod/TimetablePage'))
+const HodAnnouncements = lazy(() => import('@/pages/hod/AnnouncementsPage'))
+const HodExamPanel = lazy(() => import('@/pages/hod/ExamPanelPage'))
+const NotificationsPage = lazy(() => import('@/pages/NotificationsPage'))
 
 // Faculty portal pages
-import FacDashboard from '@/pages/faculty/DashboardPage'
-import FacSchedule from '@/pages/faculty/SchedulePage'
-import FacStudents from '@/pages/faculty/StudentsPage'
-import FacAttendance from '@/pages/faculty/AttendancePage'
-import FacNotes from '@/pages/faculty/NotesPage'
-import FacQuizzes from '@/pages/faculty/QuizzesPage'
-import FacAnnouncements from '@/pages/faculty/AnnouncementsPage'
-import FacMentees from '@/pages/faculty/MenteesPage'
-import FacResults from '@/pages/faculty/ResultsPage'
-import FacExams from '@/pages/faculty/ExamsPage'
-import FacCalendar from '@/pages/faculty/CalendarPage'
-import FacAnalytics from '@/pages/faculty/AnalyticsPage'
-import FacSettings from '@/pages/faculty/SettingsPage'
+const FacDashboard = lazy(() => import('@/pages/faculty/DashboardPage'))
+const FacSchedule = lazy(() => import('@/pages/faculty/SchedulePage'))
+const FacStudents = lazy(() => import('@/pages/faculty/StudentsPage'))
+const FacAttendance = lazy(() => import('@/pages/faculty/AttendancePage'))
+const FacNotes = lazy(() => import('@/pages/faculty/NotesPage'))
+const FacQuizzes = lazy(() => import('@/pages/faculty/QuizzesPage'))
+const FacAnnouncements = lazy(() => import('@/pages/faculty/AnnouncementsPage'))
+const FacMentees = lazy(() => import('@/pages/faculty/MenteesPage'))
+const FacResults = lazy(() => import('@/pages/faculty/ResultsPage'))
+const FacExams = lazy(() => import('@/pages/faculty/ExamsPage'))
+const FacCalendar = lazy(() => import('@/pages/faculty/CalendarPage'))
+const FacAnalytics = lazy(() => import('@/pages/faculty/AnalyticsPage'))
+const FacSettings = lazy(() => import('@/pages/faculty/SettingsPage'))
 
 // University (Dean) portal pages
-import UniDashboard from '@/pages/university/DashboardPage'
-import UniYears from '@/pages/university/YearsPage'
-import UniBranches from '@/pages/university/BranchesPage'
-import UniHods from '@/pages/university/HodsPage'
-import UniPromotion from '@/pages/university/PromotionDashboardPage'
-import UniFaculty from '@/pages/university/FacultyPage'
-import UniStudents from '@/pages/university/StudentsPage'
-import UniSubjects from '@/pages/university/SubjectsPage'
-import UniSettings from '@/pages/university/SettingsPage'
+const UniDashboard = lazy(() => import('@/pages/university/DashboardPage'))
+const UniYears = lazy(() => import('@/pages/university/YearsPage'))
+const UniBranches = lazy(() => import('@/pages/university/BranchesPage'))
+const UniHods = lazy(() => import('@/pages/university/HodsPage'))
+const UniPromotion = lazy(() => import('@/pages/university/PromotionDashboardPage'))
+const UniFaculty = lazy(() => import('@/pages/university/FacultyPage'))
+const UniStudents = lazy(() => import('@/pages/university/StudentsPage'))
+const UniSubjects = lazy(() => import('@/pages/university/SubjectsPage'))
+const UniSettings = lazy(() => import('@/pages/university/SettingsPage'))
 
 // Student portal pages
-import StuDashboard from '@/pages/student/DashboardPage'
-import StuTimetable from '@/pages/student/TimetablePage'
-import StuResults from '@/pages/student/ResultsPage'
-import StuAttendance from '@/pages/student/AttendancePage'
-import StuNotes from '@/pages/student/NotesPage'
-import StuSelfNotes from '@/pages/student/SelfNotesPage'
-import StuQuizzes from '@/pages/student/QuizzesPage'
-import StuAnnouncements from '@/pages/student/AnnouncementsPage'
-import StuCalendar from '@/pages/student/CalendarPage'
-import StuMentorChat from '@/pages/student/MentorChatPage'
-import StuAI from '@/pages/student/AIAssistantPage'
-import StuPlanner from '@/pages/student/StudyPlannerPage'
-import StuLeaderboard from '@/pages/student/LeaderboardPage'
-import StuSettings from '@/pages/student/SettingsPage'
+const StuDashboard = lazy(() => import('@/pages/student/DashboardPage'))
+const StuTimetable = lazy(() => import('@/pages/student/TimetablePage'))
+const StuResults = lazy(() => import('@/pages/student/ResultsPage'))
+const StuAttendance = lazy(() => import('@/pages/student/AttendancePage'))
+const StuNotes = lazy(() => import('@/pages/student/NotesPage'))
+const StuSelfNotes = lazy(() => import('@/pages/student/SelfNotesPage'))
+const StuQuizzes = lazy(() => import('@/pages/student/QuizzesPage'))
+const StuAnnouncements = lazy(() => import('@/pages/student/AnnouncementsPage'))
+const StuCalendar = lazy(() => import('@/pages/student/CalendarPage'))
+const StuMentorChat = lazy(() => import('@/pages/student/MentorChatPage'))
+const StuAI = lazy(() => import('@/pages/student/AIAssistantPage'))
+const StuPlanner = lazy(() => import('@/pages/student/StudyPlannerPage'))
+const StuLeaderboard = lazy(() => import('@/pages/student/LeaderboardPage'))
+const StuSettings = lazy(() => import('@/pages/student/SettingsPage'))
 
 // ponytail: no stubs left — every route is a real page now.
 void PlaceholderPage

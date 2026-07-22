@@ -213,7 +213,7 @@ export interface HodCalendarEvent {
   startDate?: string
   endDate?: string
   title: string
-  type: 'HOLIDAY' | 'READING_HOLIDAY' | 'EXAM' | 'CULTURAL' | 'PHASE' | 'OTHER'
+  type: 'HOLIDAY' | 'PUBLIC_HOLIDAY' | 'READING_HOLIDAY' | 'SEMESTER_BREAK' | 'EXAM' | 'CULTURAL' | 'ACTIVITY' | 'PHASE' | 'OTHER'
   description?: string
 }
 export interface PhaseTimelineItem {

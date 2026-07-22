@@ -48,6 +48,14 @@ export default function SchedulePage() {
         </div>
         {today.isLoading ? (
           <CardSkeleton height={120} />
+        ) : today.data?.dayStatus && !today.data.dayStatus.isWorkingDay ? (
+          <div className="flex items-center gap-3 rounded-xl border border-warning/30 bg-warning-light/30 px-4 py-6">
+            <CalendarCheck2 size={22} className="text-warning" />
+            <div>
+              <div className="text-[13px] font-semibold text-warning">{today.data.dayStatus.reason ?? today.data.dayStatus.status}</div>
+              <div className="text-xs text-text-muted">No lectures today — the academic calendar marks this a non-working day.</div>
+            </div>
+          </div>
         ) : todaySlots.length === 0 ? (
           <div className="flex items-center gap-3 rounded-xl border border-border-light bg-surface-2 px-4 py-6">
             <CalendarCheck2 size={22} className="text-text-muted/60" />

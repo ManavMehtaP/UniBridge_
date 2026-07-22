@@ -115,6 +115,10 @@ studentRouter.get("/attendance", asyncHandler(async (req, res) => {
   res.json(await portalService.studentAttendance(req.user!.id, req.user!.universityId, req.query.semesterId as string | undefined));
 }));
 
+studentRouter.get("/notes/folders", asyncHandler(async (req, res) => {
+  res.json(await portalService.studentNoteDrive(req.user!.id, req.user!.universityId, req.query as Record<string, string | number | undefined>));
+}));
+
 studentRouter.get("/notes/:noteId/download", asyncHandler(async (req, res) => {
   res.json(await portalService.studentNoteDownload(req.user!.id, req.user!.universityId, str(req.params.noteId)));
 }));
@@ -202,6 +206,11 @@ studentRouter.get("/announcements", asyncHandler(async (req, res) => {
       String(req.query.unreadOnly ?? "false") === "true",
     ),
   );
+}));
+
+// Calendar day status — is today (or ?date=) a working day? The master-controller gate.
+studentRouter.get("/calendar/today", asyncHandler(async (req, res) => {
+  res.json(await portalService.calendarDayStatus(req.user!.universityId, req.query.date as string | undefined));
 }));
 
 studentRouter.get("/calendar/events/upcoming", asyncHandler(async (req, res) => {

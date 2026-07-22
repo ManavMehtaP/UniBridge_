@@ -39,9 +39,17 @@ export interface TimetableSlot {
   attendanceMarked?: boolean
 }
 
+export interface DayStatus {
+  date?: string
+  dayLabel?: string
+  isWorkingDay: boolean
+  status: string
+  reason: string | null
+}
 export interface TodayTimetable {
   date: string
   dayLabel: string
+  dayStatus?: DayStatus
   slots: TimetableSlot[]
 }
 
@@ -77,7 +85,12 @@ export interface FacultyNote {
   status?: 'PUBLISHED' | 'SCHEDULED'
   releaseAt?: string
   createdAt: string
+  folderId?: string | null
 }
+
+export interface NoteDriveFolder { id: string; name: string; parentId?: string | null; isSystem: boolean; createdAt: string }
+export interface FacultyNoteDriveFile { id: string; title: string; description?: string | null; originalFileName?: string | null; mimeType: string; fileSizeKb?: number | null; folderId?: string | null; status: string; releaseAt?: string; hasFlashcards: boolean; hasAiSummary: boolean; createdAt: string }
+export interface FacultyNoteDrive { subject: { id: string; code: string; name: string } | null; breadcrumbs: { id: string | null; name: string }[]; folders: NoteDriveFolder[]; files: FacultyNoteDriveFile[] }
 
 export interface FacultyQuiz {
   id: string

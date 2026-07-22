@@ -41,18 +41,22 @@ export default function DashboardPage() {
   return (
     <div className="mx-auto w-full max-w-[1400px] space-y-5">
       {/* Hero */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-text-primary">Good day, {firstName} 👋</h1>
-          <p className="mt-0.5 text-sm text-text-secondary">
+          <div className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
             {scope.data?.hod.sectionTag
-              ? `HOD — ${scope.data.hod.sectionTag}`
+              ? `Department — ${scope.data.hod.sectionTag}`
               : scope.data?.hod.year
-                ? `HOD — ${scope.data.hod.year}`
+                ? `Department — ${scope.data.hod.year}`
                 : 'HOD Portal'}
+          </div>
+          <h1 className="text-[38px] font-medium leading-[1.05] text-text-primary">Good day, {firstName}.</h1>
+          <p className="mt-3 max-w-[520px] text-[15px] text-text-secondary">
+            Here's how your department is tracking this term.
+            {scope.data?.activeSemester ? ` ${scope.data.activeSemester.label} is currently active.` : ''}
           </p>
           {scope.data?.activeSemester && (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               <Badge tone="primary" dot>
                 {scope.data.activeSemester.label} Active
               </Badge>
@@ -61,12 +65,12 @@ export default function DashboardPage() {
             </div>
           )}
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Link to="/hod/exams" className="inline-flex items-center gap-1.5 rounded-sm bg-primary px-3.5 py-2 text-sm font-semibold text-white hover:bg-primary-dark">
-            <ShieldCheck size={15} /> Exam Panel
+        <div className="flex flex-wrap gap-2.5">
+          <Link to="/hod/exams" className="inline-flex items-center gap-2 rounded-sm bg-brand px-5 py-3 text-sm font-semibold text-white shadow-md transition hover:brightness-[1.06]">
+            <ShieldCheck size={16} /> Exam Panel
           </Link>
-          <Link to="/hod/results" className="inline-flex items-center gap-1.5 rounded-sm border border-border bg-surface px-3.5 py-2 text-sm font-semibold text-text-primary hover:bg-surface-2">
-            <ClipboardList size={15} /> Results
+          <Link to="/hod/results" className="inline-flex items-center gap-2 rounded-sm border border-border bg-surface px-5 py-3 text-sm font-semibold text-text-primary transition hover:bg-surface-2">
+            <ClipboardList size={16} /> Results
           </Link>
         </div>
       </div>

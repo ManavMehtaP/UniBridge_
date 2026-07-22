@@ -55,7 +55,11 @@ export interface StudentNote {
   hasFlashcards?: boolean
   releaseAt?: string
   createdAt: string
+  folderId?: string | null
 }
+
+export interface StudentNoteDriveFile { id: string; title: string; description?: string | null; originalFileName?: string | null; mimeType: string; fileSizeKb?: number | null; folderId?: string | null; hasFlashcards: boolean; hasAiSummary: boolean; uploadedBy: string; releaseAt?: string; createdAt: string }
+export interface StudentNoteDrive { subject: { id: string; code: string; name: string } | null; breadcrumbs: { id: string | null; name: string }[]; folders: { id: string; name: string; parentId?: string | null; isSystem: boolean; createdAt: string }[]; files: StudentNoteDriveFile[] }
 
 export interface SelfNote {
   id: string

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useQuery } from '@tanstack/react-query'
 import { Eye } from 'lucide-react'
@@ -43,6 +44,9 @@ export default function FacultyStudentsPage() {
     queryFn: () => facultyApi.students({ search: debounced || undefined, batchId: batchId || undefined, page, limit: 20 }),
   })
 
+  const sort = useTableSort(list.data?.data ?? [])
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
+
   return (
     <PageShell
       title="Students"
@@ -66,17 +70,17 @@ export default function FacultyStudentsPage() {
             <Table>
               <thead>
                 <tr>
-                  <Th>Student</Th>
-                  <Th>Enrollment No.</Th>
-                  <Th>Batch</Th>
-                  <Th>Roll No.</Th>
-                  <Th>Attendance</Th>
-                  <Th>Status</Th>
+                  <Th sortKey="name" {...th}>Student</Th>
+                  <Th sortKey="enrollmentNo" {...th}>Enrollment No.</Th>
+                  <Th sortKey="currentBatch.code" {...th}>Batch</Th>
+                  <Th sortKey="rollNo" {...th}>Roll No.</Th>
+                  <Th sortKey="attendancePct" {...th}>Attendance</Th>
+                  <Th sortKey="status" {...th}>Status</Th>
                   <Th className="text-right">Actions</Th>
                 </tr>
               </thead>
               <tbody>
-                {list.data?.data.map((s) => (
+                {sort.rows.map((s) => (
                   <Tr key={s.enrollmentNo}>
                     <Td>
                       <div className="flex items-center gap-2.5">

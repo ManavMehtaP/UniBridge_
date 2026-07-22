@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { ArrowLeft, ClipboardCheck, Plus, ShieldCheck, Trash2, UsersRound } from 'lucide-react'
@@ -56,6 +57,9 @@ export default function FacultyExamsPage() {
 
   if (openId) return <MarksEntry assignmentId={openId} onBack={() => setOpenId(null)} />
 
+  const mineSort = useTableSort(mine.data?.data ?? [])
+  const mineTh = { activeKey: mineSort.sortKey, dir: mineSort.sortDir, onSort: mineSort.onSort }
+
   return (
     <PageShell
       title="Exams"
@@ -72,9 +76,9 @@ export default function FacultyExamsPage() {
           <EmptyState icon={<ClipboardCheck size={22} />} title="No papers assigned" description="The exam coordinator hasn't assigned you any papers yet." />
         ) : (
           <Table>
-            <thead><tr><Th>Phase</Th><Th>Subject</Th><Th>Enrollment Range</Th><Th>Progress</Th><Th>Status</Th><Th /></tr></thead>
+            <thead><tr><Th sortKey="phaseLabel" {...mineTh}>Phase</Th><Th sortKey="subjectCode" {...mineTh}>Subject</Th><Th sortKey="fromEnrollmentNo" {...mineTh}>Enrollment Range</Th><Th sortKey="markedCount" {...mineTh}>Progress</Th><Th sortKey="status" {...mineTh}>Status</Th><Th /></tr></thead>
             <tbody>
-              {mine.data?.data.map((a) => (
+              {mineSort.rows.map((a) => (
                 <Tr key={a.id} className="cursor-pointer" onClick={() => setOpenId(a.id)}>
                   <Td>{a.phaseLabel}</Td>
                   <Td className="font-medium">{a.subjectCode}</Td>

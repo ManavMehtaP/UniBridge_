@@ -53,9 +53,12 @@ enum AnnouncementScope {
 
 enum EventType {
   HOLIDAY
+  PUBLIC_HOLIDAY // gazetted holiday (Republic Day, etc.) — overrides the timetable
   READING_HOLIDAY // study/reading day before exams
+  SEMESTER_BREAK // Diwali/Navratri/winter break — overrides the timetable
   EXAM
   CULTURAL
+  ACTIVITY // workshop, seminar, sports day — a working day with a special activity
   PHASE // T1 start, T2 end, etc.
   OTHER
 }
@@ -167,6 +170,7 @@ model University {
   notificationConfig NotificationConfig[]
   archiveJobs        ArchiveJob[]
   notes              Note[]
+  noteFolders        NoteFolder[]
   subjectSyllabi     SubjectSyllabus[]
   studentAiJobs      StudentAIJob[]
 
@@ -384,6 +388,7 @@ model Subject {
   pyqInsights        PYQInsight[]
   chatSessions       StudentAIChatSession[]
   syllabi            SubjectSyllabus[]
+  noteFolders        NoteFolder[]
 
   @@unique([universityId, semesterNumber, code])
   @@index([universityId, semesterNumber])
@@ -678,6 +683,7 @@ model Note {
   universityId     String    @db.Uuid
   subjectId        String    @db.Uuid
   facultyId        String    @db.Uuid
+  folderId         String?   @db.Uuid
   title            String
   description      String?
   fileUrl          String // S3 public/presigned URL
@@ -696,6 +702,7 @@ model Note {
   subject    Subject           @relation(fields: [subjectId], references: [id])
   faculty    Faculty           @relation(fields: [facultyId], references: [id])
   university University        @relation(fields: [universityId], references: [id])
+  folder     NoteFolder?       @relation(fields: [folderId], references: [id], onDelete: SetNull)
   flashcards Flashcard[]
   targets    NoteBatchTarget[]
   insight    NoteInsight?
@@ -704,7 +711,32 @@ model Note {
   @@index([facultyId])
   @@index([universityId])
   @@index([status, releaseAt]) // scheduler scans due SCHEDULED notes
+  @@index([folderId])
   @@map("notes")
+}
+
+// Drive-like hierarchy for faculty study material. T-1..T-4 are created
+// lazily under each subject; faculty can add nested folders below them.
+model NoteFolder {
+  id           String    @id @default(uuid()) @db.Uuid
+  universityId String    @db.Uuid
+  subjectId    String    @db.Uuid
+  parentId     String?   @db.Uuid
+  name         String
+  isSystem     Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  university University   @relation(fields: [universityId], references: [id])
+  subject    Subject      @relation(fields: [subjectId], references: [id])
+  parent     NoteFolder?  @relation("NoteFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children   NoteFolder[] @relation("NoteFolderTree")
+  notes      Note[]
+
+  @@index([universityId, subjectId, parentId])
+  @@index([parentId])
+  @@map("note_folders")
 }
 
 // Explicit audience metadata for a faculty note. A note must have at least

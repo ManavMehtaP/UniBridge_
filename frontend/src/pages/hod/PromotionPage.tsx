@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { AlertTriangle, ArrowRight, CalendarRange, Check, GraduationCap, Layers, Rocket, Trophy, Users } from 'lucide-react'
@@ -313,6 +314,8 @@ function MeritBoard({ board, detained, onToggleDetain, rankView }: {
   onToggleDetain?: (id: string) => void
   rankView?: boolean
 }) {
+  const sort = useTableSort(board.data?.data ?? [])
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
   return (
     <Card className="overflow-hidden">
       <CardHeader title={<span className="flex items-center gap-2"><Trophy size={15} className="text-warning" /> Merit Leaderboard</span>}
@@ -322,9 +325,9 @@ function MeritBoard({ board, detained, onToggleDetain, rankView }: {
           <EmptyState icon={<Layers size={20} />} title="No students" className="border-0" />
         ) : (
           <Table>
-            <thead><tr><Th>Rank</Th><Th>Student</Th><Th>Branch</Th><Th>Batch</Th><Th className="text-right">Aggregate</Th><Th>Status</Th>{onToggleDetain && <Th>Detain</Th>}</tr></thead>
+            <thead><tr><Th sortKey="rank" {...th}>Rank</Th><Th sortKey="name" {...th}>Student</Th><Th sortKey="branch" {...th}>Branch</Th><Th sortKey="batchCode" {...th}>Batch</Th><Th sortKey="aggregatePct" {...th} className="text-right">Aggregate</Th><Th sortKey="status" {...th}>Status</Th>{onToggleDetain && <Th>Detain</Th>}</tr></thead>
             <tbody>
-              {board.data?.data.map((r) => (
+              {sort.rows.map((r) => (
                 <Tr key={r.enrollmentId} className={cn(detained?.has(r.enrollmentId) && 'opacity-50')}>
                   <Td><Badge tone={r.rank <= 3 ? 'warning' : 'neutral'}>#{r.rank}</Badge></Td>
                   <Td><div className="font-medium">{r.name}</div><div className="font-mono text-[11px] text-text-muted">{r.enrollmentNo}</div></Td>

@@ -10,8 +10,8 @@
     "semantic_hash": ""
   },
   "Backend/package.json": {
-    "mtime": 1784219343.471074,
-    "ast_hash": "024cdc23ab2b09d1f1345703f95cc059",
+    "mtime": 1784269469.6719632,
+    "ast_hash": "08ec6c620f29d5d443129a98f884cc0d",
     "semantic_hash": ""
   },
   "Backend/prisma.config.ts": {
@@ -105,13 +105,13 @@
     "semantic_hash": ""
   },
   "Backend/src/routes/faculty.routes.ts": {
-    "mtime": 1783970588.5658343,
-    "ast_hash": "3bc482c5515bcf9c68567b9a0c93353b",
+    "mtime": 1784270064.4433613,
+    "ast_hash": "fe7e5e1cb78fbfe2283cd31bd63b2256",
     "semantic_hash": ""
   },
   "Backend/src/routes/hod.routes.ts": {
-    "mtime": 1783772800.779445,
-    "ast_hash": "54dc7bac5395d8eb595ec2a9f3a2964f",
+    "mtime": 1784269802.6734204,
+    "ast_hash": "945ad623cb6c4092f6f200d47c249a45",
     "semantic_hash": ""
   },
   "Backend/src/routes/index.ts": {
@@ -135,8 +135,8 @@
     "semantic_hash": ""
   },
   "Backend/src/services/portal.service.ts": {
-    "mtime": 1783991964.9553752,
-    "ast_hash": "28758674b52f22afc78a9a8bf39cc0ad",
+    "mtime": 1784269668.051655,
+    "ast_hash": "ed0076cb055e4596e482209aa4f950bd",
     "semantic_hash": ""
   },
   "Backend/src/types/domain.ts": {
@@ -190,13 +190,13 @@
     "semantic_hash": ""
   },
   "frontend/src/api/faculty.ts": {
-    "mtime": 1783970598.0971632,
-    "ast_hash": "2174749d4cd96bfa8580d5201a13d7b6",
+    "mtime": 1784269901.7465098,
+    "ast_hash": "f918ff3d33d27b14fcae437131156ea3",
     "semantic_hash": ""
   },
   "frontend/src/api/hod.ts": {
-    "mtime": 1783772806.898393,
-    "ast_hash": "9a854b646979c8c71e138549c308374b",
+    "mtime": 1784269890.5367384,
+    "ast_hash": "40eb15fbc242cf6d2cedaef192383a40",
     "semantic_hash": ""
   },
   "frontend/src/api/notifications.ts": {
@@ -520,8 +520,8 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/faculty/ResultsPage.tsx": {
-    "mtime": 1783309987.3157082,
-    "ast_hash": "e5a5f3fde45fceb0ede2d9b18bc09e12",
+    "mtime": 1784269960.6870239,
+    "ast_hash": "536fd152785bcdaba7be4fdd08c68717",
     "semantic_hash": ""
   },
   "frontend/src/pages/faculty/SchedulePage.tsx": {
@@ -535,13 +535,13 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/faculty/StudentsPage.tsx": {
-    "mtime": 1783600192.653413,
-    "ast_hash": "dbed1c5d5e7ec004c7e423c324ca58d1",
+    "mtime": 1784269949.1027527,
+    "ast_hash": "75d5d083adcc01131d2b0adb39d8d089",
     "semantic_hash": ""
   },
   "frontend/src/pages/hod/AnalyticsPage.tsx": {
-    "mtime": 1784210085.0958614,
-    "ast_hash": "a49a2525c939fa6b4e1d60ab468d65e1",
+    "mtime": 1784269920.9440095,
+    "ast_hash": "85129aba946080f80b1c0f0abd072e5e",
     "semantic_hash": ""
   },
   "frontend/src/pages/hod/AnnouncementsPage.tsx": {
@@ -550,13 +550,13 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/hod/AttendancePage.tsx": {
-    "mtime": 1783750825.014193,
-    "ast_hash": "df927a318ecdba221c3208cc63d3e254",
+    "mtime": 1784269920.94357,
+    "ast_hash": "4a802142b6a89e0b9db55585a0edb5e7",
     "semantic_hash": ""
   },
   "frontend/src/pages/hod/CalendarPage.tsx": {
-    "mtime": 1784210106.0403533,
-    "ast_hash": "2f7cc572e202cf821ca73d06b2ab486b",
+    "mtime": 1784269920.9443164,
+    "ast_hash": "476d3ea93a1197065f637d12aea60cd6",
     "semantic_hash": ""
   },
   "frontend/src/pages/hod/DashboardPage.tsx": {
@@ -570,8 +570,8 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/hod/FacultyPage.tsx": {
-    "mtime": 1783750683.225659,
-    "ast_hash": "d91e4620b31b538278430718c0607f23",
+    "mtime": 1784269920.9431589,
+    "ast_hash": "bf5959f5eb73884a004733e4e9353a4a",
     "semantic_hash": ""
   },
   "frontend/src/pages/hod/HodOnboardingModal.tsx": {
@@ -600,8 +600,8 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/hod/StudentsPage.tsx": {
-    "mtime": 1784168999.5019565,
-    "ast_hash": "1a7b432681faa8af957c6bb40b01b625",
+    "mtime": 1784269920.9427354,
+    "ast_hash": "33043ac7b31d5a945582841d9ef6dc7c",
     "semantic_hash": ""
   },
   "frontend/src/pages/hod/SubjectsPage.tsx": {
@@ -907,6 +907,21 @@
   "frontend/public/assets/login-bg.png": {
     "mtime": 1783252699.6707249,
     "ast_hash": "ca3e6923b8c7bfbf226fc2845c26ff47",
+    "semantic_hash": ""
+  },
+  "Backend/src/utils/export.ts": {
+    "mtime": 1784269508.4277773,
+    "ast_hash": "5fd0debeda95314ebb10fcb20185b4fb",
+    "semantic_hash": ""
+  },
+  "frontend/src/components/shared/ExportMenu.tsx": {
+    "mtime": 1784269857.275722,
+    "ast_hash": "3d71c159d87cbe5c9c56c88c3cf962ff",
+    "semantic_hash": ""
+  },
+  "frontend/src/lib/download.ts": {
+    "mtime": 1784269837.6789887,
+    "ast_hash": "b3af9b7f20353138d02e435eaff23240",
     "semantic_hash": ""
   }
 }

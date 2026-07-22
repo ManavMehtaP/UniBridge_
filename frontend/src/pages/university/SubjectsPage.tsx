@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { BookOpen, Download, Pencil, Plus, Trash2, Upload } from 'lucide-react'
@@ -43,6 +44,9 @@ export default function UniSubjectsPage() {
     onError: (e) => toast.error(errorMessage(e)),
   })
 
+  const sort = useTableSort(list.data?.data ?? [])
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
+
   return (
     <PageShell
       title="Subjects"
@@ -70,10 +74,10 @@ export default function UniSubjectsPage() {
         ) : (
           <Table>
             <thead><tr>
-              <Th>Code</Th><Th>Name</Th><Th>Semester</Th><Th>Branch</Th><Th>Credits</Th><Th>Type</Th><Th className="text-right">Actions</Th>
+              <Th sortKey="code" {...th}>Code</Th><Th sortKey="name" {...th}>Name</Th><Th sortKey="semesterNumber" {...th}>Semester</Th><Th sortKey="branch" {...th}>Branch</Th><Th sortKey="credits" {...th}>Credits</Th><Th sortKey="type" {...th}>Type</Th><Th className="text-right">Actions</Th>
             </tr></thead>
             <tbody>
-              {list.data?.data.map((s) => (
+              {sort.rows.map((s) => (
                 <Tr key={s.id}>
                   <Td className="font-semibold">{s.code}</Td>
                   <Td>{s.name}</Td>

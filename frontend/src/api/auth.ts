@@ -1,10 +1,11 @@
 import { api } from './client'
-import type { LoginResponse, LoginRole, AuthUser } from '@/types/auth'
+import type { LoginResponse, AuthUser } from '@/types/auth'
 
 export const authApi = {
-  login(email: string, password: string, role: LoginRole) {
+  // The account's role is resolved server-side; the client never sends one.
+  login(email: string, password: string) {
     return api
-      .post<LoginResponse>('/auth/login', { email, password, role })
+      .post<LoginResponse>('/auth/login', { email, password })
       .then((r) => r.data)
   },
 

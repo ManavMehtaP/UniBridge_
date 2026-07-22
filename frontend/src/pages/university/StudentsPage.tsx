@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Eye, GraduationCap, Search } from 'lucide-react'
@@ -35,6 +36,9 @@ export default function UniversityStudentsPage() {
     onError: (e) => toast.error(errorMessage(e)),
   })
 
+  const sort = useTableSort(q.data?.data ?? [])
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
+
   return (
     <PageShell title="Students" subtitle={q.data ? `${q.data.total} students across the university` : 'University-wide student registry'}>
       <div className="mb-4 flex flex-wrap gap-3">
@@ -53,9 +57,9 @@ export default function UniversityStudentsPage() {
       ) : (
         <Card className="overflow-hidden">
           <Table>
-            <thead><tr><Th>Enrollment No</Th><Th>Name</Th><Th>Branch</Th><Th>Academic Year</Th><Th>Semester</Th><Th>Batch</Th><Th>Roll No</Th><Th>Status</Th><Th /></tr></thead>
+            <thead><tr><Th sortKey="enrollmentNo" {...th}>Enrollment No</Th><Th sortKey="name" {...th}>Name</Th><Th sortKey="branch" {...th}>Branch</Th><Th sortKey="academicYearLabel" {...th}>Academic Year</Th><Th sortKey="semesterLabel" {...th}>Semester</Th><Th sortKey="batchCode" {...th}>Batch</Th><Th sortKey="rollNo" {...th}>Roll No</Th><Th sortKey="isActive" {...th}>Status</Th><Th /></tr></thead>
             <tbody>
-              {q.data?.data.map((s) => (
+              {sort.rows.map((s) => (
                 <Tr key={s.id}>
                   <Td className="whitespace-nowrap font-mono text-xs">{s.enrollmentNo}</Td>
                   <Td className="font-medium">{s.name}</Td>

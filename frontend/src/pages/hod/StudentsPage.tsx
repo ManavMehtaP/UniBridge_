@@ -8,6 +8,7 @@ import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
 import { useDebounce } from '@/hooks/shared/useDebounce'
 import { useHistoryStore } from '@/stores/historyStore'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import type { StudentRow } from '@/types/hod'
 import { PageShell } from '@/components/shared/PageShell'
 import { FilterBar } from '@/components/shared/FilterBar'
@@ -70,6 +71,8 @@ export default function StudentsPage() {
   })
   // Full branch list (student.branch stores the code) — not just codes on the visible page.
   const branchesQ = useQuery({ queryKey: ['hod', 'branches'], queryFn: hodApi.onboarding.branches })
+  const sort = useTableSort<StudentRow>(list.data?.data ?? [])
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
 
   const del = useMutation({
     mutationFn: (enrollmentNo: string) => hodApi.students.remove(enrollmentNo),
@@ -158,18 +161,18 @@ export default function StudentsPage() {
             <Table>
               <thead>
                 <tr>
-                  <Th>Student</Th>
-                  <Th>Enrollment No.</Th>
-                  <Th>Branch</Th>
-                  <Th>Batch</Th>
-                  <Th>Roll No.</Th>
-                  <Th>Attendance</Th>
-                  <Th>Status</Th>
+                  <Th sortKey="name" {...th}>Student</Th>
+                  <Th sortKey="enrollmentNo" {...th}>Enrollment No.</Th>
+                  <Th sortKey="branch" {...th}>Branch</Th>
+                  <Th sortKey="batchCode" {...th}>Batch</Th>
+                  <Th sortKey="rollNo" {...th}>Roll No.</Th>
+                  <Th sortKey="attendancePct" {...th}>Attendance</Th>
+                  <Th sortKey="status" {...th}>Status</Th>
                   <Th className="text-right">Actions</Th>
                 </tr>
               </thead>
               <tbody>
-                {list.data?.data.map((s) => (
+                {sort.rows.map((s) => (
                   <Tr key={s.enrollmentNo}>
                     <Td>
                       <div className="flex items-center gap-2.5">

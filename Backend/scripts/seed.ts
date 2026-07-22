@@ -197,14 +197,16 @@ async function ensureFacultyPool(uniId: string, semNumber: number, yearLevel: YL
   return out;
 }
 
-async function ensureSubjects(uniId: string, semId: string, semNumber: number) {
+async function ensureSubjects(uniId: string, _semId: string, semNumber: number) {
+  // Subjects are keyed by semesterNumber (shared across all batches/years at that
+  // semester), not by a specific Semester row — the schema dropped Subject.semesterId.
   const specs = SUBJECTS_BY_SEM[semNumber] || [];
   const map: Record<string, string> = {};
   for (const s of specs) {
-    let subj = await prisma.subject.findFirst({ where: { semesterId: semId, code: s.code, deletedAt: null } });
+    let subj = await prisma.subject.findFirst({ where: { universityId: uniId, semesterNumber: semNumber, code: s.code, deletedAt: null } });
     if (!subj) {
       subj = await prisma.subject.create({
-        data: { universityId: uniId, semesterId: semId, code: s.code, name: s.name, credits: s.credits, type: s.type },
+        data: { universityId: uniId, semesterNumber: semNumber, code: s.code, name: s.name, credits: s.credits, type: s.type },
       });
     }
     map[s.code] = subj.id;

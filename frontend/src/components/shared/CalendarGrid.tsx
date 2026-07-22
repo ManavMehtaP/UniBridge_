@@ -4,10 +4,13 @@ import type { HodCalendarEvent } from '@/types/hod'
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export const EVENT_TONE: Record<HodCalendarEvent['type'], string> = {
-  HOLIDAY: 'bg-danger',
+  HOLIDAY: 'bg-success',
+  PUBLIC_HOLIDAY: 'bg-danger',
   READING_HOLIDAY: 'bg-teal',
+  SEMESTER_BREAK: 'bg-purple',
   EXAM: 'bg-warning',
   CULTURAL: 'bg-purple',
+  ACTIVITY: 'bg-primary',
   PHASE: 'bg-primary',
   OTHER: 'bg-text-muted',
 }

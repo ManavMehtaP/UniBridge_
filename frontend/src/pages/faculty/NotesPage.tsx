@@ -1,16 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { CalendarClock, FileText, Pencil, Plus, Trash2 } from 'lucide-react'
+import { FileText, Plus } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
 import { errorMessage } from '@/api/client'
 import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
 import type { FacultyNote } from '@/types/faculty'
 import { PageShell } from '@/components/shared/PageShell'
 import { FileDrop } from '@/components/shared/FileDrop'
-import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
@@ -18,18 +16,22 @@ import { Textarea } from '@/components/ui/Textarea'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { CardSkeleton } from '@/components/ui/Skeleton'
-import { format, formatDistanceToNow } from 'date-fns'
+import { NoteDrive } from '@/components/shared/NoteDrive'
 
 export default function NotesPage() {
   const qc = useQueryClient()
   const scope = useFacultyScope()
-  const [page, setPage] = useState(1)
   const [showUpload, setShowUpload] = useState(false)
   const [editOf, setEditOf] = useState<FacultyNote | null>(null)
   const [deleteOf, setDeleteOf] = useState<FacultyNote | null>(null)
+  const [driveSubjectId, setDriveSubjectId] = useState('')
+  const [parentId, setParentId] = useState<string | null>(null)
+  const [showFolder, setShowFolder] = useState(false)
+  const [renameFolder, setRenameFolder] = useState<{ id: string; name: string } | null>(null)
 
-  const list = useQuery({ queryKey: ['faculty', 'notes', page], queryFn: () => facultyApi.notes({ page, limit: 20 }) })
+  const list = useQuery({ queryKey: ['faculty', 'notes'], queryFn: () => facultyApi.notes({ limit: 20 }) })
   const invalidate = () => qc.invalidateQueries({ queryKey: ['faculty', 'notes'] })
+  const drive = useQuery({ queryKey: ['faculty', 'note-drive', driveSubjectId, parentId], queryFn: () => facultyApi.noteDrive({ subjectId: driveSubjectId, parentId: parentId ?? undefined }), enabled: !!driveSubjectId })
   const del = useMutation({
     mutationFn: (id: string) => facultyApi.deleteNote(id),
     onSuccess: () => { toast.success('Note deleted'); invalidate(); setDeleteOf(null) },
@@ -42,57 +44,27 @@ export default function NotesPage() {
       .filter((a) => !seen.has(a.subject.id) && seen.add(a.subject.id))
       .map((a) => ({ value: a.subject.id, label: `${a.subject.code} — ${a.subject.name}` })) ?? []
   }, [scope.data])
+  useEffect(() => { if (!driveSubjectId && subjectOpts[0]) setDriveSubjectId(subjectOpts[0].value) }, [driveSubjectId, subjectOpts])
+  useEffect(() => { setParentId(null) }, [driveSubjectId])
 
   return (
     <PageShell
       title="Notes"
       subtitle={list.data ? `${list.data.total} notes uploaded` : 'Upload PDFs and study materials'}
-      action={<Button leftIcon={<Plus size={15} />} onClick={() => setShowUpload(true)}>Upload Note</Button>}
+      action={<div className="flex gap-2"><Button variant="outline" leftIcon={<Plus size={15} />} onClick={() => setShowFolder(true)} disabled={!driveSubjectId}>New folder</Button><Button leftIcon={<Plus size={15} />} onClick={() => setShowUpload(true)}>Upload Note</Button></div>}
     >
-      {list.isLoading ? (
+      <div className="mb-4 max-w-md"><Select value={driveSubjectId} onChange={(e) => setDriveSubjectId(e.target.value)} placeholder="Select subject" options={subjectOpts} /></div>
+      {drive.isLoading ? (
         <CardSkeleton height={200} />
-      ) : list.data && list.data.data.length === 0 ? (
-        <EmptyState icon={<FileText size={22} />} title="No notes yet" description="Upload your first PDF or document." action={<Button onClick={() => setShowUpload(true)}>Upload Note</Button>} />
+      ) : drive.data ? (
+        <NoteDrive breadcrumbs={drive.data.breadcrumbs} folders={drive.data.folders} files={drive.data.files} faculty onOpenFolder={(id) => setParentId(id)} onBreadcrumb={setParentId} onCreateFolder={() => setShowFolder(true)} onUpload={() => setShowUpload(true)} onRenameFolder={setRenameFolder} onDeleteFolder={(folder) => { facultyApi.deleteNoteFolder(folder.id).then(() => { toast.success('Folder deleted'); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }).catch((e) => toast.error(errorMessage(e))) }} onEditFile={(file) => { const note = { ...file, subject: drive.data.subject ?? { code: '', name: '' }, fileUrl: '', fileSize: file.fileSizeKb ?? undefined, fileType: file.mimeType, aiSummaryStatus: file.hasAiSummary ? 'complete' : 'pending', createdAt: file.createdAt } as FacultyNote; setEditOf(note) }} onDeleteFile={(file) => { const note = { ...file, subject: drive.data.subject ?? { code: '', name: '' }, fileUrl: '', fileSize: file.fileSizeKb ?? undefined, fileType: file.mimeType, aiSummaryStatus: file.hasAiSummary ? 'complete' : 'pending', createdAt: file.createdAt } as FacultyNote; setDeleteOf(note) }} />
       ) : (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {list.data?.data.map((n) => {
-            const scheduled = n.status === 'SCHEDULED'
-            return (
-              <Card key={n.id} className="p-4">
-                <div className="mb-2 flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-sm bg-primary-light text-primary">
-                    <FileText size={18} />
-                  </div>
-                  <div className="flex gap-1">
-                    <button onClick={() => setEditOf(n)} className="text-text-muted hover:text-primary" title="Edit / reschedule"><Pencil size={15} /></button>
-                    <button onClick={() => setDeleteOf(n)} className="text-text-muted hover:text-danger" title="Delete"><Trash2 size={15} /></button>
-                  </div>
-                </div>
-                <div className="text-sm font-semibold text-text-primary line-clamp-2">{n.title}</div>
-                <div className="mt-0.5 text-xs text-text-muted">{n.subject.code} · {n.subject.name}</div>
-                {n.description && <p className="mt-2 line-clamp-2 text-xs text-text-secondary">{n.description}</p>}
-                {!!n.batchCodes?.length && <p className="mt-2 text-[11px] font-medium text-primary">Visible to: {n.batchCodes.join(', ')}</p>}
-                <div className="mt-3 flex items-center justify-between">
-                  {scheduled
-                    ? <Badge tone="warning"><CalendarClock size={11} className="mr-1 inline" />Scheduled</Badge>
-                    : <Badge tone="success">Published</Badge>}
-                  <span className="text-[11px] text-text-muted">
-                    {scheduled && n.releaseAt ? `Releases ${format(new Date(n.releaseAt), 'dd MMM, HH:mm')}` : formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}
-                  </span>
-                </div>
-              </Card>
-            )
-          })}
-        </div>
+        <EmptyState icon={<FileText size={22} />} title="Select a subject" description="Choose a subject to browse its folders." />
       )}
 
-      {list.data && list.data.totalPages > 1 && (
-        <div className="mt-4 flex justify-center">
-          <Button variant="outline" size="sm" disabled={page >= list.data.totalPages} onClick={() => setPage((p) => p + 1)}>Load more</Button>
-        </div>
-      )}
-
-      <UploadNoteModal open={showUpload} onClose={() => setShowUpload(false)} subjectOpts={subjectOpts} assignments={scope.data?.assignments ?? []} onSuccess={invalidate} />
+      <UploadNoteModal open={showUpload} onClose={() => setShowUpload(false)} subjectOpts={subjectOpts} assignments={scope.data?.assignments ?? []} defaultSubjectId={driveSubjectId} folderId={parentId} onSuccess={() => { invalidate(); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }} />
+      <FolderModal open={showFolder} subjectId={driveSubjectId} parentId={parentId} onClose={() => setShowFolder(false)} onSuccess={() => { setShowFolder(false); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }} />
+      <RenameFolderModal folder={renameFolder} onClose={() => setRenameFolder(null)} onSuccess={() => { setRenameFolder(null); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }} />
       <EditNoteModal note={editOf} onClose={() => setEditOf(null)} onSuccess={invalidate} />
 
       <ConfirmDialog
@@ -113,7 +85,7 @@ type Assignment = { subject: { id: string }; batch: { id: string; code: string }
 // Local wall-clock → ISO for the backend. Returns undefined for "publish now".
 function toIso(local: string) { return local ? new Date(local).toISOString() : undefined }
 
-function UploadNoteModal({ open, onClose, subjectOpts, assignments, onSuccess }: { open: boolean; onClose: () => void; subjectOpts: { value: string; label: string }[]; assignments: Assignment[]; onSuccess: () => void }) {
+function UploadNoteModal({ open, onClose, subjectOpts, assignments, defaultSubjectId, folderId, onSuccess }: { open: boolean; onClose: () => void; subjectOpts: { value: string; label: string }[]; assignments: Assignment[]; defaultSubjectId: string; folderId: string | null; onSuccess: () => void }) {
   const [file, setFile] = useState<File | null>(null)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -122,6 +94,7 @@ function UploadNoteModal({ open, onClose, subjectOpts, assignments, onSuccess }:
   const [mode, setMode] = useState<'now' | 'schedule'>('now')
   const [releaseAt, setReleaseAt] = useState('')
   const batches = useMemo(() => assignments.filter((a) => a.subject.id === subjectId).map((a) => a.batch), [assignments, subjectId])
+  useEffect(() => { if (open && defaultSubjectId) { setSubjectId(defaultSubjectId); setBatchIds([]) } }, [open, defaultSubjectId])
 
   const upload = useMutation({
     mutationFn: () => {
@@ -130,6 +103,7 @@ function UploadNoteModal({ open, onClose, subjectOpts, assignments, onSuccess }:
       fd.append('title', title)
       fd.append('description', description)
       fd.append('subjectId', subjectId)
+      if (folderId && subjectId) fd.append('folderId', folderId)
       fd.append('batchIds', JSON.stringify(batchIds))
       const iso = mode === 'schedule' ? toIso(releaseAt) : undefined
       if (iso) fd.append('releaseAt', iso)
@@ -173,6 +147,19 @@ function UploadNoteModal({ open, onClose, subjectOpts, assignments, onSuccess }:
       </div>
     </Modal>
   )
+}
+
+function FolderModal({ open, subjectId, parentId, onClose, onSuccess }: { open: boolean; subjectId: string; parentId: string | null; onClose: () => void; onSuccess: () => void }) {
+  const [name, setName] = useState('')
+  const mutation = useMutation({ mutationFn: () => facultyApi.createNoteFolder({ subjectId, parentId, name }), onSuccess: () => { toast.success('Folder created'); setName(''); onSuccess() }, onError: (e) => toast.error(errorMessage(e)) })
+  return <Modal open={open} onClose={onClose} title="Create folder" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button loading={mutation.isPending} disabled={!name.trim()} onClick={() => mutation.mutate()}>Create</Button></>}><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Assignments" /></Modal>
+}
+
+function RenameFolderModal({ folder, onClose, onSuccess }: { folder: { id: string; name: string } | null; onClose: () => void; onSuccess: () => void }) {
+  const [name, setName] = useState('')
+  useEffect(() => { setName(folder?.name ?? '') }, [folder])
+  const mutation = useMutation({ mutationFn: () => facultyApi.renameNoteFolder(folder!.id, name), onSuccess: () => { toast.success('Folder renamed'); onSuccess() }, onError: (e) => toast.error(errorMessage(e)) })
+  return <Modal open={!!folder} onClose={onClose} title="Rename folder" footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button loading={mutation.isPending} disabled={!name.trim()} onClick={() => mutation.mutate()}>Save</Button></>}><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} /></Modal>
 }
 
 function EditNoteModal({ note, onClose, onSuccess }: { note: FacultyNote | null; onClose: () => void; onSuccess: () => void }) {

@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -59,6 +60,9 @@ export default function FacultyPage() {
     onError: (e) => toast.error(errorMessage(e)),
   })
 
+  const sort = useTableSort(list.data?.data ?? [])
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
+
   return (
     <PageShell
       title="Faculty"
@@ -98,18 +102,18 @@ export default function FacultyPage() {
             <Table>
               <thead>
                 <tr>
-                  <Th>Faculty</Th>
-                  <Th>Employee ID</Th>
-                  <Th>Year</Th>
-                  <Th>Mentor Code</Th>
-                  <Th>Subjects</Th>
-                  <Th>Mentees</Th>
-                  <Th>Status</Th>
+                  <Th sortKey="name" {...th}>Faculty</Th>
+                  <Th sortKey="employeeId" {...th}>Employee ID</Th>
+                  <Th sortKey="year" {...th}>Year</Th>
+                  <Th sortKey="mentorCode" {...th}>Mentor Code</Th>
+                  <Th sortKey="subjectCount" {...th}>Subjects</Th>
+                  <Th sortKey="menteeCount" {...th}>Mentees</Th>
+                  <Th sortKey="isActive" {...th}>Status</Th>
                   <Th className="text-right">Actions</Th>
                 </tr>
               </thead>
               <tbody>
-                {list.data?.data.map((f) => (
+                {sort.rows.map((f) => (
                   <Tr key={f.id}>
                     <Td>
                       <div className="flex items-center gap-2.5">

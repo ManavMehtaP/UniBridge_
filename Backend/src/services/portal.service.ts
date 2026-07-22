@@ -100,6 +100,43 @@ function monthLabels(months: number) {
   });
 }
 
+// ── Academic calendar: the master controller ────────────────────
+// A single resolver every module consults before doing timetable/attendance work.
+// These event types override the timetable and disable attendance for the day.
+const NON_WORKING_TYPES = new Set(["HOLIDAY", "PUBLIC_HOLIDAY", "READING_HOLIDAY", "SEMESTER_BREAK"]);
+const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+export interface DayStatus {
+  date: string;         // yyyy-mm-dd
+  dayOfWeek: number;    // 0=Sun … 6=Sat
+  dayLabel: string;
+  isWorkingDay: boolean;
+  status: string;       // WORKING | SUNDAY | HOLIDAY | PUBLIC_HOLIDAY | READING_HOLIDAY | SEMESTER_BREAK
+  reason: string | null;
+  isExamDay: boolean;   // exam days stay "working" but attendance can be gated per-rule
+  events: { title: string; eventType: string }[];
+}
+
+// Classify any date from the active calendar. Sunday is always non-working; a covering
+// HOLIDAY/PUBLIC_HOLIDAY/READING_HOLIDAY/SEMESTER_BREAK event overrides everything else.
+async function resolveDayStatus(universityId: string, dateStr?: string): Promise<DayStatus> {
+  const base = dateStr ? new Date(dateStr) : new Date();
+  if (Number.isNaN(base.getTime())) throw new ApiError(400, "VALIDATION_ERROR", "Invalid date.");
+  const day = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
+  const dayOfWeek = day.getUTCDay();
+  const events = await prisma.calendarEvent.findMany({
+    where: { universityId, deletedAt: null, startDate: { lte: day }, endDate: { gte: day } },
+    select: { title: true, eventType: true },
+    orderBy: { startDate: "asc" },
+  });
+  const override = events.find((e) => NON_WORKING_TYPES.has(e.eventType));
+  const isExamDay = events.some((e) => e.eventType === "EXAM");
+  let status = "WORKING", isWorkingDay = true, reason: string | null = null;
+  if (override) { status = override.eventType; isWorkingDay = false; reason = override.title; }
+  else if (dayOfWeek === 0) { status = "SUNDAY"; isWorkingDay = false; reason = "Sunday — weekly holiday"; }
+  return { date: day.toISOString().slice(0, 10), dayOfWeek, dayLabel: DAY_NAMES[dayOfWeek], isWorkingDay, status, reason, isExamDay, events };
+}
+
 function parseCsvRecords(fileBuffer: Buffer, requiredHeaders: string[]) {
   const raw = fileBuffer.toString("utf8").trim();
   if (!raw) throw new ApiError(422, "UNPROCESSABLE_CSV", "CSV file is empty.");
@@ -264,7 +301,9 @@ async function scopeSemester(scope: Scope, explicitSemesterId?: string) {
     const s = await prisma.semester.findUnique({ where: { id: scope.hodSemesterIds[0] } });
     if (s && s.universityId === scope.universityId) return s;
   }
-  return scopeSemester(scope);
+  // Before onboarding an HOD has no scoped semester — fall back to the tenant's active
+  // semester. (Was `return scopeSemester(scope)`, which recursed forever and hung the request.)
+  return getActiveSemester(scope.universityId);
 }
 
 async function getAcademicYear(academicYearId: string) {
@@ -537,6 +576,30 @@ async function computeOverallAttendancePct(enrollmentId: string) {
   return Number(((records.filter((r) => r.isPresent).length / records.length) * 100).toFixed(2));
 }
 
+// Bulk attendance %: TWO grouped queries for a whole page of students instead of one
+// findMany per enrollment (the N+1 that dominated dashboard/at-risk/attendance response time).
+async function overallAttendancePctBulk(enrollmentIds: string[]): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (enrollmentIds.length === 0) return map;
+  const [totals, presents] = await Promise.all([
+    prisma.attendanceRecord.groupBy({ by: ["enrollmentId"], where: { enrollmentId: { in: enrollmentIds } }, _count: { _all: true } }),
+    prisma.attendanceRecord.groupBy({ by: ["enrollmentId"], where: { enrollmentId: { in: enrollmentIds }, isPresent: true }, _count: { _all: true } }),
+  ]);
+  const presentBy = new Map(presents.map((p) => [p.enrollmentId, p._count._all]));
+  for (const t of totals) {
+    const total = t._count._all;
+    map.set(t.enrollmentId, total === 0 ? 0 : Number(((presentBy.get(t.enrollmentId) ?? 0) / total * 100).toFixed(2)));
+  }
+  return map;
+}
+
+// Ordered array of pcts for a list of enrollments — drop-in for the old
+// `Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)))` pattern.
+async function overallAttendancePctBulkArr(enrollments: { id: string }[]): Promise<number[]> {
+  const m = await overallAttendancePctBulk(enrollments.map((e) => e.id));
+  return enrollments.map((e) => m.get(e.id) ?? 0);
+}
+
 async function getScopedFaculty(scope: Scope) {
   // ponytail: pool-first — an HOD sees their claimed pool. Fallback to year-strict for
   // pre-onboarded HODs so the roster isn't empty before they save a pool.
@@ -614,13 +677,18 @@ async function statusFromAttendancePctAndMarks(attendancePct: number, avgMarksPc
 
 export const portalService = {
   // ── Auth ──────────────────────────────────────────────────
-  async login(email: string, password: string, role?: Role | "HOD") {
-    if (role === "STUDENT") {
-      const student = await prisma.student.findFirst({
-        where: { OR: [{ email }, { enrollmentNo: email }], deletedAt: null },
-        select: { id: true, email: true, enrollmentNo: true, name: true, passwordHash: true, isActive: true, branch: true, admissionYear: true, profilePhotoUrl: true, phone: true, universityId: true },
-      });
-      if (!student || !matchesPassword(student.passwordHash, password)) throw new ApiError(401, "INVALID_CREDENTIALS", "Wrong email or password.");
+  // The account decides the role — the client no longer picks it. Resolve by identifier:
+  // a matching student → STUDENT; otherwise a faculty whose flags map to Dean/HOD/Faculty.
+  // `role` is accepted for backwards compatibility but is ignored for resolution.
+  async login(email: string, password: string, _role?: Role | "HOD") {
+    // Students authenticate by email OR enrollment number (faculty emails never match a
+    // numeric enrollment no., so there is no ambiguity between the two account types).
+    const student = await prisma.student.findFirst({
+      where: { OR: [{ email }, { enrollmentNo: email }], deletedAt: null },
+      select: { id: true, email: true, enrollmentNo: true, name: true, passwordHash: true, isActive: true, branch: true, admissionYear: true, profilePhotoUrl: true, phone: true, universityId: true },
+    });
+    if (student) {
+      if (!matchesPassword(student.passwordHash, password)) throw new ApiError(401, "INVALID_CREDENTIALS", "Wrong email or password.");
       if (!student.isActive) throw new ApiError(403, "ACCOUNT_INACTIVE", "Account is inactive.");
       const refreshToken = `refresh:STUDENT:${student.id}:${Date.now()}`;
       await prisma.refreshToken.create({ data: { token: refreshToken, studentId: student.id, expiresAt: new Date("2026-12-31T23:59:59.000Z") } });
@@ -637,8 +705,7 @@ export const portalService = {
     });
     if (!faculty || !matchesPassword(faculty.passwordHash, password)) throw new ApiError(401, "INVALID_CREDENTIALS", "Wrong email or password.");
     if (!faculty.isActive) throw new ApiError(403, "ACCOUNT_INACTIVE", "Account is inactive.");
-    if (role === "SUPER_ADMIN" && !faculty.isDean) throw new ApiError(403, "NOT_DEAN", "This account does not have University (Dean) access.");
-    const resolvedRole: "HOD" | "FACULTY" | "SUPER_ADMIN" = role === "SUPER_ADMIN" ? "SUPER_ADMIN" : faculty.isHod ? "HOD" : "FACULTY";
+    const resolvedRole: "HOD" | "FACULTY" | "SUPER_ADMIN" = faculty.isDean ? "SUPER_ADMIN" : faculty.isHod ? "HOD" : "FACULTY";
     const refreshToken = `refresh:${resolvedRole}:${faculty.id}:${Date.now()}`;
     await prisma.refreshToken.create({ data: { token: refreshToken, facultyId: faculty.id, expiresAt: new Date("2026-12-31T23:59:59.000Z") } });
     return {
@@ -947,7 +1014,7 @@ export const portalService = {
     const enrollments = await scopedCurrentEnrollments(scope);
     const allFaculty = await getScopedFaculty(scope);
     const activeSemester = await scopeSemester(scope);
-    const attendancePcts = await Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)));
+    const attendancePcts = await overallAttendancePctBulkArr(enrollments);
     const avgAttendance = average(attendancePcts);
     const results = await prisma.result.findMany({ where: { enrollment: { batchId: { in: scope.hodBatchIds }, isCurrent: true } } });
     const published = results.filter((r) => r.isPublished).length;
@@ -963,9 +1030,22 @@ export const portalService = {
   async dashboardAttendanceTrend(scope: Scope, months = 6) {
     const labels = monthLabels(months);
     const enrollments = await scopedCurrentEnrollments(scope);
-    const attendancePcts = await Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)));
-    const avg = average(attendancePcts);
-    return { labels, series: [{ label: "Overall", data: Array.from({ length: months }, () => avg) }] };
+    const ids = enrollments.map((e) => e.id);
+    // Real per-month attendance from lectureDate (was a flat line repeating the overall avg).
+    const now = new Date();
+    const data = await Promise.all(
+      Array.from({ length: months }, async (_v, i) => {
+        if (ids.length === 0) return null;
+        const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - i - 1), 1));
+        const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - i - 1) + 1, 1));
+        const [total, present] = await Promise.all([
+          prisma.attendanceRecord.count({ where: { enrollmentId: { in: ids }, lectureDate: { gte: start, lt: end } } }),
+          prisma.attendanceRecord.count({ where: { enrollmentId: { in: ids }, lectureDate: { gte: start, lt: end }, isPresent: true } }),
+        ]);
+        return total === 0 ? null : Number(((present / total) * 100).toFixed(1));
+      }),
+    );
+    return { labels, series: [{ label: "Overall", data }] };
   },
 
   async dashboardAtRisk(scope: Scope) {
@@ -1714,7 +1794,7 @@ export const portalService = {
     const rules = await getAttendanceRules(scope.universityId);
     const where = await hodEnrollmentWhere(scope, semesterId);
     const enrollments = await prisma.studentEnrollment.findMany({ where });
-    const attendancePcts = await Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)));
+    const attendancePcts = await overallAttendancePctBulkArr(enrollments);
     const records = await prisma.attendanceRecord.findMany({ where: { enrollment: where } });
     const lockedCount = records.filter((r) => r.isLocked).length;
     return {
@@ -1977,7 +2057,7 @@ export const portalService = {
       where: { isCurrent: true, batchId: { in: batchId ? [batchId] : scope.hodBatchIds } },
       include: { student: true },
     });
-    const attendancePcts = await Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)));
+    const attendancePcts = await overallAttendancePctBulkArr(enrollments);
     const avgAttendance = average(attendancePcts);
     const phaseResults = currentPhase
       ? await prisma.result.findMany({ where: { phaseId: currentPhase.id, enrollmentId: { in: enrollments.map((e) => e.id) } } })
@@ -2003,13 +2083,29 @@ export const portalService = {
 
   async analyticsAttendanceTrend(scope: Scope, months = 6) {
     const labels = monthLabels(months);
+    // Real month buckets (UTC month boundaries, aligned to monthLabels) instead of a flat line.
+    const now = new Date();
+    const buckets = Array.from({ length: months }, (_v, i) => {
+      const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - i - 1), 1));
+      const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - (months - i - 1) + 1, 1));
+      return { start, end };
+    });
     const series = await Promise.all(
       scope.hodBatchIds.map(async (batchId) => {
         const enrollments = await prisma.studentEnrollment.findMany({ where: { batchId, isCurrent: true }, select: { id: true } });
-        const pcts = await Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)));
-        const avg = average(pcts);
+        const ids = enrollments.map((e) => e.id);
         const batch = await batchById(batchId);
-        return { batchCode: batch.code, data: Array.from({ length: months }, () => avg) };
+        const data = await Promise.all(
+          buckets.map(async (b) => {
+            if (ids.length === 0) return null;
+            const [total, present] = await Promise.all([
+              prisma.attendanceRecord.count({ where: { enrollmentId: { in: ids }, lectureDate: { gte: b.start, lt: b.end } } }),
+              prisma.attendanceRecord.count({ where: { enrollmentId: { in: ids }, lectureDate: { gte: b.start, lt: b.end }, isPresent: true } }),
+            ]);
+            return total === 0 ? null : Number(((present / total) * 100).toFixed(1));
+          }),
+        );
+        return { batchCode: batch.code, data };
       }),
     );
     return { labels, series };
@@ -2017,7 +2113,7 @@ export const portalService = {
 
   async analyticsAttendanceDistribution(scope: Scope, batchId?: string) {
     const enrollments = await prisma.studentEnrollment.findMany({ where: { isCurrent: true, batchId: { in: batchId ? [batchId] : scope.hodBatchIds } } });
-    const values = await Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)));
+    const values = await overallAttendancePctBulkArr(enrollments);
     return {
       buckets: [
         { range: "< 60%", count: values.filter((v) => v < 60).length },
@@ -2158,12 +2254,30 @@ export const portalService = {
   async analyticsPerformanceRadar(scope: Scope, phaseId: string) {
     const phase = await phaseById(phaseId);
     const subjects = await subjectsBySemester(phase.semesterId);
-    const leaderboard = (await this.analyticsLeaderboard(scope, phaseId, undefined, 10)).data;
-    const bottomboard = (await this.analyticsLeaderboard(scope, phaseId, undefined, 1000)).data.slice(-10);
+    // Per-subject averages for the top-10 vs bottom-10 students (ranked by their overall
+    // phase average). The old version filled every axis with one overall number → flat polygon.
+    const results = await prisma.result.findMany({
+      where: { phaseId, isPublished: true, enrollment: { batchId: { in: scope.hodBatchIds }, isCurrent: true } },
+      include: { subject: { select: { code: true } } },
+    });
+    const byEnr = new Map<string, { sum: number; n: number }>();
+    for (const r of results) {
+      const pct = (r.marksObtained / r.maxMarks) * 100;
+      const e = byEnr.get(r.enrollmentId) ?? { sum: 0, n: 0 };
+      e.sum += pct; e.n += 1;
+      byEnr.set(r.enrollmentId, e);
+    }
+    const ranked = [...byEnr.entries()].map(([id, v]) => ({ id, avg: v.sum / v.n })).sort((a, b) => b.avg - a.avg);
+    const topIds = new Set(ranked.slice(0, 10).map((r) => r.id));
+    const bottomIds = new Set(ranked.slice(-10).map((r) => r.id));
+    const perSubject = (ids: Set<string>, code: string) => {
+      const rs = results.filter((r) => ids.has(r.enrollmentId) && r.subject.code === code);
+      return rs.length === 0 ? 0 : average(rs.map((r) => (r.marksObtained / r.maxMarks) * 100));
+    };
     return {
       subjects: subjects.map((s) => s.code),
-      topAvg: Array.from({ length: subjects.length }, () => average(leaderboard.map((r) => r.avgPct))),
-      bottomAvg: Array.from({ length: subjects.length }, () => average(bottomboard.map((r) => r.avgPct))),
+      topAvg: subjects.map((s) => perSubject(topIds, s.code)),
+      bottomAvg: subjects.map((s) => perSubject(bottomIds, s.code)),
     };
   },
 
@@ -2880,14 +2994,17 @@ export const portalService = {
   },
 
   async studentTodayTimetable(studentId: string, universityId: string, semesterId?: string) {
-    const today = new Date();
-    const dayOfWeek = today.getDay();
+    // The calendar decides whether lectures run today. Non-working day → no lectures.
+    const dayStatus = await resolveDayStatus(universityId);
     const timetable = await this.studentTimetable(studentId, universityId, semesterId);
-    return {
-      date: today.toISOString().slice(0, 10),
-      dayLabel: DAY_LABELS[dayOfWeek] ?? "",
-      slots: timetable.slots.filter((s) => s.dayOfWeek === dayOfWeek).map((s) => ({ id: s.id, slotStart: s.slotStart, slotEnd: s.slotEnd, subject: { code: s.subject.code }, faculty: s.faculty, room: s.room })),
-    };
+    const slots = dayStatus.isWorkingDay
+      ? timetable.slots.filter((s) => s.dayOfWeek === dayStatus.dayOfWeek).map((s) => ({ id: s.id, slotStart: s.slotStart, slotEnd: s.slotEnd, subject: { code: s.subject.code }, faculty: s.faculty, room: s.room }))
+      : [];
+    return { date: dayStatus.date, dayLabel: dayStatus.dayLabel, dayStatus, slots };
+  },
+
+  async calendarDayStatus(universityId: string, dateStr?: string) {
+    return resolveDayStatus(universityId, dateStr);
   },
 
   async studentResults(studentId: string, universityId: string, semesterId?: string) {
@@ -2992,6 +3109,41 @@ export const portalService = {
       subject: { code: n.subject.code, name: n.subject.name }, releaseAt: n.releaseAt, createdAt: n.createdAt,
     }));
     return paginate(rows, Number(query.page ?? 1), Number(query.limit ?? 20));
+  },
+
+  async studentNoteDrive(studentId: string, universityId: string, query: Record<string, string | number | undefined>) {
+    const { enrollment, semester } = await getStudentEnrollment(studentId, universityId, query.semesterId as string | undefined);
+    const subjectId = String(query.subjectId ?? "");
+    if (!subjectId) throw new ApiError(400, "VALIDATION_ERROR", "subjectId is required.");
+    const allowedSubjects = await getStudentSubjectIds(studentId, universityId, semester.id);
+    if (!allowedSubjects.includes(subjectId)) throw new ApiError(403, "FORBIDDEN", "You do not have access to this subject.");
+    await this.ensureNotePhaseFolders(universityId, subjectId);
+    const parentId = query.parentId ? String(query.parentId) : null;
+    if (parentId) {
+      const parent = await prisma.noteFolder.findFirst({ where: { id: parentId, universityId, subjectId, deletedAt: null } });
+      if (!parent) throw new ApiError(404, "NOT_FOUND", "Folder not found.");
+    }
+    const [subject, folders, notes] = await Promise.all([
+      prisma.subject.findUnique({ where: { id: subjectId }, select: { id: true, code: true, name: true } }),
+      prisma.noteFolder.findMany({ where: { universityId, subjectId, parentId, deletedAt: null }, orderBy: [{ isSystem: "desc" }, { name: "asc" }] }),
+      prisma.note.findMany({ where: { universityId, subjectId, folderId: parentId, deletedAt: null, status: "PUBLISHED", targets: { some: { batchId: enrollment.batchId } }, ...(query.search ? { OR: [{ title: { contains: String(query.search), mode: "insensitive" } }, { description: { contains: String(query.search), mode: "insensitive" } }] } : {}) }, include: { faculty: { select: { name: true } }, flashcards: { select: { id: true } } }, orderBy: { releaseAt: "desc" } }),
+    ]);
+    const breadcrumbs: Array<{ id: string | null; name: string }> = [{ id: null, name: subject?.code ?? "Subject" }];
+    const chain: Array<{ id: string; name: string }> = [];
+    let cursor = parentId;
+    while (cursor) {
+      const folder = await prisma.noteFolder.findFirst({ where: { id: cursor, universityId, subjectId, deletedAt: null }, select: { id: true, name: true, parentId: true } });
+      if (!folder) break;
+      chain.unshift({ id: folder.id, name: folder.name });
+      cursor = folder.parentId;
+    }
+    breadcrumbs.push(...chain);
+    return {
+      subject,
+      breadcrumbs,
+      folders: folders.map((folder) => ({ id: folder.id, name: folder.name, parentId: folder.parentId, isSystem: folder.isSystem, createdAt: folder.createdAt })),
+      files: notes.map((note) => ({ id: note.id, title: note.title, description: note.description, originalFileName: note.originalFileName, mimeType: note.mimeType, fileSizeKb: note.fileSizeKb, fileUrl: note.fileUrl, folderId: note.folderId, hasFlashcards: note.flashcards.length > 0, hasAiSummary: Boolean(note.aiSummary), uploadedBy: note.faculty.name, releaseAt: note.releaseAt, createdAt: note.createdAt })),
+    };
   },
 
   async studentNote(studentId: string, universityId: string, noteId: string) {
@@ -3521,7 +3673,7 @@ export const portalService = {
     const faculty = await getFacultyUser(facultyId);
     const scope = await getFacultyScopeData(facultyId, universityId, semesterId);
     const enrollments = await getFacultyVisibleEnrollments(facultyId, universityId, semesterId);
-    const attendancePcts = await Promise.all(enrollments.map((e) => computeOverallAttendancePct(e.id)));
+    const attendancePcts = await overallAttendancePctBulkArr(enrollments);
     const unreadMenteeMessages = await prisma.chatMessage.count({ where: { mentorAssignment: { facultyId }, senderRole: "STUDENT", isRead: false } });
     const unreadAnnouncements = await prisma.announcement.count({ where: { universityId, deletedAt: null, facultyId: { not: facultyId }, OR: [{ scope: "ALL" }, { scope: "BATCH", scopeValue: { in: scope.assignedBatchIds } }] } });
     const pending = await this.facultyAttendancePending(facultyId, universityId, semesterId);
@@ -3597,18 +3749,19 @@ export const portalService = {
   },
 
   async facultyTodayTimetable(facultyId: string, universityId: string, semesterId?: string) {
-    const date = new Date();
-    const dayOfWeek = date.getDay();
-    const isoDate = date.toISOString().slice(0, 10);
+    const dayStatus = await resolveDayStatus(universityId);
+    const isoDate = dayStatus.date;
+    // Non-working day → no lectures to teach or mark.
+    if (!dayStatus.isWorkingDay) return { date: isoDate, dayLabel: dayStatus.dayLabel, dayStatus, slots: [] };
     const scope = await getFacultyScopeData(facultyId, universityId, semesterId);
-    const slots = await prisma.timetableSlot.findMany({ where: { facultyId, semesterId: scope.semester.id, dayOfWeek } });
+    const slots = await prisma.timetableSlot.findMany({ where: { facultyId, semesterId: scope.semester.id, dayOfWeek: dayStatus.dayOfWeek } });
     const mappedSlots = await Promise.all(slots.map(async (slot) => {
       const subject = await subjectById(slot.subjectId);
       const batch = await batchById(slot.batchId);
       const attendanceMarked = await prisma.attendanceRecord.findFirst({ where: { subjectId: slot.subjectId, enrollment: { batchId: slot.batchId }, lectureDate: new Date(isoDate), facultyId } });
       return { id: slot.id, slotStart: slot.slotStart, slotEnd: slot.slotEnd, subject: { code: subject.code }, batch: { code: batch.code }, attendanceMarked: Boolean(attendanceMarked) };
     }));
-    return { date: isoDate, dayLabel: DAY_LABELS[dayOfWeek] ?? "", slots: mappedSlots };
+    return { date: isoDate, dayLabel: dayStatus.dayLabel, dayStatus, slots: mappedSlots };
   },
 
   // ── Faculty — Students ────────────────────────────────────
@@ -3830,13 +3983,103 @@ export const portalService = {
 
   // ── Faculty — Notes ───────────────────────────────────────
 
+  async ensureNotePhaseFolders(universityId: string, subjectId: string) {
+    const subject = await prisma.subject.findFirst({ where: { id: subjectId, universityId, deletedAt: null }, select: { id: true } });
+    if (!subject) throw new ApiError(404, "NOT_FOUND", "Subject not found.");
+    const phases = ["T-1", "T-2", "T-3", "T-4"];
+    for (const name of phases) {
+      const exists = await prisma.noteFolder.findFirst({ where: { universityId, subjectId, parentId: null, name, deletedAt: null } });
+      if (!exists) await prisma.noteFolder.create({ data: { universityId, subjectId, name, isSystem: true } });
+    }
+  },
+
+  async facultyNoteDrive(facultyId: string, universityId: string, query: Record<string, string | number | undefined>) {
+    const subjectId = String(query.subjectId ?? "");
+    if (!subjectId) throw new ApiError(400, "VALIDATION_ERROR", "subjectId is required.");
+    const semester = await facultyActiveSemester(facultyId, universityId);
+    await ensureFacultyAssignedSubject(facultyId, universityId, subjectId, semester.id);
+    await this.ensureNotePhaseFolders(universityId, subjectId);
+    const parentId = query.parentId ? String(query.parentId) : null;
+    if (parentId) {
+      const parent = await prisma.noteFolder.findFirst({ where: { id: parentId, universityId, subjectId, deletedAt: null } });
+      if (!parent) throw new ApiError(404, "NOT_FOUND", "Folder not found.");
+    }
+    const [subject, folders, notes] = await Promise.all([
+      prisma.subject.findUnique({ where: { id: subjectId }, select: { id: true, code: true, name: true } }),
+      prisma.noteFolder.findMany({ where: { universityId, subjectId, parentId, deletedAt: null }, orderBy: [{ isSystem: "desc" }, { name: "asc" }] }),
+      prisma.note.findMany({ where: { universityId, facultyId, subjectId, folderId: parentId, deletedAt: null }, include: { _count: { select: { flashcards: true } } }, orderBy: { createdAt: "desc" } }),
+    ]);
+    const breadcrumbs: Array<{ id: string | null; name: string }> = [{ id: null, name: subject?.code ?? "Subject" }];
+    const chain: Array<{ id: string; name: string }> = [];
+    let cursor = parentId;
+    while (cursor) {
+      const folder = await prisma.noteFolder.findFirst({ where: { id: cursor, universityId, subjectId, deletedAt: null }, select: { id: true, name: true, parentId: true } });
+      if (!folder) break;
+      chain.unshift({ id: folder.id, name: folder.name });
+      cursor = folder.parentId;
+    }
+    breadcrumbs.push(...chain);
+    return {
+      subject,
+      breadcrumbs,
+      folders: folders.map((folder) => ({ id: folder.id, name: folder.name, parentId: folder.parentId, isSystem: folder.isSystem, createdAt: folder.createdAt })),
+      files: notes.map((note) => ({ id: note.id, title: note.title, description: note.description, originalFileName: note.originalFileName, mimeType: note.mimeType, fileSizeKb: note.fileSizeKb, fileUrl: note.fileUrl, folderId: note.folderId, status: note.status, releaseAt: note.releaseAt, hasFlashcards: note._count.flashcards > 0, hasAiSummary: Boolean(note.aiSummary), createdAt: note.createdAt })),
+    };
+  },
+
+  async createFacultyNoteFolder(facultyId: string, universityId: string, body: { subjectId: string; parentId?: string | null; name: string }) {
+    const semester = await facultyActiveSemester(facultyId, universityId);
+    await ensureFacultyAssignedSubject(facultyId, universityId, body.subjectId, semester.id);
+    const name = body.name.trim();
+    if (!name || name.length > 80) throw new ApiError(400, "VALIDATION_ERROR", "Folder name must be 1–80 characters.");
+    const parentId = body.parentId || null;
+    if (parentId) {
+      const parent = await prisma.noteFolder.findFirst({ where: { id: parentId, universityId, subjectId: body.subjectId, deletedAt: null } });
+      if (!parent) throw new ApiError(404, "NOT_FOUND", "Parent folder not found.");
+    }
+    const duplicate = await prisma.noteFolder.findFirst({ where: { universityId, subjectId: body.subjectId, parentId, name, deletedAt: null } });
+    if (duplicate) throw new ApiError(409, "DUPLICATE_FOLDER", "A folder with this name already exists here.");
+    return prisma.noteFolder.create({ data: { universityId, subjectId: body.subjectId, parentId, name, isSystem: false }, select: { id: true, name: true, parentId: true, isSystem: true, createdAt: true } });
+  },
+
+  async renameFacultyNoteFolder(facultyId: string, universityId: string, folderId: string, name: string) {
+    const folder = await prisma.noteFolder.findFirst({ where: { id: folderId, universityId, deletedAt: null } });
+    if (!folder) throw new ApiError(404, "NOT_FOUND", "Folder not found.");
+    const semester = await facultyActiveSemester(facultyId, universityId);
+    await ensureFacultyAssignedSubject(facultyId, universityId, folder.subjectId, semester.id);
+    if (folder.isSystem) throw new ApiError(400, "SYSTEM_FOLDER", "T-1 to T-4 folders cannot be renamed.");
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.length > 80) throw new ApiError(400, "VALIDATION_ERROR", "Folder name must be 1–80 characters.");
+    return prisma.noteFolder.update({ where: { id: folderId }, data: { name: trimmed }, select: { id: true, name: true, parentId: true, isSystem: true } });
+  },
+
+  async deleteFacultyNoteFolder(facultyId: string, universityId: string, folderId: string) {
+    const folder = await prisma.noteFolder.findFirst({ where: { id: folderId, universityId, deletedAt: null } });
+    if (!folder) throw new ApiError(404, "NOT_FOUND", "Folder not found.");
+    const semester = await facultyActiveSemester(facultyId, universityId);
+    await ensureFacultyAssignedSubject(facultyId, universityId, folder.subjectId, semester.id);
+    if (folder.isSystem) throw new ApiError(400, "SYSTEM_FOLDER", "T-1 to T-4 folders cannot be deleted.");
+    const [children, notes] = await Promise.all([prisma.noteFolder.count({ where: { parentId: folderId, deletedAt: null } }), prisma.note.count({ where: { folderId, deletedAt: null } })]);
+    if (children || notes) throw new ApiError(409, "FOLDER_NOT_EMPTY", "Move or delete the files and subfolders first.");
+    await prisma.noteFolder.update({ where: { id: folderId }, data: { deletedAt: new Date() } });
+  },
+
+  async validateFacultyNoteFolder(facultyId: string, universityId: string, subjectId: string, folderId?: string | null) {
+    if (!folderId) return null;
+    const folder = await prisma.noteFolder.findFirst({ where: { id: folderId, universityId, subjectId, deletedAt: null }, select: { id: true } });
+    if (!folder) throw new ApiError(400, "INVALID_FOLDER", "Folder does not belong to this subject.");
+    const semester = await facultyActiveSemester(facultyId, universityId);
+    await ensureFacultyAssignedSubject(facultyId, universityId, subjectId, semester.id);
+    return folder.id;
+  },
+
   async facultyNotes(facultyId: string, query: Record<string, string | number | undefined>) {
     const notes = await prisma.note.findMany({
       where: { facultyId, deletedAt: null, ...(query.subjectId ? { subjectId: query.subjectId as string } : {}) },
       include: { subject: { select: { code: true, name: true } }, targets: { include: { batch: { select: { code: true } } } }, _count: { select: { flashcards: true } } },
       orderBy: { createdAt: "desc" },
     });
-    const rows = notes.map((n) => ({ id: n.id, subject: n.subject, title: n.title, description: n.description, fileUrl: n.fileUrl, mimeType: n.mimeType, fileSize: n.fileSizeKb, fileType: n.mimeType, batchCodes: n.targets.map((target) => target.batch.code), status: n.status, releaseAt: n.releaseAt, aiSummaryStatus: n.aiSummary ? "complete" : "pending", hasFlashcards: n._count.flashcards > 0, createdAt: n.createdAt }));
+    const rows = notes.map((n) => ({ id: n.id, subject: n.subject, title: n.title, description: n.description, fileUrl: n.fileUrl, mimeType: n.mimeType, fileSize: n.fileSizeKb, fileType: n.mimeType, folderId: n.folderId, batchCodes: n.targets.map((target) => target.batch.code), status: n.status, releaseAt: n.releaseAt, aiSummaryStatus: n.aiSummary ? "complete" : "pending", hasFlashcards: n._count.flashcards > 0, createdAt: n.createdAt }));
     return paginate(rows, Number(query.page ?? 1), Number(query.limit ?? 20));
   },
 
@@ -3859,7 +4102,7 @@ export const portalService = {
     await uploadObject(fileKey, fileBuffer, mimeType);
     const note = await prisma.note.create({
       data: {
-        subjectId, facultyId, universityId, title: String(body.title), description: body.description ?? null,
+        subjectId, facultyId, universityId, folderId: await this.validateFacultyNoteFolder(facultyId, universityId, subjectId, body.folderId), title: String(body.title), description: body.description ?? null,
         fileUrl: objectUrl(fileKey), fileKey, originalFileName: fileMeta.originalname ?? null,
         mimeType, fileSizeKb: Math.round((fileMeta.size ?? fileBuffer.length) / 1024),
         status, releaseAt, targets: { create: batchIds.map((batchId) => ({ batchId })) },
@@ -3875,6 +4118,7 @@ export const portalService = {
     if (!note) throw new ApiError(404, "NOT_FOUND", "Note not found.");
     // Reschedule/replace only allowed while still SCHEDULED — a published note can't be un-published.
     const data: Record<string, unknown> = { title: body.title ?? note.title, description: body.description ?? note.description };
+    if (body.folderId !== undefined) data.folderId = await this.validateFacultyNoteFolder(facultyId, note.universityId, note.subjectId, body.folderId);
     if (fileBuffer) {
       const mimeType = fileMeta.mimetype ?? note.mimeType;
       const fileKey = `notes/${note.universityId}/${facultyId}/${Date.now()}-${(fileMeta.originalname ?? "file").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
@@ -4318,19 +4562,21 @@ export const portalService = {
   },
 
   async facultyAnalyticsAttendance(facultyId: string, universityId: string, semesterId?: string, subjectId?: string, batchId?: string) {
-    const summaryBase = (await this.facultyAttendanceSummary(facultyId, universityId, semesterId)).bySubjectAndBatch;
-    const [subjectCode, batchCode] = await Promise.all([
-      subjectId ? prisma.subject.findUnique({ where: { id: subjectId }, select: { code: true } }).then((subject) => subject?.code ?? null) : Promise.resolve(null),
-      batchId ? prisma.batch.findUnique({ where: { id: batchId }, select: { code: true } }).then((batch) => batch?.code ?? null) : Promise.resolve(null),
-    ]);
-    const summary = summaryBase
-      .filter((row) => !subjectCode || row.subjectCode === subjectCode)
-      .filter((row) => !batchCode || row.batchCode === batchCode);
-    const labels = ["Week 1", "Week 2", "Week 3", "Week 4"];
+    const full = await this.facultyAttendanceSummary(facultyId, universityId, semesterId);
+    const subjCode = subjectId ? (await prisma.subject.findUnique({ where: { id: subjectId }, select: { code: true } }))?.code : undefined;
+    const batchCode = batchId ? (await prisma.batch.findUnique({ where: { id: batchId }, select: { code: true } }))?.code : undefined;
+    const summary = full.bySubjectAndBatch
+      .filter((r) => !subjCode || r.subjectCode === subjCode)
+      .filter((r) => !batchCode || r.batchCode === batchCode);
+    // Real weekly attendance from the summary (was a flat, identical value per week).
+    const weekly = full.weekly ?? [];
     return {
       overview: { avgAttendancePct: average(summary.map((s) => s.avgAttendancePct)), belowThresholdCount: summary.reduce((s, r) => s + r.belowThresholdCount, 0), totalLecturesDelivered: summary.reduce((s, r) => s + r.totalLecturesMarked, 0) },
       bySubjectBatch: summary,
-      trend: { labels, data: Array.from({ length: labels.length }, () => average(summary.map((s) => s.avgAttendancePct))) },
+      trend: {
+        labels: weekly.length ? weekly.map((_w, i) => `Week ${i + 1}`) : ["Week 1"],
+        data: weekly.length ? weekly.map((w) => w.pct) : [average(summary.map((s) => s.avgAttendancePct))],
+      },
     };
   },
 
@@ -5858,7 +6104,9 @@ export const portalService = {
     const now = new Date();
     const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const daysDelta = Math.round((today.getTime() - day.getTime()) / 86400000);
-    const isEditable = daysDelta >= 0 && daysDelta <= 7;
+    // Calendar gate: attendance is only allowed on working days (overrides the edit window).
+    const dayStatus = await resolveDayStatus(universityId, dateStr);
+    const isEditable = dayStatus.isWorkingDay && daysDelta >= 0 && daysDelta <= 7;
 
     // Subject-swap suggestions: any subject in the same semester, in case of proxy
     const allSubjects = (await subjectsBySemester(activeSem.id)).map((s) => ({ id: s.id, code: s.code, name: s.name }));
@@ -5868,6 +6116,7 @@ export const portalService = {
       date: day.toISOString().slice(0, 10),
       dayOfWeek,
       isEditable,
+      dayStatus,
       daysDelta,
       lectures: slots.map((s) => ({
         slotId: s.id,
@@ -5902,6 +6151,9 @@ export const portalService = {
     const daysDelta = Math.round((today.getTime() - day.getTime()) / 86400000);
     if (daysDelta < 0) throw new ApiError(400, "FUTURE_DATE", "Cannot mark future attendance.");
     if (daysDelta > 7) throw new ApiError(403, "EDIT_WINDOW_EXPIRED", "Attendance older than 7 days cannot be edited.");
+    // Calendar gate: no attendance on holidays, reading holidays, semester breaks or Sundays.
+    const dayStatus = await resolveDayStatus(universityId, body.date);
+    if (!dayStatus.isWorkingDay) throw new ApiError(409, "NON_WORKING_DAY", `Attendance is disabled — ${dayStatus.reason ?? dayStatus.status}.`);
 
     // resolve the batch's own active semester (multiple year levels active at once)
     const batch = await batchById(body.batchId);

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
@@ -84,6 +85,8 @@ export default function ResultsPage() {
   const enteredCount = allRows.filter((r) => r.marksObtained != null).length
   const q = search.trim().toLowerCase()
   const rows = q ? allRows.filter((r) => r.name.toLowerCase().includes(q) || r.enrollmentNo.toLowerCase().includes(q)) : allRows
+  const sort = useTableSort(rows)
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
 
   return (
     <PageShell
@@ -151,12 +154,12 @@ export default function ResultsPage() {
                   </div>
                 </div>
                 <Table>
-                  <thead><tr><Th>Student</Th><Th>Marks</Th><Th>Grade</Th><Th>Status</Th><Th /></tr></thead>
+                  <thead><tr><Th sortKey="name" {...th}>Student</Th><Th sortKey="marksObtained" {...th}>Marks</Th><Th sortKey="grade" {...th}>Grade</Th><Th sortKey="status" {...th}>Status</Th><Th /></tr></thead>
                   <tbody>
                     {rows.length === 0 && (
                       <Tr><Td colSpan={5} className="py-6 text-center text-text-muted">No students match “{search}”.</Td></Tr>
                     )}
-                    {rows.map((r) => (
+                    {sort.rows.map((r) => (
                       <Tr key={r.enrollmentNo}>
                         <Td>
                           <div className="font-medium">{r.name}</div>

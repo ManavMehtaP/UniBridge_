@@ -38,6 +38,7 @@ export const facultyApi = {
   attendanceDay: (batchId: string, date: string) =>
     api.get<{
       date: string; dayOfWeek: number; isEditable: boolean; daysDelta: number;
+      dayStatus?: { isWorkingDay: boolean; status: string; reason: string | null };
       lectures: { slotId: string; subjectId: string; subjectCode: string; subjectName: string; slotStart: string; slotEnd: string; room?: string | null }[];
       students: { enrollmentId: string; rollNo: string; name: string; enrollmentNo: string }[];
       marks: Record<string, boolean>;
@@ -70,6 +71,10 @@ export const facultyApi = {
 
   notes: (params: Params) =>
     api.get<PaginatedResponse<T.FacultyNote>>('/faculty/notes', { params }).then((r) => r.data),
+  noteDrive: (params: Params) => api.get<T.FacultyNoteDrive>('/faculty/notes/folders', { params }).then((r) => r.data),
+  createNoteFolder: (body: { subjectId: string; parentId?: string | null; name: string }) => api.post('/faculty/notes/folders', body).then((r) => r.data),
+  renameNoteFolder: (id: string, name: string) => api.patch(`/faculty/notes/folders/${id}`, { name }).then((r) => r.data),
+  deleteNoteFolder: (id: string) => api.delete(`/faculty/notes/folders/${id}`).then((r) => r.data),
   // Multipart: file + fields (title, subjectId, batchIds, releaseAt). Backend uploads to Supabase S3.
   createNote: (form: FormData) => api.post('/faculty/notes', form).then((r) => r.data),
   updateNote: (id: string, form: FormData) => api.put(`/faculty/notes/${id}`, form).then((r) => r.data),

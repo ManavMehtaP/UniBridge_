@@ -159,16 +159,24 @@ export default function FacultyAttendancePage() {
       <FilterBar>
         <Select className="w-52" value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Select batch" options={batchOpts} />
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-10 rounded-sm border border-border bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10" />
-        {day.data && !day.data.isEditable && (
+        {day.data?.dayStatus && !day.data.dayStatus.isWorkingDay ? (
+          <Badge tone="warning" dot>{day.data.dayStatus.reason ?? day.data.dayStatus.status}</Badge>
+        ) : day.data && !day.data.isEditable ? (
           <Badge tone="danger" dot>Read-only (over 7 days old)</Badge>
-        )}
-        {day.data?.daysDelta === 0 && <Badge tone="primary" dot>Today</Badge>}
+        ) : null}
+        {day.data?.daysDelta === 0 && day.data?.dayStatus?.isWorkingDay && <Badge tone="primary" dot>Today</Badge>}
       </FilterBar>
 
       {!batchId ? (
         <EmptyState title="Pick a batch" description="Choose a batch and date to load lectures." />
       ) : day.isLoading ? (
         <CardSkeleton height={400} />
+      ) : day.data?.dayStatus && !day.data.dayStatus.isWorkingDay ? (
+        <EmptyState
+          icon={<AlertTriangle size={22} />}
+          title={`No attendance — ${day.data.dayStatus.reason ?? day.data.dayStatus.status}`}
+          description="The academic calendar marks this as a non-working day, so attendance is disabled. Change the date or update the calendar in HOD → Calendar."
+        />
       ) : day.data && day.data.lectures.length === 0 ? (
         <EmptyState
           icon={<AlertTriangle size={22} />}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
@@ -96,6 +97,9 @@ export default function AttendancePage() {
 
   const s = summary.data
 
+  const sort = useTableSort(table.data?.data ?? [])
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
+
   return (
     <PageShell
       title="Attendance"
@@ -184,15 +188,15 @@ export default function AttendancePage() {
               <Table>
                 <thead>
                   <tr>
-                    <Th>Student</Th>
+                    <Th sortKey="name" {...th}>Student</Th>
                     {tableCols.map((c) => <Th key={c}>{c}</Th>)}
-                    <Th>Avg</Th>
-                    <Th>Status</Th>
+                    <Th sortKey="avgPct" {...th}>Avg</Th>
+                    <Th sortKey="status" {...th}>Status</Th>
                     <Th className="text-right">Lock</Th>
                   </tr>
                 </thead>
                 <tbody>
-                  {table.data?.data.map((r) => (
+                  {sort.rows.map((r) => (
                     <Tr key={r.enrollmentNo}>
                       <Td>
                         <div className="font-medium">{r.name}</div>

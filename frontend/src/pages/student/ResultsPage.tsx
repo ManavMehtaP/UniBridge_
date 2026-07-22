@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { studentApi } from '@/api/student'
 import type { StudentResult } from '@/types/student'
 import { PageShell } from '@/components/shared/PageShell'
@@ -34,6 +35,9 @@ export default function StudentResultsPage() {
     value: Math.round(results.reduce((s, r) => s + (r.marksObtained / r.maxMarks) * 100, 0) / results.length),
   }))
 
+  const sort = useTableSort(rows)
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
+
   return (
     <PageShell title="Results" subtitle="Your published exam results">
       <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-4">
@@ -66,15 +70,15 @@ export default function StudentResultsPage() {
           <Table>
             <thead>
               <tr>
-                <Th>Phase</Th>
-                <Th>Subject</Th>
-                <Th>Marks</Th>
-                <Th>Grade</Th>
+                <Th sortKey="phase" {...th}>Phase</Th>
+                <Th sortKey="subjectName" {...th}>Subject</Th>
+                <Th sortKey="marksObtained" {...th}>Marks</Th>
+                <Th sortKey="grade" {...th}>Grade</Th>
                 <Th>Result</Th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r, i) => {
+              {sort.rows.map((r, i) => {
                 const pct = (r.marksObtained / r.maxMarks) * 100
                 const passed = pct >= 40
                 return (

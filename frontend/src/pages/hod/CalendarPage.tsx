@@ -19,15 +19,17 @@ import { Textarea } from '@/components/ui/Textarea'
 import { format } from 'date-fns'
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-const TYPES = ['HOLIDAY', 'READING_HOLIDAY', 'EXAM', 'CULTURAL', 'PHASE', 'OTHER']
-const TYPE_LABEL: Record<string, string> = { HOLIDAY: 'Holiday', READING_HOLIDAY: 'Reading Holiday', EXAM: 'Exam', CULTURAL: 'Cultural', PHASE: 'Phase', OTHER: 'Other' }
+const TYPES = ['HOLIDAY', 'PUBLIC_HOLIDAY', 'READING_HOLIDAY', 'SEMESTER_BREAK', 'EXAM', 'CULTURAL', 'ACTIVITY', 'PHASE', 'OTHER']
+const TYPE_LABEL: Record<string, string> = { HOLIDAY: 'Holiday', PUBLIC_HOLIDAY: 'Public Holiday', READING_HOLIDAY: 'Reading Holiday', SEMESTER_BREAK: 'Semester Break', EXAM: 'Exam', CULTURAL: 'Cultural', ACTIVITY: 'Activity', PHASE: 'Phase', OTHER: 'Other' }
+// Types that make a day non-working (attendance disabled, timetable hidden).
+const NON_WORKING_TYPES = new Set(['HOLIDAY', 'PUBLIC_HOLIDAY', 'READING_HOLIDAY', 'SEMESTER_BREAK'])
 const LEGEND = [
-  { key: 'LECTURE', label: 'Lecture', cls: 'bg-primary' },
-  { key: 'HOLIDAY', label: 'Holiday', cls: 'bg-danger' },
+  { key: 'HOLIDAY', label: 'Holiday', cls: 'bg-success' },
+  { key: 'PUBLIC_HOLIDAY', label: 'Public Holiday', cls: 'bg-danger' },
   { key: 'READING_HOLIDAY', label: 'Reading Holiday', cls: 'bg-teal' },
+  { key: 'SEMESTER_BREAK', label: 'Semester Break', cls: 'bg-purple' },
   { key: 'EXAM', label: 'Exam', cls: 'bg-warning' },
-  { key: 'CULTURAL', label: 'Cultural', cls: 'bg-purple' },
-  { key: 'PHASE', label: 'Phase', cls: 'bg-primary' },
+  { key: 'ACTIVITY', label: 'Activity', cls: 'bg-primary' },
 ]
 
 export default function CalendarPage() {
@@ -188,6 +190,7 @@ export default function CalendarPage() {
               </Labeled>
               <Labeled label="Type">
                 <Select value={editing.type ?? 'OTHER'} onChange={(e) => setEditing((s) => ({ ...s, type: e.target.value as HodCalendarEvent['type'] }))} options={TYPES.map((t) => ({ value: t, label: TYPE_LABEL[t] }))} />
+                {NON_WORKING_TYPES.has(editing.type ?? '') && <p className="mt-1 text-[10px] font-medium text-warning">Disables attendance &amp; hides the timetable on this day</p>}
               </Labeled>
             </div>
             {editing.type === 'EXAM' && (

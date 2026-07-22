@@ -29,6 +29,7 @@ export const studentApi = {
   attendanceLog: (subjectId: string) => api.get(`/student/attendance/${subjectId}/log`).then((r) => r.data),
 
   notes: (params?: Params) => api.get<T.PaginatedNotes>('/student/notes', { params }).then((r) => r.data),
+  noteDrive: (params: Params) => api.get<T.StudentNoteDrive>('/student/notes/folders', { params }).then((r) => r.data),
   note: (id: string) => api.get(`/student/notes/${id}`).then((r) => r.data),
   noteFlashcards: (id: string) => api.get(`/student/notes/${id}/flashcards`).then((r) => r.data),
   noteDownloadUrl: (id: string) => `${api.defaults.baseURL}/student/notes/${id}/download`,

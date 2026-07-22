@@ -228,12 +228,29 @@ facultyRouter.delete("/notes/:noteId/flashcards/:flashcardId", asyncHandler(asyn
   res.status(204).send();
 }));
 
+facultyRouter.get("/notes/folders", asyncHandler(async (req, res) => {
+  res.json(await portalService.facultyNoteDrive(req.user!.id, req.user!.universityId, req.query as Record<string, string | number | undefined>));
+}));
+
 facultyRouter.get("/notes/:noteId", asyncHandler(async (req, res) => {
   res.json(await portalService.getFacultyNote(req.user!.id, str(req.params.noteId)));
 }));
 
 facultyRouter.get("/notes", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyNotes(req.user!.id, req.query as Record<string, string | number | undefined>));
+}));
+
+facultyRouter.post("/notes/folders", asyncHandler(async (req, res) => {
+  res.status(201).json(await portalService.createFacultyNoteFolder(req.user!.id, req.user!.universityId, req.body));
+}));
+
+facultyRouter.patch("/notes/folders/:folderId", asyncHandler(async (req, res) => {
+  res.json(await portalService.renameFacultyNoteFolder(req.user!.id, req.user!.universityId, str(req.params.folderId), String(req.body.name ?? "")));
+}));
+
+facultyRouter.delete("/notes/folders/:folderId", asyncHandler(async (req, res) => {
+  await portalService.deleteFacultyNoteFolder(req.user!.id, req.user!.universityId, str(req.params.folderId));
+  res.status(204).send();
 }));
 
 // Browser posts the file (multipart); backend uploads bytes to Supabase S3 and stores metadata.
@@ -432,6 +449,10 @@ facultyRouter.get("/results/leaderboard", asyncHandler(async (req, res) => {
 
 facultyRouter.get("/results", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyResults(req.user!.id, req.user!.universityId, req.query as Record<string, string | number | undefined>));
+}));
+
+facultyRouter.get("/calendar/today", asyncHandler(async (req, res) => {
+  res.json(await portalService.calendarDayStatus(req.user!.universityId, req.query.date as string | undefined));
 }));
 
 facultyRouter.get("/calendar/events/upcoming", asyncHandler(async (req, res) => {

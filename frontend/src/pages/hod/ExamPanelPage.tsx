@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useTableSort } from '@/hooks/shared/useTableSort'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { Rocket, ShieldCheck, UserCheck, X } from 'lucide-react'
@@ -59,6 +60,8 @@ export default function ExamPanelPage() {
   })
 
   const rows = tracking.data?.data ?? []
+  const sort = useTableSort(rows)
+  const th = { activeKey: sort.sortKey, dir: sort.sortDir, onSort: sort.onSort }
   const phaseRows = rows.filter((a) => a.phaseId === publishPhase)
   const phaseComplete = phaseRows.length > 0 && phaseRows.every((a) => a.status === 'Complete' || a.status === 'Published')
 
@@ -104,10 +107,10 @@ export default function ExamPanelPage() {
         ) : (
           <Table>
             <thead><tr>
-              <Th>Phase</Th><Th>Subject</Th><Th>Enrollment Range</Th><Th>Checker</Th><Th>Progress</Th><Th>Status</Th>
+              <Th sortKey="phaseLabel" {...th}>Phase</Th><Th sortKey="subjectCode" {...th}>Subject</Th><Th sortKey="fromEnrollmentNo" {...th}>Enrollment Range</Th><Th sortKey="facultyName" {...th}>Checker</Th><Th sortKey="markedCount" {...th}>Progress</Th><Th sortKey="status" {...th}>Status</Th>
             </tr></thead>
             <tbody>
-              {rows.map((a) => (
+              {sort.rows.map((a) => (
                 <Tr key={a.id}>
                   <Td>{a.phaseLabel}</Td>
                   <Td className="font-medium">{a.subjectCode}</Td>
