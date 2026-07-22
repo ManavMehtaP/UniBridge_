@@ -6,10 +6,10 @@ from django.utils import timezone
 
 from student_ai.models import AIDocument, PYQAnalysis, PYQFile, PYQInsight, PYQQuestion, Semester
 from student_ai.services.chunk_service import build_semantic_chunks
-from student_ai.services.documents import extract_text, file_hash
+from student_ai.services.documents import file_hash
 from student_ai.services.embedding_service import EmbeddingService
 from student_ai.services.gemini_service import GeminiDocumentService, normalize_list
-from student_ai.services.ingestion_service import resolve_local_path
+from student_ai.services.ingestion_service import extract_document_text, resolve_local_path
 from student_ai.models import AIDocumentChunk, AIDocumentMetadata
 
 
@@ -32,7 +32,7 @@ def process_pyq_document(pyq_file: PYQFile) -> dict:
         },
     )
     try:
-        extracted = extract_text(path).strip()
+        extracted = extract_document_text(path, "application/pdf").strip()
         if not extracted:
             raise ValueError("PYQ document has no extractable text.")
         parsed = _extract_questions(pyq_file, extracted)

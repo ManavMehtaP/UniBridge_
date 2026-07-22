@@ -23,7 +23,7 @@ class SharedAIService:
         self.max_retries = int(os.getenv("AI_MAX_RETRIES", "3"))
         self.retry_backoff = int(os.getenv("AI_RETRY_BACKOFF_SECONDS", "2"))
 
-    def chat(self, messages: list[dict[str, str]], *, temperature: float = 0.2, response_format: dict[str, Any] | None = None) -> dict[str, Any]:
+    def chat(self, messages: list[dict[str, Any]], *, temperature: float = 0.2, response_format: dict[str, Any] | None = None) -> dict[str, Any]:
         if not self.api_key:
             raise AIServiceError("FREELLMAPI_API_KEY is not configured.")
 

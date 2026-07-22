@@ -13,6 +13,8 @@ from student_ai.services.documents import extract_text, file_hash
 from student_ai.services.embedding_service import EmbeddingService
 from student_ai.services.gemini_service import GeminiDocumentService, normalize_list
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+
 
 def resolve_local_path(file_url: str, file_key: str) -> str | Path:
     parsed = urlparse(file_url or "")
@@ -43,7 +45,7 @@ def process_note_document(note: Note) -> dict:
         },
     )
     try:
-        extracted = extract_text(path).strip()
+        extracted = extract_document_text(path, note.mime_type).strip()
         if not extracted:
             raise ValueError("Document has no extractable text.")
         structured = _extract_note_structure(note, extracted)
@@ -113,6 +115,13 @@ def _extract_note_structure(note: Note, extracted: str) -> dict:
     )
     parsed = GeminiDocumentService().json_chat(system, user, fallback=fallback)
     return {**fallback, **parsed}
+
+
+def extract_document_text(path: str | Path, mime_type: str | None = None) -> str:
+    suffix = Path(str(path)).suffix.lower()
+    if (mime_type or "").lower().startswith("image/") or suffix in IMAGE_EXTENSIONS:
+        return GeminiDocumentService().extract_image_text(path, mime_type=mime_type)
+    return extract_text(path)
 
 
 def _store_metadata(document: AIDocument, note: Note, structured: dict) -> None:

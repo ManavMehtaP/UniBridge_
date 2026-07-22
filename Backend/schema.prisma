@@ -53,6 +53,9 @@ enum AnnouncementScope {
 
 enum EventType {
   HOLIDAY
+  PUBLIC_HOLIDAY
+  SEMESTER_BREAK
+  ACTIVITY
   READING_HOLIDAY // study/reading day before exams
   EXAM
   CULTURAL
@@ -1366,9 +1369,9 @@ model StudentAIJob {
 
 model DjangoMigration {
   id      BigInt   @id @default(autoincrement())
-  app     String
-  name    String
-  applied DateTime
+  app     String   @db.VarChar(255)
+  name    String   @db.VarChar(255)
+  applied DateTime @db.Timestamptz(6)
 
   @@ignore
   @@map("django_migrations")
@@ -1402,6 +1405,89 @@ model DjangoAuthPermission {
 //     HOD saves mappings incrementally across steps.
 //     status = EXECUTED after POST /hod/promotion/execute runs.
 // ─────────────────────────────────────────────────────────────
+
+model auth_group {
+  id   Int    @id @default(autoincrement())
+  name String @unique @db.VarChar(150)
+
+  @@index([name], map: "auth_group_name_a6ea08ec_like")
+  @@ignore
+}
+
+model auth_group_permissions {
+  id            BigInt @id @default(autoincrement())
+  group_id      Int
+  permission_id Int
+
+  @@unique([group_id, permission_id], map: "auth_group_permissions_group_id_permission_id_0cd325b0_uniq")
+  @@index([group_id], map: "auth_group_permissions_group_id_b120cbf9")
+  @@index([permission_id], map: "auth_group_permissions_permission_id_84c5c92e")
+  @@ignore
+}
+
+model auth_user {
+  id           Int       @id @default(autoincrement())
+  password     String    @db.VarChar(128)
+  last_login   DateTime? @db.Timestamptz(6)
+  is_superuser Boolean
+  username     String    @unique @db.VarChar(150)
+  first_name   String    @db.VarChar(150)
+  last_name    String    @db.VarChar(150)
+  email        String    @db.VarChar(254)
+  is_staff     Boolean
+  is_active    Boolean
+  date_joined  DateTime  @db.Timestamptz(6)
+
+  @@index([username], map: "auth_user_username_6821ab7c_like")
+  @@ignore
+}
+
+model auth_user_groups {
+  id       BigInt @id @default(autoincrement())
+  user_id  Int
+  group_id Int
+
+  @@unique([user_id, group_id], map: "auth_user_groups_user_id_group_id_94350c0c_uniq")
+  @@index([group_id], map: "auth_user_groups_group_id_97559544")
+  @@index([user_id], map: "auth_user_groups_user_id_6a12ed8b")
+  @@ignore
+}
+
+model auth_user_user_permissions {
+  id            BigInt @id @default(autoincrement())
+  user_id       Int
+  permission_id Int
+
+  @@unique([user_id, permission_id], map: "auth_user_user_permissions_user_id_permission_id_14a6b632_uniq")
+  @@index([permission_id], map: "auth_user_user_permissions_permission_id_1fbb5f2c")
+  @@index([user_id], map: "auth_user_user_permissions_user_id_a95ead1b")
+  @@ignore
+}
+
+model django_admin_log {
+  id              Int      @id @default(autoincrement())
+  action_time     DateTime @db.Timestamptz(6)
+  object_id       String?
+  object_repr     String   @db.VarChar(200)
+  action_flag     Int      @db.SmallInt
+  change_message  String
+  content_type_id Int?
+  user_id         Int
+
+  @@index([content_type_id], map: "django_admin_log_content_type_id_c4bce8eb")
+  @@index([user_id], map: "django_admin_log_user_id_c564eba6")
+  @@ignore
+}
+
+model django_session {
+  session_key  String   @id @db.VarChar(40)
+  session_data String
+  expire_date  DateTime @db.Timestamptz(6)
+
+  @@index([expire_date], map: "django_session_expire_date_a5c62663")
+  @@index([session_key], map: "django_session_session_key_c0390e0f_like")
+  @@ignore
+}
 
 model PromotionDraft {
   id                 String               @id @default(uuid()) @db.Uuid

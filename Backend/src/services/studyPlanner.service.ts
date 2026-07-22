@@ -48,7 +48,7 @@ function nearestExamDate(semester: { endDate: Date }, phases: PhaseWindow[]) {
   const today = startOfDay(new Date());
   const future = phases
     .map((phase) => phase.examDate)
-    .filter((examDate): examDate is Date => Boolean(examDate) && startOfDay(examDate) >= today)
+    .filter((examDate): examDate is Date => examDate !== null && startOfDay(examDate) >= today)
     .sort((a, b) => a.getTime() - b.getTime());
   if (future[0]) return startOfDay(future[0]);
   const semesterEnd = startOfDay(semester.endDate);

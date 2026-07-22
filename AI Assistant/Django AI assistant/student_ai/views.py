@@ -184,11 +184,11 @@ class NoteInsightView(StudentContextMixin, APIView):
         student = self.get_student(request)
         note = Note.objects.get(pk=note_id)
         insight = NoteInsight.objects.filter(note=note).select_related("note").prefetch_related("note__flashcards").first()
-        if insight:
+        if insight and insight.status == "completed":
             return self.success("Note insight fetched.", NoteInsightSerializer(insight).data)
         job = create_job("note_generation", {"note_id": note_id}, university_id=str(student.university_id), student_id=str(student.id))
         submit_job(job, generate_note_insight, note)
-        return self.success("Note processing queued.", {"note_id": note_id, "job_id": str(job.id), "status": "queued"}, status.HTTP_202_ACCEPTED)
+        return self.success("Note processing queued.", {"note_id": note_id, "job_id": str(job.id), "status": "queued", "previous_status": insight.status if insight else None}, status.HTTP_202_ACCEPTED)
 
 
 class StudyPlanListCreateView(StudentContextMixin, APIView):
