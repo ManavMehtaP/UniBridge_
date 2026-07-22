@@ -61,6 +61,19 @@ def _to_30_scale(percentage: float) -> float:
     return round((percentage / 100.0) * 30.0, 2)
 
 
+def _phase_key(result: Result) -> str:
+    label = (result.phase.label or "").upper().replace("-", "").replace(" ", "")
+    if label in {"T1", "TEST1", "PHASE1"} or result.phase.number == 1:
+        return "T1"
+    if label in {"T2", "TEST2", "PHASE2"} or result.phase.number == 2:
+        return "T2"
+    if label in {"T3", "TEST3", "PHASE3"} or result.phase.number == 3:
+        return "T3"
+    if label in {"T4", "TEST4", "PHASE4"} or result.phase.number == 4:
+        return "T4"
+    return label
+
+
 def predict_student_next_semester_marks(student_id: str) -> Optional[dict]:
     student = Student.objects.filter(pk=student_id).first()
     if not student:
@@ -81,7 +94,7 @@ def predict_student_next_semester_marks(student_id: str) -> Optional[dict]:
     predictions: list[dict] = []
     for group in grouped.values():
         first = group[0]
-        tests = {item.phase.label.upper(): float(item.marks_obtained) for item in group}
+        tests = {_phase_key(item): float(item.marks_obtained) for item in group}
         if "T4" in tests or not all(name in tests for name in ("T1", "T2", "T3")):
             continue
 

@@ -38,8 +38,6 @@ class StudentContextMixin:
         student_id = request.headers.get("X-Student-Id") or getattr(request.user, "student_id", None)
         if not student_id:
             raise Http404("Student context missing.")
-        print("Student ID:", student_id)
-        print("Type:", type(student_id))
         return Student.objects.get(pk=student_id)
 
     def success(self, message: str, data: dict | list, status_code: int = status.HTTP_200_OK) -> Response:
@@ -133,13 +131,28 @@ class ChatMessageView(StudentContextMixin, APIView):
         serializer.is_valid(raise_exception=True)
         user_message = serializer.validated_data["message"]
         student_context = get_student_context(session.student)
-        retrieval_text, sources = build_chat_sources(session.student, session.subject)
+        retrieval_text, sources = build_chat_sources(session.student, session.subject, user_message)
         messages = list(session.conversation.messages or [])
         messages.append({"role": "user", "content": user_message})
+        if session.subject:
+            assistant_rules = (
+                "You are UniBridge student AI assistant for a subject chat. "
+                "Answer only using the supplied university context and retrieved document chunks. "
+                "If the context is insufficient, say exactly what is missing and do not invent syllabus, PYQ, marks, or faculty note details. "
+                "When possible, mention the source title and chapter/unit/page from the context. "
+                "Keep explanations simple, educational, and organized in Markdown."
+            )
+        else:
+            assistant_rules = (
+                "You are UniBridge student AI assistant in general chat mode. "
+                "Answer the student's question directly and clearly. Use student context when relevant, "
+                "but do not pretend that a subject, syllabus, PYQ, or faculty note exists unless it is present in context. "
+                "Use clean Markdown and keep the answer concise."
+            )
         prompt = [
             {
                 "role": "system",
-                "content": "You are UniBridge student AI assistant. Answer for students only. Prefer university context over general knowledge.",
+                "content": assistant_rules,
             },
             {
                 "role": "system",
@@ -150,7 +163,8 @@ class ChatMessageView(StudentContextMixin, APIView):
         try:
             ai_result = SharedAIService().chat(prompt)
         except AIServiceError as exc:
-            return self.error("Unable to process request.", "AI_SERVICE_ERROR", str(exc), status.HTTP_502_BAD_GATEWAY)
+            status_code = getattr(exc, "status_code", status.HTTP_502_BAD_GATEWAY)
+            return self.error("Unable to process request.", "AI_SERVICE_ERROR", str(exc), status_code)
         messages.append({"role": "assistant", "content": ai_result["reply"]})
         session.conversation.messages = messages
         session.conversation.save(update_fields=["messages", "updated_at"])
@@ -169,11 +183,11 @@ class NoteInsightView(StudentContextMixin, APIView):
         student = self.get_student(request)
         note = Note.objects.get(pk=note_id)
         insight = NoteInsight.objects.filter(note=note).select_related("note").prefetch_related("note__flashcards").first()
-        if insight:
+        if insight and insight.status == "completed":
             return self.success("Note insight fetched.", NoteInsightSerializer(insight).data)
         job = create_job("note_generation", {"note_id": note_id}, university_id=str(student.university_id), student_id=str(student.id))
         submit_job(job, generate_note_insight, note)
-        return self.success("Note processing queued.", {"note_id": note_id, "job_id": str(job.id), "status": "queued"}, status.HTTP_202_ACCEPTED)
+        return self.success("Note processing queued.", {"note_id": note_id, "job_id": str(job.id), "status": "queued", "previous_status": insight.status if insight else None}, status.HTTP_202_ACCEPTED)
 
 
 class StudyPlanListCreateView(StudentContextMixin, APIView):
@@ -287,7 +301,7 @@ class StudentMarksPredictionView(StudentContextMixin, APIView):
         student = self.get_student(request)
         result = predict_student_marks(student)
         if result is None:
-            return self.error("Prediction unavailable.", "INSUFFICIENT_MARKS_DATA", "Not enough marks data to generate a prediction.", status.HTTP_404_NOT_FOUND)
+            return self.error("Prediction unavailable.","INSUFFICIENT_MARKS_DATA","Not enough marks data to generate a prediction.",status.HTTP_200_OK)
         return self.success("Student prediction generated.", result)
 
 

@@ -178,6 +178,90 @@ class PYQAnalysis(PrismaMirrorModel):
         db_table = "pyq_analyses"
 
 
+class AIDocument(PrismaMirrorModel):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, db_column="subjectId", related_name="ai_documents")
+    note = models.OneToOneField(Note, on_delete=models.CASCADE, null=True, blank=True, db_column="noteId", related_name="ai_document")
+    pyq_file = models.OneToOneField(PYQFile, on_delete=models.CASCADE, null=True, blank=True, db_column="pyqFileId", related_name="ai_document")
+    uploaded_by_id = models.UUIDField(null=True, blank=True, db_column="uploadedById")
+    source_type = models.CharField(max_length=32, db_column="sourceType")
+    title = models.CharField(max_length=255)
+    original_file_url = models.CharField(max_length=500, db_column="originalFileUrl")
+    original_file_key = models.CharField(max_length=500, db_column="originalFileKey")
+    mime_type = models.CharField(max_length=255, null=True, blank=True, db_column="mimeType")
+    content_hash = models.CharField(max_length=128, db_column="contentHash")
+    processing_status = models.CharField(max_length=32, default="pending", db_column="processingStatus")
+    total_pages = models.IntegerField(default=0, db_column="totalPages")
+    total_chunks = models.IntegerField(default=0, db_column="totalChunks")
+    error_message = models.TextField(null=True, blank=True, db_column="errorMessage")
+    processed_at = models.DateTimeField(null=True, blank=True, db_column="processedAt")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="createdAt")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updatedAt")
+
+    class Meta(PrismaMirrorModel.Meta):
+        db_table = "ai_documents"
+
+
+class AIDocumentChunk(PrismaMirrorModel):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    document = models.ForeignKey(AIDocument, on_delete=models.CASCADE, db_column="documentId", related_name="chunks")
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, db_column="subjectId", related_name="ai_document_chunks")
+    chunk_index = models.IntegerField(db_column="chunkIndex")
+    unit_name = models.CharField(max_length=255, null=True, blank=True, db_column="unitName")
+    chapter_name = models.CharField(max_length=255, null=True, blank=True, db_column="chapterName")
+    page_number = models.IntegerField(null=True, blank=True, db_column="pageNumber")
+    content = models.TextField()
+    summary = models.TextField(blank=True)
+    keywords = models.JSONField(default=list)
+    embedding = models.JSONField(default=list)
+    token_count = models.IntegerField(default=0, db_column="tokenCount")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="createdAt")
+
+    class Meta(PrismaMirrorModel.Meta):
+        db_table = "ai_document_chunks"
+        ordering = ["chunk_index"]
+
+
+class AIDocumentMetadata(PrismaMirrorModel):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    document = models.OneToOneField(AIDocument, on_delete=models.CASCADE, db_column="documentId", related_name="metadata")
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, db_column="subjectId", related_name="ai_document_metadata")
+    units = models.JSONField(default=list)
+    chapter_count = models.IntegerField(default=0, db_column="chapterCount")
+    keywords = models.JSONField(default=list)
+    generated_summary = models.TextField(blank=True, db_column="generatedSummary")
+    prerequisites = models.JSONField(default=list)
+    tables = models.JSONField(default=list)
+    formulas = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="createdAt")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updatedAt")
+
+    class Meta(PrismaMirrorModel.Meta):
+        db_table = "ai_document_metadata"
+
+
+class PYQQuestion(PrismaMirrorModel):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, db_column="subjectId", related_name="pyq_questions")
+    pyq_file = models.ForeignKey(PYQFile, on_delete=models.CASCADE, null=True, blank=True, db_column="pyqFileId", related_name="questions")
+    document = models.ForeignKey(AIDocument, on_delete=models.SET_NULL, null=True, blank=True, db_column="documentId", related_name="questions")
+    year = models.CharField(max_length=50)
+    exam = models.CharField(max_length=100, null=True, blank=True)
+    unit = models.CharField(max_length=255, null=True, blank=True)
+    module = models.CharField(max_length=255, null=True, blank=True)
+    question = models.TextField()
+    marks = models.FloatField(null=True, blank=True)
+    question_type = models.CharField(max_length=100, null=True, blank=True, db_column="questionType")
+    difficulty = models.CharField(max_length=32, null=True, blank=True)
+    keywords = models.JSONField(default=list)
+    bloom_level = models.CharField(max_length=100, null=True, blank=True, db_column="bloomLevel")
+    page_number = models.IntegerField(null=True, blank=True, db_column="pageNumber")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="createdAt")
+
+    class Meta(PrismaMirrorModel.Meta):
+        db_table = "pyq_questions"
+
+
 class CalendarEvent(PrismaMirrorModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     university_id = models.UUIDField(db_column="universityId")

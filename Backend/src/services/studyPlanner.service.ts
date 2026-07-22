@@ -1,19 +1,20 @@
 import prisma from "../config/prisma.js";
 
-type RankedSubject = {
-  id: string;
-  code: string;
-  name: string;
-  averagePct: number;
-  weakTopics: string[];
-  syllabusUnits: string[];
-};
-
 type PhaseWindow = {
   number: number;
   startDate: Date;
   endDate: Date;
   examDate: Date | null;
+};
+
+type AcademicSubject = {
+  id: string;
+  code: string;
+  name: string;
+  lectureDays: number[];
+  lectureCount: number;
+  syllabusUnits: string[];
+  focusTopics: string[];
 };
 
 function startOfDay(value: Date) {
@@ -26,14 +27,13 @@ function addDays(value: Date, days: number) {
   return next;
 }
 
-function priorityFromPct(averagePct: number) {
-  if (averagePct < 45) return "high";
-  if (averagePct < 60) return "medium";
-  return "low";
-}
-
 function uniq(values: Array<string | null | undefined>) {
   return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+}
+
+function jsonStrings(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean);
 }
 
 function activePhaseForToday(phases: PhaseWindow[]) {
@@ -48,27 +48,23 @@ function nearestExamDate(semester: { endDate: Date }, phases: PhaseWindow[]) {
   const today = startOfDay(new Date());
   const future = phases
     .map((phase) => phase.examDate)
-    .filter((examDate): examDate is Date => {
-      if (!examDate) return false;
-      return startOfDay(examDate) >= today;
-    })
+    .filter((examDate): examDate is Date => examDate !== null && startOfDay(examDate) >= today)
     .sort((a, b) => a.getTime() - b.getTime());
   if (future[0]) return startOfDay(future[0]);
   const semesterEnd = startOfDay(semester.endDate);
   return semesterEnd >= today ? semesterEnd : addDays(today, 14);
 }
 
-function taskDuration(priority: string, isWeekend: boolean, isRevision = false) {
-  if (isRevision) return isWeekend ? 40 : 30;
-  if (priority === "high") return isWeekend ? 60 : 45;
-  if (priority === "low") return isWeekend ? 35 : 25;
-  return isWeekend ? 45 : 35;
+function taskDuration(kind: "lecture" | "syllabus" | "revision", isWeekend: boolean) {
+  if (kind === "revision") return isWeekend ? 35 : 25;
+  if (kind === "lecture") return isWeekend ? 30 : 20;
+  return isWeekend ? 40 : 30;
 }
 
-async function rankedSubjectsForStudent(studentId: string, universityId: string) {
+async function academicInputsForStudent(studentId: string, universityId: string) {
   const enrollment = await prisma.studentEnrollment.findFirst({
     where: { studentId, isCurrent: true },
-    include: { semester: true, student: true },
+    include: { semester: true },
   });
   if (!enrollment) {
     throw new Error("Current enrollment not found.");
@@ -80,19 +76,7 @@ async function rankedSubjectsForStudent(studentId: string, universityId: string)
   });
   const subjectIds = subjects.map((subject) => subject.id);
 
-  const [results, pyqAnalyses, pyqInsights, syllabi, phases] = await Promise.all([
-    prisma.result.findMany({
-      where: { enrollmentId: enrollment.id, isPublished: true, subjectId: { in: subjectIds } },
-      include: { phase: true },
-      orderBy: [{ subjectId: "asc" }, { phase: { number: "asc" } }],
-    }),
-    prisma.pYQAnalysis.findMany({
-      where: { semesterId: enrollment.semesterId, subjectId: { in: subjectIds } },
-    }),
-    prisma.pYQInsight.findMany({
-      where: { semesterId: enrollment.semesterId, subjectId: { in: subjectIds } },
-      orderBy: { updatedAt: "desc" },
-    }),
+  const [syllabi, phases, timetableSlots, events] = await Promise.all([
     prisma.subjectSyllabus.findMany({
       where: { semesterId: enrollment.semesterId, subjectId: { in: subjectIds } },
       orderBy: [{ subjectId: "asc" }, { unitOrder: "asc" }],
@@ -102,67 +86,64 @@ async function rankedSubjectsForStudent(studentId: string, universityId: string)
       select: { number: true, startDate: true, endDate: true, examDate: true },
       orderBy: { number: "asc" },
     }),
+    prisma.timetableSlot.findMany({
+      where: { semesterId: enrollment.semesterId, batchId: enrollment.batchId, subjectId: { in: subjectIds } },
+      orderBy: [{ dayOfWeek: "asc" }, { slotStart: "asc" }],
+    }),
+    prisma.calendarEvent.findMany({
+      where: {
+        universityId,
+        semesterId: enrollment.semesterId,
+        deletedAt: null,
+        startDate: { gte: startOfDay(new Date()) },
+      },
+      orderBy: { startDate: "asc" },
+      take: 20,
+    }),
   ]);
 
-  const resultsBySubject = new Map<string, { got: number; max: number }>();
-  for (const result of results) {
-    const current = resultsBySubject.get(result.subjectId) ?? { got: 0, max: 0 };
-    current.got += result.marksObtained;
-    current.max += result.maxMarks;
-    resultsBySubject.set(result.subjectId, current);
-  }
-
-  const pyqTopics = new Map<string, string[]>();
-  for (const insight of pyqInsights) {
-    const current = pyqTopics.get(insight.subjectId) ?? [];
-    pyqTopics.set(insight.subjectId, uniq([...current, ...((insight.topics as string[]) ?? []), ...((insight.keywords as string[]) ?? [])]));
-  }
-  for (const analysis of pyqAnalyses) {
-    const topicFreq = (analysis.topicFrequencies as Record<string, number>) ?? {};
-    const rankedTopics = Object.entries(topicFreq)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 4)
-      .map(([topic]) => topic);
-    const current = pyqTopics.get(analysis.subjectId) ?? [];
-    pyqTopics.set(analysis.subjectId, uniq([...current, ...rankedTopics]));
-  }
-
   const activePhase = activePhaseForToday(phases);
-  const syllabusRowsBySubject = new Map<string, typeof syllabi>();
+  const syllabiBySubject = new Map<string, typeof syllabi>();
   for (const item of syllabi) {
-    const current = syllabusRowsBySubject.get(item.subjectId) ?? [];
+    const current = syllabiBySubject.get(item.subjectId) ?? [];
     current.push(item);
-    syllabusRowsBySubject.set(item.subjectId, current);
+    syllabiBySubject.set(item.subjectId, current);
   }
 
-  const syllabusBySubject = new Map<string, string[]>();
-  for (const [subjectId, items] of syllabusRowsBySubject.entries()) {
-    const limit = Math.max(1, Math.ceil(items.length * Math.min(activePhase.number, 4) / 4));
-    for (const item of items.slice(0, limit)) {
-      const topics = ((item.topics as string[]) ?? []).slice(0, 2);
-      const current = syllabusBySubject.get(subjectId) ?? [];
-      syllabusBySubject.set(subjectId, uniq([...current, item.unitTitle, ...topics]));
-    }
+  const slotsBySubject = new Map<string, typeof timetableSlots>();
+  for (const slot of timetableSlots) {
+    const current = slotsBySubject.get(slot.subjectId) ?? [];
+    current.push(slot);
+    slotsBySubject.set(slot.subjectId, current);
   }
 
-  const ranked = subjects.map<RankedSubject>((subject) => {
-    const marks = resultsBySubject.get(subject.id);
-    const averagePct = marks && marks.max > 0 ? Number(((marks.got / marks.max) * 100).toFixed(1)) : 55;
-    const phaseAwareUnits = (syllabusBySubject.get(subject.id) ?? []).slice(-4);
+  const academicSubjects = subjects.map<AcademicSubject>((subject) => {
+    const rows = syllabiBySubject.get(subject.id) ?? [];
+    const phaseLimit = Math.max(1, Math.ceil(rows.length * Math.min(activePhase.number, 4) / 4));
+    const phaseRows = rows.slice(0, phaseLimit);
+    const syllabusUnits = uniq(phaseRows.map((item) => item.unitTitle));
+    const focusTopics = uniq(phaseRows.flatMap((item) => [item.unitTitle, ...jsonStrings(item.topics).slice(0, 3)])).slice(0, 10);
+    const slots = slotsBySubject.get(subject.id) ?? [];
     return {
       id: subject.id,
       code: subject.code,
       name: subject.name,
-      averagePct,
-      weakTopics: uniq([...(pyqTopics.get(subject.id) ?? []).slice(0, 3), ...phaseAwareUnits]).slice(0, 5),
-      syllabusUnits: phaseAwareUnits,
+      lectureDays: uniq(slots.map((slot) => String(slot.dayOfWeek))).map(Number).filter(Number.isFinite),
+      lectureCount: slots.length,
+      syllabusUnits,
+      focusTopics: focusTopics.length > 0 ? focusTopics : [`Revise ${subject.code} class material`],
     };
-  }).sort((a, b) => a.averagePct - b.averagePct);
+  }).sort((a, b) => b.lectureCount - a.lectureCount || a.code.localeCompare(b.code));
 
-  return { enrollment, ranked, phases };
+  return { enrollment, subjects: academicSubjects, phases, events };
 }
 
-function buildTasks(days: Date[], ranked: RankedSubject[]) {
+function buildTasks(
+  days: Date[],
+  subjects: AcademicSubject[],
+  completedDescriptions: Set<string>,
+  eventDates: Set<string>,
+) {
   const tasks: Array<{
     taskDate: Date;
     subjectId: string | null;
@@ -170,53 +151,71 @@ function buildTasks(days: Date[], ranked: RankedSubject[]) {
     estimatedDurationMinutes: number;
     priority: string;
   }> = [];
-  if (ranked.length === 0) return tasks;
+  if (subjects.length === 0) return tasks;
 
   days.forEach((day, index) => {
-    const subject = ranked[index % ranked.length];
-    const nextTopic = subject.weakTopics[index % Math.max(subject.weakTopics.length, 1)] ?? subject.syllabusUnits[index % Math.max(subject.syllabusUnits.length, 1)] ?? `Revise ${subject.code}`;
-    const isWeekend = day.getUTCDay() === 0 || day.getUTCDay() === 6;
+    const jsDay = day.getUTCDay();
+    const timetableDay = jsDay === 0 ? 7 : jsDay;
+    const isWeekend = jsDay === 0 || jsDay === 6;
+    const dateKey = day.toISOString().slice(0, 10);
+    const scheduled = subjects.filter((subject) => subject.lectureDays.includes(timetableDay));
+    const primary = scheduled[0] ?? subjects[index % subjects.length];
+    const secondary = subjects[(subjects.findIndex((subject) => subject.id === primary.id) + 1) % subjects.length];
+    const primaryTopic = primary.focusTopics[index % primary.focusTopics.length] ?? `Revise ${primary.code}`;
     const daysLeft = days.length - index - 1;
-    const primaryPriority = priorityFromPct(subject.averagePct);
 
-    tasks.push({
-      taskDate: day,
-      subjectId: subject.id,
-      description: `Focus on ${subject.code}: revise ${nextTopic} and finish one short recall check.`,
-      estimatedDurationMinutes: taskDuration(primaryPriority, isWeekend),
-      priority: primaryPriority,
-    });
-
-    if (daysLeft <= 2) {
+    const firstDescription = scheduled.length > 0
+      ? `After ${primary.code} lecture: consolidate ${primaryTopic} from the syllabus and write 5 recall points.`
+      : `Study ${primary.code}: cover ${primaryTopic} from the faculty syllabus.`;
+    if (!completedDescriptions.has(firstDescription)) {
       tasks.push({
         taskDate: day,
-        subjectId: subject.id,
-        description: `Exam finish for ${subject.code}: solve a timed PYQ set and review errors.`,
-        estimatedDurationMinutes: taskDuration("high", isWeekend, true),
-        priority: "high",
+        subjectId: primary.id,
+        description: firstDescription,
+        estimatedDurationMinutes: taskDuration(scheduled.length > 0 ? "lecture" : "syllabus", isWeekend),
+        priority: daysLeft <= 3 ? "high" : "medium",
       });
+    }
+
+    if (daysLeft <= 3) {
+      const revisionDescription = `Exam revision: revise formulas, definitions, and unit summaries for ${primary.code}.`;
+      if (!completedDescriptions.has(revisionDescription)) {
+        tasks.push({
+          taskDate: day,
+          subjectId: primary.id,
+          description: revisionDescription,
+          estimatedDurationMinutes: taskDuration("revision", isWeekend),
+          priority: "high",
+        });
+      }
       return;
     }
 
-    const secondary = ranked[(index + 1) % ranked.length];
-    const secondaryPriority = priorityFromPct(secondary.averagePct);
-    const secondaryTopic = secondary.weakTopics[0] ?? secondary.syllabusUnits[0] ?? `important questions in ${secondary.code}`;
-    tasks.push({
-      taskDate: day,
-      subjectId: secondary.id,
-      description: `Practice ${secondary.code}: attempt PYQ questions on ${secondaryTopic}.`,
-      estimatedDurationMinutes: taskDuration(secondaryPriority, isWeekend, true),
-      priority: secondaryPriority,
-    });
+    if (secondary && secondary.id !== primary.id && !eventDates.has(dateKey)) {
+      const secondaryTopic = secondary.focusTopics[index % secondary.focusTopics.length] ?? `Revise ${secondary.code}`;
+      const description = `Short practice for ${secondary.code}: solve 3 questions from ${secondaryTopic}.`;
+      if (!completedDescriptions.has(description)) {
+        tasks.push({
+          taskDate: day,
+          subjectId: secondary.id,
+          description,
+          estimatedDurationMinutes: taskDuration("revision", isWeekend),
+          priority: "low",
+        });
+      }
+    }
 
     if (isWeekend) {
-      tasks.push({
-        taskDate: day,
-        subjectId: null,
-        description: "Weekly review: close pending checklist items, formulas, and definitions.",
-        estimatedDurationMinutes: 25,
-        priority: "medium",
-      });
+      const description = "Weekly syllabus audit: mark completed units, list doubts, and prepare questions for faculty.";
+      if (!completedDescriptions.has(description)) {
+        tasks.push({
+          taskDate: day,
+          subjectId: null,
+          description,
+          estimatedDurationMinutes: 25,
+          priority: "medium",
+        });
+      }
     }
   });
 
@@ -224,33 +223,52 @@ function buildTasks(days: Date[], ranked: RankedSubject[]) {
 }
 
 export async function generateStudyPlanForStudent(studentId: string, universityId: string) {
-  const { enrollment, ranked, phases } = await rankedSubjectsForStudent(studentId, universityId);
+  const { enrollment, subjects, phases, events } = await academicInputsForStudent(studentId, universityId);
   const startDate = startOfDay(new Date());
   const endDate = nearestExamDate(enrollment.semester, phases);
   const dayCount = Math.max(1, Math.min(60, Math.floor((endDate.getTime() - startDate.getTime()) / 86400000) + 1));
   const days = Array.from({ length: dayCount }, (_value, index) => addDays(startDate, index));
 
-  await prisma.studyPlanTask.deleteMany({
-    where: { studyPlan: { studentId, semesterId: enrollment.semesterId } },
-  });
-  await prisma.studyPlan.deleteMany({
+  const existing = await prisma.studyPlan.findFirst({
     where: { studentId, semesterId: enrollment.semesterId },
+    include: { tasks: true },
+    orderBy: { createdAt: "desc" },
   });
+  const completedDescriptions = new Set((existing?.tasks ?? []).filter((task) => task.isCompleted).map((task) => task.description));
+  const eventDates = new Set(events.map((event) => startOfDay(event.startDate).toISOString().slice(0, 10)));
 
-  const plan = await prisma.studyPlan.create({
-    data: {
-      studentId,
-      enrollmentId: enrollment.id,
-      semesterId: enrollment.semesterId,
-      weakSubjectIds: ranked.slice(0, 4).map((subject) => subject.id),
-      weakTopics: uniq(ranked.flatMap((subject) => subject.weakTopics).slice(0, 12)),
-      startDate,
-      endDate,
-      status: "active",
-    },
-  });
+  let plan = existing;
+  if (!plan) {
+    plan = await prisma.studyPlan.create({
+      data: {
+        studentId,
+        enrollmentId: enrollment.id,
+        semesterId: enrollment.semesterId,
+        weakSubjectIds: subjects.slice(0, 4).map((subject) => subject.id),
+        weakTopics: uniq(subjects.flatMap((subject) => subject.focusTopics).slice(0, 12)),
+        startDate,
+        endDate,
+        status: "active",
+      },
+      include: { tasks: true },
+    });
+  } else {
+    await prisma.studyPlan.update({
+      where: { id: plan.id },
+      data: {
+        weakSubjectIds: subjects.slice(0, 4).map((subject) => subject.id),
+        weakTopics: uniq(subjects.flatMap((subject) => subject.focusTopics).slice(0, 12)),
+        startDate,
+        endDate,
+        status: "active",
+      },
+    });
+    await prisma.studyPlanTask.deleteMany({
+      where: { studyPlanId: plan.id, isCompleted: false, isCustom: false },
+    });
+  }
 
-  const tasks = buildTasks(days, ranked.slice(0, Math.max(1, Math.min(ranked.length, 4))));
+  const tasks = buildTasks(days, subjects.slice(0, Math.max(1, Math.min(subjects.length, 5))), completedDescriptions, eventDates);
   if (tasks.length > 0) {
     await prisma.studyPlanTask.createMany({
       data: tasks.map((task) => ({
@@ -265,6 +283,10 @@ export async function generateStudyPlanForStudent(studentId: string, universityI
   }
 
   return { planId: plan.id, startDate, endDate };
+}
+
+export async function refreshStudyPlanAfterProgress(studentId: string, universityId: string) {
+  return generateStudyPlanForStudent(studentId, universityId);
 }
 
 export async function getLatestStudyPlan(studentId: string) {

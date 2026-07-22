@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { BarChart3, BrainCircuit, Plus, Send, Sparkles, Target, Trash2 } from 'lucide-react'
+import { BarChart3, BrainCircuit, Plus, RefreshCcw, Send, Sparkles, Target, Trash2 } from 'lucide-react'
 import { studentApi } from '@/api/student'
 import { errorMessage } from '@/api/client'
 import { PageShell } from '@/components/shared/PageShell'
@@ -14,6 +14,7 @@ import { Tabs } from '@/components/ui/Tabs'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
 import { cn } from '@/lib/utils'
+import type { AIConversation, AIMessage } from '@/types/student'
 
 type SubjectOption = { id: string; code: string; name: string }
 
@@ -25,12 +26,17 @@ export default function AIAssistantPage() {
   const [analysisSubjectId, setAnalysisSubjectId] = useState('')
   const [text, setText] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
+  const missingSelectionNotified = useRef(false)
 
-  const conversations = useQuery({ queryKey: ['student', 'ai-convs'], queryFn: studentApi.aiConversations })
+  const conversations = useQuery({
+    queryKey: ['student', 'ai-convs'],
+    queryFn: studentApi.aiConversations,
+  })
   const conversation = useQuery({
     queryKey: ['student', 'ai-conv', selectedId],
     queryFn: () => studentApi.aiConversation(selectedId!),
     enabled: !!selectedId,
+    retry: false,
   })
   const subjects = useQuery({
     queryKey: ['student', 'subjects'],
@@ -49,18 +55,39 @@ export default function AIAssistantPage() {
   })
 
   const subjectOptions: SubjectOption[] = (subjects.data as { subjects?: SubjectOption[] } | undefined)?.subjects ?? []
-
-  useEffect(() => {
-    if (!selectedId && conversations.data?.data?.[0]) {
-      setSelectedId(conversations.data.data[0].id)
-    }
-  }, [conversations.data, selectedId])
+  const conversationItems = useMemo(() => {
+    const rows = ((conversations.data as { data?: AIConversation[] } | undefined)?.data ?? []) as AIConversation[]
+    return [...rows].sort((a, b) => new Date(b.updatedAt ?? b.createdAt).getTime() - new Date(a.updatedAt ?? a.createdAt).getTime())
+  }, [conversations.data])
 
   useEffect(() => {
     if (!analysisSubjectId && subjectOptions[0]) {
       setAnalysisSubjectId(subjectOptions[0].id)
     }
   }, [analysisSubjectId, subjectOptions])
+
+  useEffect(() => {
+    if (conversationItems.length === 0) {
+      if (selectedId) setSelectedId(null)
+      return
+    }
+    if (!selectedId || !conversationItems.some((item) => item.id === selectedId)) {
+      setSelectedId(conversationItems[0].id)
+      if (selectedId && !missingSelectionNotified.current) {
+        toast.error('The previous chat is no longer available. Opened the latest conversation instead.')
+        missingSelectionNotified.current = true
+      }
+    } else {
+      missingSelectionNotified.current = false
+    }
+  }, [conversationItems, selectedId])
+
+  useEffect(() => {
+    if (!conversation.isError) return
+    const fallback = conversationItems.find((item) => item.id !== selectedId)
+    setSelectedId(fallback?.id ?? null)
+    toast.error(errorMessage(conversation.error, 'Could not open that conversation.'))
+  }, [conversation.error, conversation.isError, conversationItems, selectedId])
 
   const create = useMutation({
     mutationFn: () => studentApi.createAiConversation({ title: `Chat ${new Date().toLocaleString('en-IN')}`, subjectId: chatSubjectId || null }),
@@ -84,8 +111,8 @@ export default function AIAssistantPage() {
 
   const del = useMutation({
     mutationFn: (id: string) => studentApi.deleteAiConversation(id),
-    onSuccess: async () => {
-      setSelectedId(null)
+    onSuccess: async (_value, id) => {
+      setSelectedId((current) => (current === id ? null : current))
       await qc.invalidateQueries({ queryKey: ['student', 'ai-convs'] })
     },
     onError: (e) => toast.error(errorMessage(e)),
@@ -106,6 +133,10 @@ export default function AIAssistantPage() {
     subject_predictions?: Array<{ subject_code: string; subject_name: string; predicted_marks: number; predicted_percentage: number; trend: string; confidence_note: string }>
   } | undefined
   const subjectPredictions = marksData?.predictions ?? marksData?.subject_predictions ?? []
+  const chatOptions = conversationItems.map((item) => ({
+    value: item.id,
+    label: `${item.title}${item.subjectName ? ` - ${item.subjectName}` : ''}`,
+  }))
 
   return (
     <PageShell
@@ -124,49 +155,83 @@ export default function AIAssistantPage() {
       }
     >
       {tab === 'chat' && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[300px_1fr]">
-          <Card className="max-h-[620px] overflow-hidden">
+        <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <Card className="max-h-[680px] min-w-0 overflow-hidden">
             <div className="flex items-center justify-between border-b border-border p-3">
               <div>
                 <div className="text-sm font-semibold text-text-primary">Conversations</div>
-                <div className="text-[11px] text-text-muted">General or subject-aware study help</div>
+                <div className="text-[11px] text-text-muted">Open any older thread or start a new one</div>
               </div>
               <Button size="sm" leftIcon={<Plus size={14} />} onClick={() => create.mutate()} loading={create.isPending}>New</Button>
             </div>
-            <div className="border-b border-border px-3 py-3">
+            <div className="space-y-3 border-b border-border px-3 py-3">
               <Select
                 value={chatSubjectId}
                 onChange={(e) => setChatSubjectId(e.target.value)}
                 options={subjectOptions.map((subject) => ({ value: subject.id, label: `${subject.code} - ${subject.name}` }))}
                 placeholder="General chat"
               />
+              <Button
+                variant="outline"
+                size="sm"
+                leftIcon={<RefreshCcw size={14} />}
+                onClick={() => conversations.refetch()}
+                loading={conversations.isFetching}
+              >
+                Refresh Chats
+              </Button>
             </div>
-            <div className="scrollbar-thin max-h-[500px] overflow-y-auto">
+            <div className="scrollbar-thin max-h-[560px] overflow-y-auto">
               {conversations.isLoading ? (
                 <div className="p-3"><CardSkeleton height={96} /></div>
-              ) : conversations.data?.data.length === 0 ? (
+              ) : conversations.isError ? (
+                <div className="p-3">
+                  <EmptyState
+                    icon={<BrainCircuit size={20} />}
+                    title="Chat list unavailable"
+                    description={errorMessage(conversations.error)}
+                    action={<Button size="sm" onClick={() => conversations.refetch()}>Try Again</Button>}
+                    className="border-0"
+                  />
+                </div>
+              ) : conversationItems.length === 0 ? (
                 <p className="p-4 text-xs text-text-muted">No conversations yet.</p>
               ) : (
                 <ul className="divide-y divide-border-light">
-                  {conversations.data?.data.map((item) => (
-                    <li
-                      key={item.id}
-                      className={cn('group flex cursor-pointer items-center gap-2 px-3 py-3 transition hover:bg-surface-2', selectedId === item.id && 'bg-primary-light')}
-                      onClick={() => setSelectedId(item.id)}
-                    >
-                      <div className="flex h-8 w-8 items-center justify-center rounded-sm bg-surface-2 text-primary">
-                        <Sparkles size={15} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-[13px] font-medium text-text-primary">{item.title}</div>
-                        <div className="text-[10px] text-text-muted">{item.subjectName ?? 'General'} • {item.messageCount ?? 0} msgs</div>
-                      </div>
+                  {conversationItems.map((item) => (
+                    <li key={item.id}>
                       <button
-                        onClick={(e) => { e.stopPropagation(); del.mutate(item.id) }}
-                        className="text-text-muted opacity-0 transition group-hover:opacity-100 hover:text-danger"
+                        type="button"
+                        className={cn(
+                          'group flex w-full items-start gap-2 px-3 py-3 text-left transition hover:bg-surface-2',
+                          selectedId === item.id && 'bg-primary-light',
+                        )}
+                        onClick={() => setSelectedId(item.id)}
                       >
-                        <Trash2 size={13} />
+                        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-surface-2 text-primary">
+                          <Sparkles size={15} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[13px] font-medium text-text-primary">{item.title}</div>
+                          <div className="text-[10px] text-text-muted">{item.subjectName ?? 'General'} - {item.messageCount ?? 0} msgs</div>
+                          {item.lastMessage && (
+                            <div className="mt-1 line-clamp-2 text-[11px] leading-5 text-text-secondary">{item.lastMessage}</div>
+                          )}
+                        </div>
+                        <span className="mt-0.5 shrink-0 text-[10px] text-text-muted">
+                          {new Date(item.updatedAt ?? item.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                        </span>
                       </button>
+                      <div className="flex justify-end px-3 pb-2">
+                        <button
+                          type="button"
+                          onClick={() => del.mutate(item.id)}
+                          className="text-text-muted transition hover:text-danger"
+                          aria-label="Delete conversation"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -174,7 +239,7 @@ export default function AIAssistantPage() {
             </div>
           </Card>
 
-          <Card className="flex h-[620px] flex-col">
+          <Card className="flex h-[680px] min-w-0 flex-col">
             {!selectedId ? (
               <EmptyState
                 icon={<BrainCircuit size={24} />}
@@ -185,19 +250,40 @@ export default function AIAssistantPage() {
               />
             ) : (
               <>
+                <div className="space-y-3 border-b border-border p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-text-primary">{conversationItems.find((item) => item.id === selectedId)?.title ?? 'Conversation'}</div>
+                      <div className="text-[11px] text-text-muted">Reopen any previous thread from the selector below.</div>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => conversation.refetch()} loading={conversation.isFetching}>
+                      Refresh
+                    </Button>
+                  </div>
+                  <Select
+                    value={selectedId ?? ''}
+                    onChange={(e) => setSelectedId(e.target.value)}
+                    options={chatOptions}
+                    placeholder="Select older chat"
+                  />
+                </div>
                 <div className="scrollbar-thin flex-1 overflow-y-auto p-4">
                   {conversation.isLoading ? (
                     <CardSkeleton height={200} />
+                  ) : conversation.isError ? (
+                    <EmptyState
+                      icon={<BrainCircuit size={22} />}
+                      title="Conversation unavailable"
+                      description={errorMessage(conversation.error)}
+                      action={<Button onClick={() => conversation.refetch()}>Retry</Button>}
+                      className="border-0"
+                    />
                   ) : conversation.data?.messages?.length === 0 ? (
                     <p className="mt-16 text-center text-xs text-text-muted">Ask about weak topics, revision strategy, PYQs, or faculty notes.</p>
                   ) : (
                     <div className="space-y-3">
                       {conversation.data?.messages?.map((message) => (
-                        <div key={message.id} className={cn('flex', message.role === 'USER' ? 'justify-end' : 'justify-start')}>
-                          <div className={cn('max-w-[82%] rounded-sm px-3 py-2 text-[13px] leading-6', message.role === 'USER' ? 'bg-primary text-white' : 'bg-surface-2 text-text-primary')}>
-                            {message.content}
-                          </div>
-                        </div>
+                        <MessageBubble key={message.id} message={message} />
                       ))}
                       <div ref={bottomRef} />
                     </div>
@@ -238,7 +324,7 @@ export default function AIAssistantPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <MetricCard label="Predicted Avg" value={String(marksData?.predicted_average ?? '--')} />
                     <MetricCard label="Badge" value={String(marksData?.predicted_badge ?? '--')} />
-                    <MetricCard label="Model R²" value={String(marksData?.model_r2 ?? '--')} />
+                    <MetricCard label="Model R2" value={String(marksData?.model_r2 ?? '--')} />
                     <MetricCard label="Model MAE" value={String(marksData?.model_mae ?? '--')} />
                   </div>
                 </>
@@ -328,7 +414,7 @@ export default function AIAssistantPage() {
                         {((pyqAnalysis.data as { importantTopics?: Array<{ topic: string; priority: string; frequency?: number }> }).importantTopics ?? []).map((topic) => (
                           <Badge key={topic.topic} tone={topic.priority === 'HIGH' ? 'danger' : topic.priority === 'MEDIUM' ? 'warning' : 'neutral'}>
                             {topic.topic}
-                            {topic.frequency ? ` • ${topic.frequency}` : ''}
+                            {topic.frequency ? ` - ${topic.frequency}` : ''}
                           </Badge>
                         ))}
                       </div>
@@ -373,6 +459,108 @@ export default function AIAssistantPage() {
       )}
     </PageShell>
   )
+}
+
+function MessageBubble({ message }: { message: AIMessage }) {
+  const isUser = message.role === 'USER'
+  return (
+    <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
+      <div className={cn('max-w-[86%] rounded-sm px-3 py-2 text-[13px] leading-6', isUser ? 'bg-primary text-white' : 'bg-surface-2 text-text-primary')}>
+        {isUser ? (
+          <div className="whitespace-pre-wrap break-words">{message.content}</div>
+        ) : (
+          <StructuredAssistantContent content={message.content} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function StructuredAssistantContent({ content }: { content: string }) {
+  const blocks = content.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean)
+  if (blocks.length === 0) {
+    return <div className="whitespace-pre-wrap break-words">{content}</div>
+  }
+
+  return (
+    <div className="space-y-3">
+      {blocks.map((block, index) => {
+        const lines = block.split('\n').map((line) => line.trim()).filter(Boolean)
+        const isBulletList = lines.every((line) => /^[-*]\s+/.test(line))
+        const isNumberedList = lines.every((line) => /^\d+\.\s+/.test(line))
+
+        if (block.startsWith('```') && block.endsWith('```')) {
+          return (
+            <pre key={index} className="overflow-x-auto rounded-sm bg-slate-950/90 p-3 text-xs text-slate-100">
+              <code>{block.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '')}</code>
+            </pre>
+          )
+        }
+
+        if (/^---+\s*$/.test(block)) {
+          return <hr key={index} className="border-border" />
+        }
+
+        const heading = /^(#{1,3})\s+(.+)$/.exec(lines[0] ?? '')
+        if (heading && lines.length === 1) {
+          const level = heading[1].length
+          const className = level === 1 ? 'text-lg font-semibold' : level === 2 ? 'text-base font-semibold' : 'font-semibold'
+          return <div key={index} className={className}>{renderInlineMarkdown(heading[2])}</div>
+        }
+
+        if (isBulletList) {
+          return (
+            <ul key={index} className="list-disc space-y-1 pl-5">
+              {lines.map((line) => (
+                <li key={line}>{renderInlineMarkdown(line.replace(/^[-*]\s+/, ''))}</li>
+              ))}
+            </ul>
+          )
+        }
+
+        if (isNumberedList) {
+          return (
+            <ol key={index} className="list-decimal space-y-1 pl-5">
+              {lines.map((line) => (
+                <li key={line}>{renderInlineMarkdown(line.replace(/^\d+\.\s+/, ''))}</li>
+              ))}
+            </ol>
+          )
+        }
+
+        if (lines.length === 1 && /:\s*$/.test(lines[0])) {
+          return <div key={index} className="font-semibold">{lines[0]}</div>
+        }
+
+        return (
+          <div key={index} className="whitespace-pre-wrap break-words">
+            {renderInlineMarkdown(block)}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function renderInlineMarkdown(value: string): React.ReactNode {
+  const pattern = /(\*\*[^*]+\*\*|__[^_]+__|\/\/[^/]+\/\/|(?<!\*)\*[^*]+\*(?!\*)|(?<!_)_[^_]+_(?!_)|`[^`]+`|\[[^\]]+\]\((https?:\/\/[^)]+)\))/g
+  const parts = value.split(pattern).filter(Boolean)
+  return parts.map((part, index) => {
+    if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>
+    }
+    if ((part.startsWith('//') && part.endsWith('//')) || (part.startsWith('*') && part.endsWith('*')) || (part.startsWith('_') && part.endsWith('_'))) {
+      return <em key={index}>{part.slice(part.startsWith('//') ? 2 : 1, part.startsWith('//') ? -2 : -1)}</em>
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return <code key={index} className="rounded bg-slate-200 px-1 py-0.5 text-[0.9em]">{part.slice(1, -1)}</code>
+    }
+    const link = /^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/.exec(part)
+    if (link) {
+      return <a key={index} href={link[2]} target="_blank" rel="noreferrer" className="text-primary underline">{link[1]}</a>
+    }
+    return part
+  })
 }
 
 function MetricCard({ label, value, compact = false }: { label: string; value: string; compact?: boolean }) {

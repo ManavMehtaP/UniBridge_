@@ -50,7 +50,7 @@ class MarksPredictSerializer(serializers.Serializer):
 
 class StudentAIChatSessionSerializer(serializers.ModelSerializer):
     chat_id = serializers.UUIDField(source="id")
-    subject_id = serializers.UUIDField(source="subject_id", allow_null=True)
+    subject_id = serializers.UUIDField(allow_null=True)
     message_count = serializers.SerializerMethodField()
 
     class Meta:

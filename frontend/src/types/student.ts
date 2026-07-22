@@ -109,6 +109,7 @@ export interface AIConversation {
   title: string
   subjectName?: string | null
   subjectCode?: string | null
+  lastMessage?: string | null
   createdAt: string
   updatedAt?: string
   messageCount?: number

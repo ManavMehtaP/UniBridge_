@@ -45,7 +45,7 @@ class StudentAiApiTests(TestCase):
         self.subject = Subject.objects.create(
             id=uuid4(),
             university_id=self.student.university_id,
-            semester=self.semester,
+            semester_number=self.semester.number,
             code="OS",
             name="Operating System",
             credits=4,
