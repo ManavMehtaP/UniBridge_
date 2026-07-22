@@ -2,7 +2,7 @@ import prisma from "../config/prisma.js";
 import { env } from "../config/env.js";
 import { uploadObject, presignGetUrl, storageEnabled } from "../config/storage.js";
 import { studentAiBridge } from "./studentAiBridge.service.js";
-import { generateStudyPlanForStudent, getLatestStudyPlan } from "./studyPlanner.service.js";
+import { generateStudyPlanForStudent, getLatestStudyPlan, refreshStudyPlanAfterProgress } from "./studyPlanner.service.js";
 import type { Role, YearLevel } from "../types/domain.js";
 import type { ExportTable } from "../utils/export.js";
 import { ApiError, buildPagination } from "../utils/http.js";
@@ -4997,6 +4997,9 @@ export const portalService = {
       where: { id: task.studyPlanId },
       data: { status: remaining === 0 ? "completed" : "active" },
     });
+    if (isCompleted && remaining > 0) {
+      await refreshStudyPlanAfterProgress(studentId, _universityId);
+    }
     return formatStudyPlan(await getLatestStudyPlan(studentId));
   },
   async deleteStudentStudyPlannerTask(studentId: string, taskId: string) {

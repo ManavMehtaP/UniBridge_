@@ -384,6 +384,10 @@ model Subject {
   pyqInsights        PYQInsight[]
   chatSessions       StudentAIChatSession[]
   syllabi            SubjectSyllabus[]
+  aiDocuments        AIDocument[]
+  aiDocumentChunks   AIDocumentChunk[]
+  aiDocumentMetadata AIDocumentMetadata[]
+  pyqQuestions       PYQQuestion[]
 
   @@unique([universityId, semesterNumber, code])
   @@index([universityId, semesterNumber])
@@ -426,7 +430,7 @@ model SubjectComponent {
 model Faculty {
   id              String    @id @default(uuid()) @db.Uuid
   universityId    String    @db.Uuid
-  employeeId      String    @db.Uuid // College-assigned, e.g. "EMP001"
+  employeeId      String // College-assigned, e.g. "EMP001"
   name            String
   email           String    @unique
   passwordHash    String
@@ -451,6 +455,7 @@ model Faculty {
   attendanceRecords     AttendanceRecord[] // attendance marked by this faculty
   announcements         Announcement[]
   uploadedNotes         Note[]
+  uploadedDocuments     AIDocument[]
   quizzes               Quiz[]
   calendarEvents        CalendarEvent[]
   activityLogs          ActivityLog[]
@@ -699,6 +704,7 @@ model Note {
   flashcards Flashcard[]
   targets    NoteBatchTarget[]
   insight    NoteInsight?
+  aiDocument AIDocument?
 
   @@index([subjectId])
   @@index([facultyId])
@@ -779,6 +785,8 @@ model PYQFile {
 
   subject Subject     @relation(fields: [subjectId], references: [id])
   insight PYQInsight?
+  aiDocument AIDocument?
+  questions PYQQuestion[]
 
   @@index([subjectId])
   @@map("pyq_files")
@@ -1166,6 +1174,110 @@ model StudyPlanTask {
   @@map("study_plan_tasks")
 }
 
+model AIDocument {
+  id              String    @id @default(uuid()) @db.Uuid
+  subjectId       String    @db.Uuid
+  noteId          String?   @unique @db.Uuid
+  pyqFileId       String?   @unique @db.Uuid
+  uploadedById    String?   @db.Uuid
+  sourceType      String
+  title           String
+  originalFileUrl String
+  originalFileKey String
+  mimeType        String?
+  contentHash     String
+  processingStatus String  @default("pending")
+  totalPages      Int      @default(0)
+  totalChunks     Int      @default(0)
+  errorMessage    String?
+  processedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  subject    Subject             @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  note       Note?               @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  pyqFile    PYQFile?            @relation(fields: [pyqFileId], references: [id], onDelete: Cascade)
+  uploadedBy Faculty?            @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  chunks     AIDocumentChunk[]
+  metadata   AIDocumentMetadata?
+  questions  PYQQuestion[]
+
+  @@index([subjectId, sourceType, processingStatus])
+  @@index([contentHash])
+  @@map("ai_documents")
+}
+
+model AIDocumentChunk {
+  id           String   @id @default(uuid()) @db.Uuid
+  documentId   String   @db.Uuid
+  subjectId    String   @db.Uuid
+  chunkIndex   Int
+  unitName     String?
+  chapterName  String?
+  pageNumber   Int?
+  content      String
+  summary      String   @default("")
+  keywords     Json     @default("[]")
+  embedding    Json     @default("[]")
+  tokenCount   Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  document AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  subject  Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@index([subjectId, unitName])
+  @@map("ai_document_chunks")
+}
+
+model AIDocumentMetadata {
+  id               String   @id @default(uuid()) @db.Uuid
+  documentId       String   @unique @db.Uuid
+  subjectId        String   @db.Uuid
+  units            Json     @default("[]")
+  chapterCount     Int      @default(0)
+  keywords         Json     @default("[]")
+  generatedSummary String   @default("")
+  prerequisites    Json     @default("[]")
+  tables           Json     @default("[]")
+  formulas         Json     @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  document AIDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  subject  Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@index([subjectId])
+  @@map("ai_document_metadata")
+}
+
+model PYQQuestion {
+  id           String   @id @default(uuid()) @db.Uuid
+  subjectId    String   @db.Uuid
+  pyqFileId    String?  @db.Uuid
+  documentId   String?  @db.Uuid
+  year         String
+  exam         String?
+  unit         String?
+  module       String?
+  question     String
+  marks        Float?
+  questionType String?
+  difficulty   String?
+  keywords     Json     @default("[]")
+  bloomLevel   String?
+  pageNumber   Int?
+  createdAt    DateTime @default(now())
+
+  subject  Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  pyqFile  PYQFile?    @relation(fields: [pyqFileId], references: [id], onDelete: Cascade)
+  document AIDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([subjectId, year])
+  @@index([subjectId, unit])
+  @@map("pyq_questions")
+}
+
 model NoteInsight {
   id                   String   @id @default(uuid()) @db.Uuid
   noteId               String   @unique @db.Uuid
@@ -1250,6 +1362,38 @@ model StudentAIJob {
   @@index([universityId, status, createdAt])
   @@index([studentId, status, createdAt])
   @@map("student_ai_jobs")
+}
+
+model DjangoMigration {
+  id      BigInt   @id @default(autoincrement())
+  app     String
+  name    String
+  applied DateTime
+
+  @@ignore
+  @@map("django_migrations")
+}
+
+model DjangoContentType {
+  id       Int    @id @default(autoincrement())
+  appLabel String @map("app_label") @db.VarChar(100)
+  model    String @db.VarChar(100)
+
+  @@unique([appLabel, model], map: "django_content_type_app_label_model_76bd3d3b_uniq")
+  @@ignore
+  @@map("django_content_type")
+}
+
+model DjangoAuthPermission {
+  id            Int    @id @default(autoincrement())
+  name          String @db.VarChar(255)
+  contentTypeId Int    @map("content_type_id")
+  codename      String @db.VarChar(100)
+
+  @@unique([contentTypeId, codename], map: "auth_permission_content_type_id_codename_01ab375a_uniq")
+  @@index([contentTypeId], map: "auth_permission_content_type_id_2f476e4b")
+  @@ignore
+  @@map("auth_permission")
 }
 
 // ─────────────────────────────────────────────────────────────

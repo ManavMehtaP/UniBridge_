@@ -133,19 +133,28 @@ class ChatMessageView(StudentContextMixin, APIView):
         serializer.is_valid(raise_exception=True)
         user_message = serializer.validated_data["message"]
         student_context = get_student_context(session.student)
-        retrieval_text, sources = build_chat_sources(session.student, session.subject)
+        retrieval_text, sources = build_chat_sources(session.student, session.subject, user_message)
         messages = list(session.conversation.messages or [])
         messages.append({"role": "user", "content": user_message})
+        if session.subject:
+            assistant_rules = (
+                "You are UniBridge student AI assistant for a subject chat. "
+                "Answer only using the supplied university context and retrieved document chunks. "
+                "If the context is insufficient, say exactly what is missing and do not invent syllabus, PYQ, marks, or faculty note details. "
+                "When possible, mention the source title and chapter/unit/page from the context. "
+                "Keep explanations simple, educational, and organized in Markdown."
+            )
+        else:
+            assistant_rules = (
+                "You are UniBridge student AI assistant in general chat mode. "
+                "Answer the student's question directly and clearly. Use student context when relevant, "
+                "but do not pretend that a subject, syllabus, PYQ, or faculty note exists unless it is present in context. "
+                "Use clean Markdown and keep the answer concise."
+            )
         prompt = [
             {
                 "role": "system",
-                "content": (
-                    "You are UniBridge student AI assistant. Answer for students only. "
-                    "Prefer university context over general knowledge. "
-                    "Respond in clean, organized Markdown with short sections when useful. "
-                    "Use bullet points or numbered steps for study advice, keep explanations concise, "
-                    "and avoid dumping one long paragraph unless the user explicitly asks for it."
-                ),
+                "content": assistant_rules,
             },
             {
                 "role": "system",

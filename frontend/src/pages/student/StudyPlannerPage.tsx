@@ -40,7 +40,7 @@ type PlannerData = {
 
 type SubjectOption = { id: string; code: string; name: string }
 
-const TODAY = '2026-07-18'
+const TODAY = new Date().toISOString().slice(0, 10)
 
 export default function StudyPlannerPage() {
   const qc = useQueryClient()
@@ -64,7 +64,7 @@ export default function StudyPlannerPage() {
   const generate = useMutation({
     mutationFn: () => studentApi.aiSuggest({ fromDate: TODAY }),
     onSuccess: async () => {
-      toast.success('Planner regenerated from marks, PYQ signals, and current syllabus')
+      toast.success('Planner regenerated from timetable, syllabus, and exam dates')
       await qc.invalidateQueries({ queryKey: ['student', 'planner'] })
     },
     onError: (e) => toast.error(errorMessage(e)),
@@ -126,7 +126,7 @@ export default function StudyPlannerPage() {
   return (
     <PageShell
       title="Study Planner"
-      subtitle="Generated from your weak subjects, current phase syllabus, PYQ signals, and exam window."
+      subtitle="Generated from your timetable, faculty syllabus, academic calendar, and exam window."
       action={
         <div className="flex gap-2">
           <Button variant="outline" leftIcon={<Sparkles size={15} />} onClick={() => generate.mutate()} loading={generate.isPending}>
@@ -141,7 +141,7 @@ export default function StudyPlannerPage() {
         <EmptyState
           icon={<Target size={22} />}
           title="No generated plan yet"
-          description="Generate a study plan to create a checkbox schedule from Saturday, July 18, 2026 to your exam period."
+          description="Generate a study plan to create a checkbox schedule from today to your exam period."
           action={<Button leftIcon={<Sparkles size={15} />} onClick={() => generate.mutate()} loading={generate.isPending}>Generate Now</Button>}
         />
       ) : (
@@ -169,7 +169,7 @@ export default function StudyPlannerPage() {
               </div>
 
               <div>
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Weak topics being tracked</div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Syllabus focus being tracked</div>
                 <div className="flex flex-wrap gap-2">
                   {weakTopics.map((topic) => <Badge key={topic} tone="warning">{topic}</Badge>)}
                 </div>
