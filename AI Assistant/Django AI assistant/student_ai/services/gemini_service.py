@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import base64
 from pathlib import Path
@@ -14,7 +15,7 @@ class GeminiDocumentService:
     """Provider wrapper so native Gemini file APIs can be swapped in later."""
 
     def __init__(self) -> None:
-        self.ai = SharedAIService()
+        self.ai = SharedAIService(model=os.getenv("FREELLMAPI_DOCUMENT_MODEL") or None)
 
     def json_chat(self, system: str, user: str, *, fallback: dict[str, Any]) -> dict[str, Any]:
         reply = self.ai.chat(

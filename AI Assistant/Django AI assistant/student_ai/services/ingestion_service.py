@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from collections import Counter
+import os
 from pathlib import Path
+import tempfile
 from urllib.parse import urlparse
 
 from django.conf import settings
 from django.utils import timezone
+import requests
 
 from student_ai.models import AIDocument, AIDocumentChunk, AIDocumentMetadata, Flashcard, Note, NoteInsight
 from student_ai.services.chunk_service import build_semantic_chunks
@@ -121,7 +124,56 @@ def extract_document_text(path: str | Path, mime_type: str | None = None) -> str
     suffix = Path(str(path)).suffix.lower()
     if (mime_type or "").lower().startswith("image/") or suffix in IMAGE_EXTENSIONS:
         return GeminiDocumentService().extract_image_text(path, mime_type=mime_type)
-    return extract_text(path)
+    extracted = extract_text(path)
+    if suffix != ".pdf" or len(extracted.strip()) >= 80:
+        return extracted
+    return _extract_scanned_pdf_text(path)
+
+
+def _extract_scanned_pdf_text(path: str | Path) -> str:
+    """Use Gemini vision only when a PDF has no usable embedded text layer."""
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError("PyMuPDF is required to process scanned PDFs. Install requirements.txt and retry.") from exc
+
+    local_path, cleanup_path = _local_pdf_path(path)
+    try:
+        pdf = fitz.open(str(local_path))
+        try:
+            if not pdf.page_count:
+                return ""
+            service = GeminiDocumentService()
+            pages: list[str] = []
+            # Keep uploads bounded while still processing normal academic handouts end to end.
+            for page_index in range(min(pdf.page_count, 30)):
+                page = pdf.load_page(page_index)
+                image = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+                    image_path = Path(handle.name)
+                image.save(str(image_path))
+                try:
+                    text = service.extract_image_text(image_path, mime_type="image/png")
+                    if text:
+                        pages.append(f"[Page {page_index + 1}]\n{text}")
+                finally:
+                    image_path.unlink(missing_ok=True)
+            return "\n\n".join(pages)
+        finally:
+            pdf.close()
+    finally:
+        if cleanup_path:
+            os.unlink(cleanup_path)
+
+
+def _local_pdf_path(path: str | Path) -> tuple[Path, str | None]:
+    if not isinstance(path, str) or urlparse(path).scheme not in {"http", "https"}:
+        return Path(path), None
+    response = requests.get(path, timeout=60)
+    response.raise_for_status()
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
+        handle.write(response.content)
+        return Path(handle.name), handle.name
 
 
 def _store_metadata(document: AIDocument, note: Note, structured: dict) -> None:

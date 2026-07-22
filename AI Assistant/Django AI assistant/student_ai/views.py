@@ -38,8 +38,6 @@ class StudentContextMixin:
         student_id = request.headers.get("X-Student-Id") or getattr(request.user, "student_id", None)
         if not student_id:
             raise Http404("Student context missing.")
-        print("Student ID:", student_id)
-        print("Type:", type(student_id))
         return Student.objects.get(pk=student_id)
 
     def success(self, message: str, data: dict | list, status_code: int = status.HTTP_200_OK) -> Response:
@@ -165,7 +163,8 @@ class ChatMessageView(StudentContextMixin, APIView):
         try:
             ai_result = SharedAIService().chat(prompt)
         except AIServiceError as exc:
-            return self.error("Unable to process request.", "AI_SERVICE_ERROR", str(exc), status.HTTP_502_BAD_GATEWAY)
+            status_code = getattr(exc, "status_code", status.HTTP_502_BAD_GATEWAY)
+            return self.error("Unable to process request.", "AI_SERVICE_ERROR", str(exc), status_code)
         messages.append({"role": "assistant", "content": ai_result["reply"]})
         session.conversation.messages = messages
         session.conversation.save(update_fields=["messages", "updated_at"])

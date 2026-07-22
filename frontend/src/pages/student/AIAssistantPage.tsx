@@ -155,8 +155,8 @@ export default function AIAssistantPage() {
       }
     >
       {tab === 'chat' && (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_1fr]">
-          <Card className="max-h-[680px] overflow-hidden">
+        <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <Card className="max-h-[680px] min-w-0 overflow-hidden">
             <div className="flex items-center justify-between border-b border-border p-3">
               <div>
                 <div className="text-sm font-semibold text-text-primary">Conversations</div>
@@ -239,7 +239,7 @@ export default function AIAssistantPage() {
             </div>
           </Card>
 
-          <Card className="flex h-[680px] flex-col">
+          <Card className="flex h-[680px] min-w-0 flex-col">
             {!selectedId ? (
               <EmptyState
                 icon={<BrainCircuit size={24} />}
@@ -497,11 +497,22 @@ function StructuredAssistantContent({ content }: { content: string }) {
           )
         }
 
+        if (/^---+\s*$/.test(block)) {
+          return <hr key={index} className="border-border" />
+        }
+
+        const heading = /^(#{1,3})\s+(.+)$/.exec(lines[0] ?? '')
+        if (heading && lines.length === 1) {
+          const level = heading[1].length
+          const className = level === 1 ? 'text-lg font-semibold' : level === 2 ? 'text-base font-semibold' : 'font-semibold'
+          return <div key={index} className={className}>{renderInlineMarkdown(heading[2])}</div>
+        }
+
         if (isBulletList) {
           return (
             <ul key={index} className="list-disc space-y-1 pl-5">
               {lines.map((line) => (
-                <li key={line}>{line.replace(/^[-*]\s+/, '')}</li>
+                <li key={line}>{renderInlineMarkdown(line.replace(/^[-*]\s+/, ''))}</li>
               ))}
             </ul>
           )
@@ -511,7 +522,7 @@ function StructuredAssistantContent({ content }: { content: string }) {
           return (
             <ol key={index} className="list-decimal space-y-1 pl-5">
               {lines.map((line) => (
-                <li key={line}>{line.replace(/^\d+\.\s+/, '')}</li>
+                <li key={line}>{renderInlineMarkdown(line.replace(/^\d+\.\s+/, ''))}</li>
               ))}
             </ol>
           )
@@ -523,12 +534,33 @@ function StructuredAssistantContent({ content }: { content: string }) {
 
         return (
           <div key={index} className="whitespace-pre-wrap break-words">
-            {block}
+            {renderInlineMarkdown(block)}
           </div>
         )
       })}
     </div>
   )
+}
+
+function renderInlineMarkdown(value: string): React.ReactNode {
+  const pattern = /(\*\*[^*]+\*\*|__[^_]+__|\/\/[^/]+\/\/|(?<!\*)\*[^*]+\*(?!\*)|(?<!_)_[^_]+_(?!_)|`[^`]+`|\[[^\]]+\]\((https?:\/\/[^)]+)\))/g
+  const parts = value.split(pattern).filter(Boolean)
+  return parts.map((part, index) => {
+    if ((part.startsWith('**') && part.endsWith('**')) || (part.startsWith('__') && part.endsWith('__'))) {
+      return <strong key={index}>{part.slice(2, -2)}</strong>
+    }
+    if ((part.startsWith('//') && part.endsWith('//')) || (part.startsWith('*') && part.endsWith('*')) || (part.startsWith('_') && part.endsWith('_'))) {
+      return <em key={index}>{part.slice(part.startsWith('//') ? 2 : 1, part.startsWith('//') ? -2 : -1)}</em>
+    }
+    if (part.startsWith('`') && part.endsWith('`')) {
+      return <code key={index} className="rounded bg-slate-200 px-1 py-0.5 text-[0.9em]">{part.slice(1, -1)}</code>
+    }
+    const link = /^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/.exec(part)
+    if (link) {
+      return <a key={index} href={link[2]} target="_blank" rel="noreferrer" className="text-primary underline">{link[1]}</a>
+    }
+    return part
+  })
 }
 
 function MetricCard({ label, value, compact = false }: { label: string; value: string; compact?: boolean }) {
