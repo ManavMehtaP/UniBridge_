@@ -61,15 +61,38 @@ services:
       # Must equal the API's DJANGO_AI_SERVICE_TOKEN.
       - key: SERVICE_TOKEN
         sync: false
+      # Public URL of the freellmapi service below + the /v1 suffix, e.g.
+      #   https://unibridge-freellmapi.onrender.com/v1
       - key: FREELLMAPI_BASE_URL
         sync: false
       - key: FREELLMAPI_API_KEY
         sync: false
       - key: FREELLMAPI_MODEL
         value: auto
+      - key: FREELLMAPI_DOCUMENT_MODEL
+        value: gemini-2.5-flash
       - key: AI_TIMEOUT_SECONDS
         value: "60"
       - key: AI_MAX_RETRIES
         value: "2"
       - key: AI_RETRY_BACKOFF_SECONDS
         value: "2"
+
+  # ── FreeLLMAPI router (LLM provider that Django calls) ──────
+  # Serves its proxy at /v1 (server/src/app.ts), and reads Render's $PORT.
+  - type: web
+    name: unibridge-freellmapi
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: "./AI Assistant/freellmapi/Dockerfile"
+    dockerContext: "./AI Assistant/freellmapi"
+    autoDeploy: true
+    healthCheckPath: /api/ping
+    # NOTE: freellmapi keeps its provider keys/settings in SQLite under
+    # /app/server/data. Render's free filesystem is EPHEMERAL, so that config is
+    # wiped on every redeploy/sleep. Attach a Disk mounted at /app/server/data
+    # (paid plan) to make it durable — otherwise you must re-add keys each deploy.
+    envVars:
+      - key: NODE_ENV
+        value: production
