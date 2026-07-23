@@ -1680,6 +1680,8 @@ export const portalService = {
     const rows = parseCsvRecords(buffer, ["semester_number", "code", "name"]);
     let created = 0, updated = 0;
     const errors: { row: number; enrollmentNo: string; reason: string }[] = [];
+    const conflicts: { row: number; enrollmentNo: string; reason: string }[] = [];
+    const seen = new Set<string>();
     for (const { row, record } of rows) {
       const ref = `${record.code}/S${record.semester_number}`;
       try {
@@ -1690,6 +1692,10 @@ export const portalService = {
         const credits = Number(record.credits ?? 4) || 4;
         const type = String(record.type ?? "THEORY").trim().toUpperCase();
         if (!semNum || semNum < 1 || semNum > 8 || !code || !name) { errors.push({ row, enrollmentNo: ref, reason: "semester_number (1–8), code and name are required." }); continue; }
+        // In-file duplicate: same code+semester appears twice in THIS upload — flag the later row.
+        const key = `${code}|${semNum}`;
+        if (seen.has(key)) { conflicts.push({ row, enrollmentNo: ref, reason: "Duplicate code/semester within the file." }); continue; }
+        seen.add(key);
         if (branch) await assertBranchAllowed(universityId, branch);
         const existing = await prisma.subject.findFirst({ where: { universityId, semesterNumber: semNum, code, deletedAt: null } });
         if (existing) {
@@ -1703,7 +1709,7 @@ export const portalService = {
         errors.push({ row, enrollmentNo: ref, reason: e instanceof ApiError ? e.message : "Failed to import row." });
       }
     }
-    return { created, updated, errors, totalRows: rows.length };
+    return { totalRows: rows.length, created, updated, skipped: errors.length + conflicts.length, conflicts, errors, warnings: [] as string[] };
   },
 
   async deleteSubject(subjectId: string) {
@@ -2784,6 +2790,8 @@ export const portalService = {
   },
 
   async createAcademicYear(universityId: string, body: { label: string; startDate: string; endDate: string }) {
+    const university = await prisma.university.findUnique({ where: { id: universityId }, select: { id: true } });
+    if (!university) throw new ApiError(409, "UNIVERSITY_CONTEXT_STALE", "Your session is connected to an old university record. Sign in again and retry.");
     const year = await prisma.academicYear.create({ data: { universityId, label: body.label, startDate: new Date(body.startDate), endDate: new Date(body.endDate), status: "DRAFT" } });
     return { id: year.id, label: year.label, status: year.status };
   },
@@ -4301,6 +4309,21 @@ export const portalService = {
     return { id: note.id, title: note.title, fileUrl: note.fileUrl, status, releaseAt, message: status === "SCHEDULED" ? "Note scheduled." : "Note published." };
   },
 
+  // Browser posts the PYQ paper (multipart); backend stores it and hands it to the AI service for topic analysis.
+  async facultyUploadPyq(facultyId: string, universityId: string, fileBuffer: Buffer | undefined, fileMeta: { originalname?: string; mimetype?: string; size?: number }, body: Record<string, string>) {
+    if (!fileBuffer) throw new ApiError(400, "VALIDATION_ERROR", "File is required.");
+    const subjectId = String(body.subjectId ?? "");
+    const year = String(body.year ?? "").trim();
+    if (!subjectId) throw new ApiError(400, "VALIDATION_ERROR", "Subject is required.");
+    if (!year) throw new ApiError(400, "VALIDATION_ERROR", "Year is required.");
+    const semester = await facultyActiveSemester(facultyId, universityId);
+    await ensureFacultyAssignedSubject(facultyId, universityId, subjectId, semester.id);
+    const mimeType = fileMeta.mimetype ?? "application/octet-stream";
+    const fileKey = `pyqs/${universityId}/${facultyId}/${Date.now()}-${(fileMeta.originalname ?? "file").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    await uploadObject(fileKey, fileBuffer, mimeType);
+    return this.uploadPyq(subjectId, facultyId, year, objectUrl(fileKey), fileKey);
+  },
+
   async updateFacultyNote(facultyId: string, noteId: string, fileBuffer: Buffer | undefined, fileMeta: { originalname?: string; mimetype?: string; size?: number }, body: Record<string, string>) {
     const note = await prisma.note.findFirst({ where: { id: noteId, facultyId, deletedAt: null } });
     if (!note) throw new ApiError(404, "NOT_FOUND", "Note not found.");
@@ -5632,32 +5655,26 @@ export const portalService = {
     if (exists) throw new ApiError(409, "CONFLICT", "This batch already exists.");
     const start = body.startDate ? new Date(body.startDate) : new Date(`${y1}-07-01`);
     const end = body.endDate ? new Date(body.endDate) : new Date(`${y2}-05-31`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) throw new ApiError(400, "VALIDATION_ERROR", "The end date must be after the start date.");
     const activeNum = body.activeSemester && body.activeSemester >= 1 && body.activeSemester <= 8 ? body.activeSemester : 1;
-    const y = await prisma.academicYear.create({
-      data: { universityId, label, status: "ACTIVE", startDate: start, endDate: end },
+    const university = await prisma.university.findUnique({ where: { id: universityId }, select: { id: true } });
+    if (!university) throw new ApiError(409, "UNIVERSITY_CONTEXT_STALE", "Your session is connected to an old university record. Sign in again and retry.");
+    // 8 semesters, 4 phases each. The transaction prevents a partial year if
+    // any semester/phase insert fails.
+    const y = await prisma.$transaction(async (tx) => {
+      const year = await tx.academicYear.create({ data: { universityId, label, status: "ACTIVE", startDate: start, endDate: end } });
+      const perSem = (end.getTime() - start.getTime()) / 8;
+      const YL = ["FY", "FY", "SY", "SY", "TY", "TY", "FINAL", "FINAL"];
+      for (let i = 1; i <= 8; i++) {
+        const semStart = new Date(start.getTime() + perSem * (i - 1));
+        const semEnd = new Date(start.getTime() + perSem * i);
+        const status = i === activeNum ? "ACTIVE" : i < activeNum ? "COMPLETE" : "UPCOMING";
+        const sem = await tx.semester.create({ data: { universityId, academicYearId: year.id, number: i, label: `Semester ${i}`, yearLevel: YL[i - 1] as any, status: status as any, startDate: semStart, endDate: semEnd } });
+        const phaseSpan = (semEnd.getTime() - semStart.getTime()) / 4;
+        await tx.phase.createMany({ data: [1, 2, 3, 4].map((p) => ({ semesterId: sem.id, label: `T${p}`, number: p, startDate: new Date(semStart.getTime() + phaseSpan * (p - 1)), endDate: new Date(semStart.getTime() + phaseSpan * p) })) });
+      }
+      return year;
     });
-    // 8 semesters, 4 phases each. Only `activeNum` is ACTIVE; earlier are COMPLETE, later UPCOMING.
-    const perSem = (end.getTime() - start.getTime()) / 8;
-    const YL = ["FY", "FY", "SY", "SY", "TY", "TY", "FINAL", "FINAL"];
-    for (let i = 1; i <= 8; i++) {
-      const semStart = new Date(start.getTime() + perSem * (i - 1));
-      const semEnd = new Date(start.getTime() + perSem * i);
-      const status = i === activeNum ? "ACTIVE" : i < activeNum ? "COMPLETE" : "UPCOMING";
-      const sem = await prisma.semester.create({
-        data: {
-          universityId, academicYearId: y.id, number: i, label: `Semester ${i}`,
-          yearLevel: YL[i - 1] as any, status: status as any, startDate: semStart, endDate: semEnd,
-        },
-      });
-      const phaseSpan = (semEnd.getTime() - semStart.getTime()) / 4;
-      await prisma.phase.createMany({
-        data: [1, 2, 3, 4].map((p) => ({
-          semesterId: sem.id, label: `T${p}`, number: p,
-          startDate: new Date(semStart.getTime() + phaseSpan * (p - 1)),
-          endDate: new Date(semStart.getTime() + phaseSpan * p),
-        })),
-      });
-    }
     return { id: y.id, label: y.label, status: y.status, semestersCreated: 8 };
   },
 
@@ -5675,19 +5692,28 @@ export const portalService = {
       throw new ApiError(400, "VALIDATION_ERROR", "academicYearId, number (1–8), startDate, endDate required.");
     }
     const yearLevel = n <= 2 ? "FY" : n <= 4 ? "SY" : n <= 6 ? "TY" : "FINAL";
+    const year = await prisma.academicYear.findFirst({ where: { id: body.academicYearId, universityId }, select: { id: true } });
+    if (!year) throw new ApiError(400, "INVALID_ACADEMIC_YEAR", "Academic year does not belong to this university.");
     const start = new Date(body.startDate);
     const end = new Date(body.endDate);
-    const sem = await prisma.semester.create({
-      data: { universityId, academicYearId: body.academicYearId, number: n, label: `Semester ${n}`, yearLevel, status: "UPCOMING", startDate: start, endDate: end },
-    });
-    // 4 phases (T1–T4) split evenly across the semester
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) throw new ApiError(400, "VALIDATION_ERROR", "The end date must be after the start date.");
+    const duplicate = await prisma.semester.findFirst({ where: { academicYearId: body.academicYearId, number: n } });
+    if (duplicate) throw new ApiError(409, "CONFLICT", `Semester ${n} already exists for this academic year.`);
+    // 4 phases (T1–T4) split evenly across the semester — created with the semester in one
+    // transaction so a phase-insert failure can't leave a phaseless semester behind.
     const span = (end.getTime() - start.getTime()) / 4;
-    await prisma.phase.createMany({
-      data: [1, 2, 3, 4].map((i) => ({
-        semesterId: sem.id, label: `T${i}`, number: i,
-        startDate: new Date(start.getTime() + span * (i - 1)),
-        endDate: new Date(start.getTime() + span * i),
-      })),
+    const sem = await prisma.$transaction(async (tx) => {
+      const sem = await tx.semester.create({
+        data: { universityId, academicYearId: body.academicYearId, number: n, label: `Semester ${n}`, yearLevel, status: "UPCOMING", startDate: start, endDate: end },
+      });
+      await tx.phase.createMany({
+        data: [1, 2, 3, 4].map((i) => ({
+          semesterId: sem.id, label: `T${i}`, number: i,
+          startDate: new Date(start.getTime() + span * (i - 1)),
+          endDate: new Date(start.getTime() + span * i),
+        })),
+      });
+      return sem;
     });
     return { id: sem.id, label: sem.label, yearLevel };
   },
@@ -5696,21 +5722,27 @@ export const portalService = {
   async uniActivateSemester(universityId: string, semesterId: string) {
     const s = await prisma.semester.findFirst({ where: { id: semesterId, universityId } });
     if (!s) throw new ApiError(404, "NOT_FOUND", "Semester not found.");
-    await prisma.semester.updateMany({ where: { academicYearId: s.academicYearId, number: { lt: s.number } }, data: { status: "COMPLETE" } });
-    await prisma.semester.updateMany({ where: { academicYearId: s.academicYearId, number: { gt: s.number } }, data: { status: "UPCOMING" } });
-    await prisma.semester.update({ where: { id: semesterId }, data: { status: "ACTIVE" } });
-    // ponytail: HodBatchScope.batchId is @unique (one row per batch). Move every scope in this
-    // year onto the newly active semester so the HOD keeps ownership when advancing (Sem 3 → 4)
-    // and can upload the new roster there.
-    const yearBatchIds = (await prisma.batch.findMany({ where: { academicYearId: s.academicYearId }, select: { id: true } })).map((b) => b.id);
-    if (yearBatchIds.length) {
-      await prisma.hodBatchScope.updateMany({ where: { batchId: { in: yearBatchIds } }, data: { semesterId } });
-    }
+    // Atomic: sibling status shifts + scope migration must all land together, or none — a partial
+    // failure would leave the year with no ACTIVE semester or with scopes on the wrong semester.
+    await prisma.$transaction(async (tx) => {
+      await tx.semester.updateMany({ where: { academicYearId: s.academicYearId, number: { lt: s.number } }, data: { status: "COMPLETE" } });
+      await tx.semester.updateMany({ where: { academicYearId: s.academicYearId, number: { gt: s.number } }, data: { status: "UPCOMING" } });
+      await tx.semester.update({ where: { id: semesterId }, data: { status: "ACTIVE" } });
+      // ponytail: HodBatchScope.batchId is @unique (one row per batch). Move every scope in this
+      // year onto the newly active semester so the HOD keeps ownership when advancing (Sem 3 → 4)
+      // and can upload the new roster there.
+      const yearBatchIds = (await tx.batch.findMany({ where: { academicYearId: s.academicYearId }, select: { id: true } })).map((b) => b.id);
+      if (yearBatchIds.length) {
+        await tx.hodBatchScope.updateMany({ where: { batchId: { in: yearBatchIds } }, data: { semesterId } });
+      }
+    });
     return { id: semesterId, status: "ACTIVE" };
   },
 
   async uniCreateBatch(universityId: string, body: { academicYearId: string; code: string; yearLevel: string }) {
     if (!body.academicYearId || !body.code || !body.yearLevel) throw new ApiError(400, "VALIDATION_ERROR", "academicYearId, code, yearLevel required.");
+    const year = await prisma.academicYear.findFirst({ where: { id: body.academicYearId, universityId }, select: { id: true } });
+    if (!year) throw new ApiError(400, "INVALID_ACADEMIC_YEAR", "Academic year does not belong to this university.");
     const exists = await prisma.batch.findFirst({ where: { academicYearId: body.academicYearId, code: body.code } });
     if (exists) throw new ApiError(409, "CONFLICT", "Batch code already exists in this year.");
     const b = await prisma.batch.create({
@@ -5735,18 +5767,24 @@ export const portalService = {
     if (!firstSem) throw new ApiError(400, "NO_FIRST_SEMESTER", `Semester ${firstSemNum} (first of ${body.yearLevel}) doesn't exist.`);
     if (firstSem.status === "COMPLETE") throw new ApiError(400, "FIRST_SEMESTER_COMPLETE", "Batches can only be created during the first semester of the year level.");
     const initial = body.initial.toUpperCase();
-    const created: { id: string; code: string }[] = [];
-    for (let i = 1; i <= body.count; i++) {
-      const code = `${initial}${i}`;
-      const dup = await prisma.batch.findFirst({ where: { academicYearId: body.academicYearId, code } });
-      if (dup) continue;
-      const batch = await prisma.batch.create({
-        data: { universityId, academicYearId: body.academicYearId, code, yearLevel: body.yearLevel as any },
-      });
-      await prisma.hodBatchScope.create({ data: { facultyId: body.hodId, batchId: batch.id, semesterId: firstSem.id, academicYearId: body.academicYearId } });
-      created.push({ id: batch.id, code });
-    }
-    return { created, initial, count: created.length };
+    // Atomic: each batch and its HOD scope are created together, and the whole bulk either lands
+    // or rolls back — no half-created batch runs (batch with no scope, or partial N-of-M).
+    const { created, skipped } = await prisma.$transaction(async (tx) => {
+      const created: { id: string; code: string }[] = [];
+      let skipped = 0;
+      for (let i = 1; i <= body.count; i++) {
+        const code = `${initial}${i}`;
+        const dup = await tx.batch.findFirst({ where: { academicYearId: body.academicYearId, code } });
+        if (dup) { skipped++; continue; }
+        const batch = await tx.batch.create({
+          data: { universityId, academicYearId: body.academicYearId, code, yearLevel: body.yearLevel as any },
+        });
+        await tx.hodBatchScope.create({ data: { facultyId: body.hodId, batchId: batch.id, semesterId: firstSem.id, academicYearId: body.academicYearId } });
+        created.push({ id: batch.id, code });
+      }
+      return { created, skipped };
+    });
+    return { created, initial, count: created.length, skipped };
   },
 
   // Promotion Dashboard (Dean): per-HOD promotion status for the current year-end transition,
@@ -5843,6 +5881,7 @@ export const portalService = {
     const hod = await prisma.faculty.findFirst({ where: { id: facultyId, universityId, isHod: true, deletedAt: null } });
     if (!hod) throw new ApiError(404, "HOD_NOT_FOUND", "Faculty is not a HOD.");
     const batch = await batchById(batchId);
+    if (batch.universityId !== universityId) throw new ApiError(400, "INVALID_BATCH", "Batch does not belong to this university.");
     // batchId is @unique on HodBatchScope — one owner per batch
     await prisma.hodBatchScope.upsert({
       where: { batchId },
@@ -5852,7 +5891,10 @@ export const portalService = {
     return { batchId, facultyId, batchCode: batch.code };
   },
 
-  async uniRemoveHodScope(_universityId: string, batchId: string) {
+  async uniRemoveHodScope(universityId: string, batchId: string) {
+    // Ownership: never let a Dean drop a scope for a batch in another university.
+    const batch = await batchById(batchId);
+    if (batch.universityId !== universityId) throw new ApiError(400, "INVALID_BATCH", "Batch does not belong to this university.");
     await prisma.hodBatchScope.deleteMany({ where: { batchId } });
     return { removed: true };
   },
@@ -5929,6 +5971,8 @@ export const portalService = {
     const rows = parseCsvRecords(buffer, ["employee_id", "name", "year", "mentor_code"]);
     let created = 0, updated = 0;
     const errors: { row: number; enrollmentNo: string; reason: string }[] = [];
+    const conflicts: { row: number; enrollmentNo: string; reason: string }[] = [];
+    const seen = new Set<string>();
     for (const { row, record } of rows) {
       const employeeId = String(record.employee_id ?? "").trim();
       const ref = employeeId || `row:${row}`;
@@ -5939,6 +5983,11 @@ export const portalService = {
         if (!employeeId || !name || !year) { errors.push({ row, enrollmentNo: ref, reason: "Missing employee_id/name/year." }); continue; }
         if (!["FY", "SY", "TY", "FINAL"].includes(year)) { errors.push({ row, enrollmentNo: ref, reason: `Invalid year "${year}" (use FY/SY/TY/FINAL).` }); continue; }
         const email = String(record.email ?? "").trim() || `${name.toLowerCase().replace(/\s+/g, ".")}@mail.ljku.edu.in`;
+        // In-file duplicate: same employee_id/email appears twice in THIS upload — flag the later row
+        // as a conflict instead of silently overwriting the first via the update branch below.
+        const keys = [`emp:${employeeId.toUpperCase()}`, `email:${email.toLowerCase()}`];
+        if (keys.some((k) => seen.has(k))) { conflicts.push({ row, enrollmentNo: ref, reason: "Duplicate employee_id/email within the file." }); continue; }
+        keys.forEach((k) => seen.add(k));
         const existing = await prisma.faculty.findFirst({ where: { OR: [{ employeeId }, { email }], universityId } });
         if (existing) {
           await prisma.faculty.update({ where: { id: existing.id }, data: { name, mentorCode, year: existing.year || year } });
@@ -5953,7 +6002,7 @@ export const portalService = {
         errors.push({ row, enrollmentNo: ref, reason: e instanceof Error ? e.message : "Failed to import row." });
       }
     }
-    return { created, updated, errors, totalRows: rows.length };
+    return { totalRows: rows.length, created, updated, skipped: errors.length + conflicts.length, conflicts, errors, warnings: [] as string[] };
   },
 
   async uniStudents(universityId: string, opts: { search?: string; branch?: string; page?: number; limit?: number }) {

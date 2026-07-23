@@ -32,8 +32,9 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
 
       if (role === "SUPER_ADMIN") {
         // Dean tokens are verified against the isDean flag — any faculty id alone is not enough.
-        const faculty = await prisma.faculty.findUnique({ where: { id: userId }, select: { isDean: true } });
+        const faculty = await prisma.faculty.findUnique({ where: { id: userId }, select: { isDean: true, universityId: true } });
         if (!faculty?.isDean) return next(new ApiError(401, "AUTH_INVALID", "Invalid dean token."));
+        if (faculty.universityId !== uniId) return next(new ApiError(409, "UNIVERSITY_CONTEXT_STALE", "Your Dean session belongs to an old university record. Sign in again."));
         req.user = { id: userId, role: "SUPER_ADMIN", isHod: false, universityId: uniId };
         return next();
       }

@@ -276,6 +276,15 @@ facultyRouter.delete("/notes/:noteId", asyncHandler(async (req, res) => {
   res.status(204).send();
 }));
 
+// PYQ paper upload (multipart): backend stores the file and hands it to the AI service for topic analysis.
+facultyRouter.post("/pyq", upload.single("file"), asyncHandler(async (req, res) => {
+  res.status(201).json(await portalService.facultyUploadPyq(
+    req.user!.id, req.user!.universityId, req.file?.buffer,
+    { originalname: req.file?.originalname, mimetype: req.file?.mimetype, size: req.file?.size },
+    req.body,
+  ));
+}));
+
 facultyRouter.post("/quizzes/ai-generate", asyncHandler(async (req, res) => {
   res.status(201).json(await portalService.createAiQuizJob(req.user!.id, req.user!.universityId, req.body));
 }));

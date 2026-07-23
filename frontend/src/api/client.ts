@@ -36,6 +36,16 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined
 
+    // A database reset can invalidate the university context while a Dean tab
+    // is still open. Clear the stale persisted session instead of leaving the
+    // user on a page that repeatedly submits requests with an old UUID.
+    const apiCode = (error.response?.data as { error?: { code?: string } } | undefined)?.error?.code
+    if (apiCode === 'UNIVERSITY_CONTEXT_STALE') {
+      useAuthStore.getState().clearAuth()
+      redirectToLogin()
+      return Promise.reject(error)
+    }
+
     if (!original || error.response?.status !== 401 || original._retry) {
       return Promise.reject(error)
     }

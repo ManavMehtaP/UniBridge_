@@ -79,6 +79,8 @@ export const facultyApi = {
   createNote: (form: FormData) => api.post('/faculty/notes', form).then((r) => r.data),
   updateNote: (id: string, form: FormData) => api.put(`/faculty/notes/${id}`, form).then((r) => r.data),
   deleteNote: (id: string) => api.delete(`/faculty/notes/${id}`).then((r) => r.data),
+  // Multipart: file + fields (subjectId, year). Backend stores it and triggers AI PYQ analysis.
+  uploadPyq: (form: FormData) => api.post('/faculty/pyq', form).then((r) => r.data),
 
   quizzes: (params: Params) =>
     api.get<PaginatedResponse<T.FacultyQuiz>>('/faculty/quizzes', { params }).then((r) => r.data),
@@ -87,6 +89,10 @@ export const facultyApi = {
   deleteQuiz: (id: string) => api.delete(`/faculty/quizzes/${id}`).then((r) => r.data),
   publishQuiz: (id: string) => api.patch(`/faculty/quizzes/${id}/publish`).then((r) => r.data),
   unpublishQuiz: (id: string) => api.patch(`/faculty/quizzes/${id}/unpublish`).then((r) => r.data),
+  // Quiz questions — a quiz with 0 questions can never be published, so this is required to ship a quiz.
+  getQuiz: (id: string) => api.get(`/faculty/quizzes/${id}`).then((r) => r.data),
+  replaceQuizQuestions: (id: string, questions: { text: string; options: string[]; correctOption: string; explanation?: string; order: number }[]) =>
+    api.put(`/faculty/quizzes/${id}/questions`, { questions }).then((r) => r.data),
 
   announcements: (params: Params) =>
     api.get<PaginatedResponse<T.FacultyAnnouncement>>('/faculty/announcements', { params }).then((r) => r.data),

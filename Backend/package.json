@@ -10,7 +10,8 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
-    "prisma:migrate": "prisma migrate dev"
+    "prisma:migrate": "prisma migrate dev",
+    "reset:import-faculty": "tsx scripts/reset-and-import-faculty.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",

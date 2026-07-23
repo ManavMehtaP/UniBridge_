@@ -36,6 +36,22 @@ export function errorHandler(
     });
   }
 
+  // Never expose a raw Prisma FK exception to the UI. This most commonly
+  // happens after a single-university database reseed when an old process or
+  // session still carries the deleted university UUID.
+  const databaseError = error as { code?: string; meta?: { field_name?: string } };
+  if (databaseError?.code === "P2003") {
+    const field = databaseError.meta?.field_name ?? "";
+    const staleUniversity = field.includes("universityId") || field.includes("academic_years_universityId_fkey");
+    return res.status(409).json({
+      error: {
+        code: staleUniversity ? "UNIVERSITY_CONTEXT_STALE" : "RELATION_CONSTRAINT",
+        message: staleUniversity ? "Your session is connected to an old university record. Sign in again and retry." : "This record is still referenced by another record.",
+        details: [],
+      },
+    });
+  }
+
   const message = error instanceof Error ? error.message : "Unexpected server error.";
   return res.status(500).json({
     error: {

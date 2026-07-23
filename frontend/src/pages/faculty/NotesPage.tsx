@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { FileText, Plus } from 'lucide-react'
+import { FileQuestion, FileText, Plus } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
 import { errorMessage } from '@/api/client'
 import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
@@ -27,6 +27,7 @@ export default function NotesPage() {
   const [driveSubjectId, setDriveSubjectId] = useState('')
   const [parentId, setParentId] = useState<string | null>(null)
   const [showFolder, setShowFolder] = useState(false)
+  const [showPyq, setShowPyq] = useState(false)
   const [renameFolder, setRenameFolder] = useState<{ id: string; name: string } | null>(null)
 
   const list = useQuery({ queryKey: ['faculty', 'notes'], queryFn: () => facultyApi.notes({ limit: 20 }) })
@@ -51,7 +52,7 @@ export default function NotesPage() {
     <PageShell
       title="Notes"
       subtitle={list.data ? `${list.data.total} notes uploaded` : 'Upload PDFs and study materials'}
-      action={<div className="flex gap-2"><Button variant="outline" leftIcon={<Plus size={15} />} onClick={() => setShowFolder(true)} disabled={!driveSubjectId}>New folder</Button><Button leftIcon={<Plus size={15} />} onClick={() => setShowUpload(true)}>Upload Note</Button></div>}
+      action={<div className="flex gap-2"><Button variant="outline" leftIcon={<Plus size={15} />} onClick={() => setShowFolder(true)} disabled={!driveSubjectId}>New folder</Button><Button variant="outline" leftIcon={<FileQuestion size={15} />} onClick={() => setShowPyq(true)}>Add PYQ</Button><Button leftIcon={<Plus size={15} />} onClick={() => setShowUpload(true)}>Upload Note</Button></div>}
     >
       <div className="mb-4 max-w-md"><Select value={driveSubjectId} onChange={(e) => setDriveSubjectId(e.target.value)} placeholder="Select subject" options={subjectOpts} /></div>
       {drive.isLoading ? (
@@ -63,6 +64,7 @@ export default function NotesPage() {
       )}
 
       <UploadNoteModal open={showUpload} onClose={() => setShowUpload(false)} subjectOpts={subjectOpts} assignments={scope.data?.assignments ?? []} defaultSubjectId={driveSubjectId} folderId={parentId} onSuccess={() => { invalidate(); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }} />
+      <UploadPyqModal open={showPyq} onClose={() => setShowPyq(false)} subjectOpts={subjectOpts} defaultSubjectId={driveSubjectId} />
       <FolderModal open={showFolder} subjectId={driveSubjectId} parentId={parentId} onClose={() => setShowFolder(false)} onSuccess={() => { setShowFolder(false); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }} />
       <RenameFolderModal folder={renameFolder} onClose={() => setRenameFolder(null)} onSuccess={() => { setRenameFolder(null); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }} />
       <EditNoteModal note={editOf} onClose={() => setEditOf(null)} onSuccess={invalidate} />
@@ -144,6 +146,53 @@ function UploadNoteModal({ open, onClose, subjectOpts, assignments, defaultSubje
         </div>
         <FileDrop accept=".pdf,.doc,.docx,.ppt,.pptx,.zip,.png,.jpg,.jpeg,.gif,.txt,.xls,.xlsx" maxSizeMb={50} onFile={setFile} selectedName={file?.name} />
         <ReleasePicker mode={mode} setMode={setMode} releaseAt={releaseAt} setReleaseAt={setReleaseAt} />
+      </div>
+    </Modal>
+  )
+}
+
+// PYQ paper upload — subject + exam year + file. Backend hands it to the AI service for topic analysis.
+function UploadPyqModal({ open, onClose, subjectOpts, defaultSubjectId }: { open: boolean; onClose: () => void; subjectOpts: { value: string; label: string }[]; defaultSubjectId: string }) {
+  const [file, setFile] = useState<File | null>(null)
+  const [subjectId, setSubjectId] = useState('')
+  const [year, setYear] = useState('')
+  useEffect(() => { if (open && defaultSubjectId) setSubjectId(defaultSubjectId) }, [open, defaultSubjectId])
+
+  const upload = useMutation({
+    mutationFn: () => {
+      const fd = new FormData()
+      fd.append('file', file!)
+      fd.append('subjectId', subjectId)
+      fd.append('year', year.trim())
+      return facultyApi.uploadPyq(fd)
+    },
+    onSuccess: (r: any) => { toast.success(r?.processingStatus === 'queued' ? 'PYQ uploaded — AI analysis queued' : 'PYQ uploaded'); close() },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  function close() { setFile(null); setSubjectId(''); setYear(''); onClose() }
+
+  return (
+    <Modal
+      open={open} onClose={close} title="Add PYQ Paper"
+      footer={
+        <>
+          <Button variant="outline" onClick={close}>Cancel</Button>
+          <Button onClick={() => upload.mutate()} loading={upload.isPending} disabled={!file || !subjectId || !year.trim()}>Upload</Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Subject *</label>
+          <Select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} placeholder="Select subject" options={subjectOpts} />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Exam Year *</label>
+          <Input value={year} onChange={(e) => setYear(e.target.value)} placeholder="e.g. 2023 or 2023-24" />
+        </div>
+        <FileDrop accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.txt" maxSizeMb={50} onFile={setFile} selectedName={file?.name} />
+        <p className="rounded-sm bg-primary-light/50 px-3 py-2 text-xs text-text-muted">The paper is sent to the AI assistant to extract recurring topics for students.</p>
       </div>
     </Modal>
   )

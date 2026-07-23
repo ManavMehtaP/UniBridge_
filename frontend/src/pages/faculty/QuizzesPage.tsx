@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { HelpCircle, Plus, Send, Trash2 } from 'lucide-react'
+import { HelpCircle, ListChecks, Plus, Send, Trash2 } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
 import { errorMessage } from '@/api/client'
 import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
@@ -23,6 +23,7 @@ export default function QuizzesPage() {
   const scope = useFacultyScope()
   const [showCreate, setShowCreate] = useState(false)
   const [deleteOf, setDeleteOf] = useState<FacultyQuiz | null>(null)
+  const [questionsOf, setQuestionsOf] = useState<FacultyQuiz | null>(null)
 
   const list = useQuery({ queryKey: ['faculty', 'quizzes'], queryFn: () => facultyApi.quizzes({ page: 1, limit: 30 }) })
 
@@ -75,6 +76,9 @@ export default function QuizzesPage() {
                   {q.attemptCount != null && <span><b>{q.attemptCount}</b> attempts</span>}
                 </div>
                 <div className="flex gap-1">
+                  <button onClick={() => setQuestionsOf(q)} title="Edit questions" className="flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-[11px] font-semibold text-text-secondary hover:bg-primary-light hover:text-primary">
+                    <ListChecks size={14} /> Questions
+                  </button>
                   <button onClick={() => togglePublish.mutate(q)} title={q.isPublished ? 'Unpublish' : 'Publish'} className="flex h-7 w-7 items-center justify-center rounded-sm text-text-secondary hover:bg-primary-light hover:text-primary">
                     <Send size={14} />
                   </button>
@@ -89,6 +93,8 @@ export default function QuizzesPage() {
       )}
 
       <CreateQuizModal open={showCreate} onClose={() => setShowCreate(false)} subjectOpts={subjectOpts} assignments={scope.data?.assignments ?? []} semesterId={scope.data?.activeSemester.id ?? ''} onSuccess={() => qc.invalidateQueries({ queryKey: ['faculty', 'quizzes'] })} />
+
+      <QuestionsModal quiz={questionsOf} onClose={() => setQuestionsOf(null)} onSuccess={() => qc.invalidateQueries({ queryKey: ['faculty', 'quizzes'] })} />
 
       <ConfirmDialog
         open={!!deleteOf}
@@ -160,6 +166,93 @@ function CreateQuizModal({ open, onClose, subjectOpts, assignments, semesterId, 
             <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="h-10 w-full rounded-sm border border-border bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10" />
           </div>
         </div>
+      </div>
+    </Modal>
+  )
+}
+
+const LETTERS = ['A', 'B', 'C', 'D']
+type Draft = { text: string; options: string[]; correctOption: string; explanation: string }
+const blankQuestion = (): Draft => ({ text: '', options: ['', '', '', ''], correctOption: 'A', explanation: '' })
+
+// A quiz with 0 questions can never be published (backend rejects it), so this editor is what
+// actually makes a quiz usable. Answers + explanations set here are what students see on review.
+function QuestionsModal({ quiz, onClose, onSuccess }: { quiz: FacultyQuiz | null; onClose: () => void; onSuccess: () => void }) {
+  const [items, setItems] = useState<Draft[]>([])
+
+  const detail = useQuery({
+    queryKey: ['faculty', 'quiz', quiz?.id],
+    queryFn: () => facultyApi.getQuiz(quiz!.id),
+    enabled: !!quiz,
+  })
+
+  useEffect(() => {
+    if (!quiz) { setItems([]); return }
+    const loaded = (detail.data?.questions ?? []) as { text: string; options: unknown; correctOption: string; explanation?: string | null }[]
+    setItems(loaded.length
+      ? loaded.map((q) => ({
+          text: q.text,
+          options: Array.isArray(q.options) ? [...(q.options as string[]), '', '', '', ''].slice(0, 4) : ['', '', '', ''],
+          correctOption: q.correctOption || 'A',
+          explanation: q.explanation ?? '',
+        }))
+      : [blankQuestion()])
+  }, [quiz, detail.data])
+
+  const save = useMutation({
+    mutationFn: () => facultyApi.replaceQuizQuestions(quiz!.id, items.map((q, i) => ({
+      text: q.text.trim(), options: q.options.map((o) => o.trim()), correctOption: q.correctOption,
+      explanation: q.explanation.trim() || undefined, order: i + 1,
+    }))),
+    onSuccess: () => { toast.success('Questions saved'); onSuccess(); onClose() },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+
+  const patch = (i: number, next: Partial<Draft>) => setItems((prev) => prev.map((q, idx) => (idx === i ? { ...q, ...next } : q)))
+  const valid = items.length > 0 && items.every((q) => q.text.trim() && q.options.every((o) => o.trim()))
+
+  return (
+    <Modal
+      open={!!quiz} onClose={onClose} title={`Questions — ${quiz?.title ?? ''}`} size="lg"
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => save.mutate()} loading={save.isPending} disabled={!valid}>Save {items.length} question{items.length === 1 ? '' : 's'}</Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {items.map((q, i) => (
+          <div key={i} className="rounded-card border border-border bg-surface-2 p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Question {i + 1}</span>
+              {items.length > 1 && (
+                <button onClick={() => setItems((prev) => prev.filter((_, idx) => idx !== i))} className="text-xs font-semibold text-danger hover:underline">Remove</button>
+              )}
+            </div>
+            <Input value={q.text} onChange={(e) => patch(i, { text: e.target.value })} placeholder="What does CPU stand for?" />
+            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {q.options.map((opt, oi) => (
+                <label key={oi} className="flex items-center gap-2">
+                  <input
+                    type="radio" name={`correct-${i}`} checked={q.correctOption === LETTERS[oi]}
+                    onChange={() => patch(i, { correctOption: LETTERS[oi] })}
+                    className="accent-primary" title={`Mark ${LETTERS[oi]} correct`}
+                  />
+                  <span className="w-4 text-xs font-bold text-text-muted">{LETTERS[oi]}</span>
+                  <Input
+                    value={opt}
+                    onChange={(e) => patch(i, { options: q.options.map((o, idx) => (idx === oi ? e.target.value : o)) })}
+                    placeholder={`Option ${LETTERS[oi]}`}
+                  />
+                </label>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-text-muted">Selected radio = correct answer (currently <b>{q.correctOption}</b>).</p>
+            <Input className="mt-2" value={q.explanation} onChange={(e) => patch(i, { explanation: e.target.value })} placeholder="Explanation shown to students on review (optional)" />
+          </div>
+        ))}
+        <Button variant="outline" leftIcon={<Plus size={15} />} onClick={() => setItems((prev) => [...prev, blankQuestion()])}>Add question</Button>
       </div>
     </Modal>
   )
