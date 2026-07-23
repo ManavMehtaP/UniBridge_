@@ -1,16 +1,16 @@
-# Graph Report - UniBridge_  (2026-07-22)
+# Graph Report - UniBridge_  (2026-07-23)
 
 ## Corpus Check
-- 211 files · ~247,201 words
+- 214 files · ~250,901 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1379 nodes · 2432 edges · 188 communities (111 shown, 77 thin omitted)
-- Extraction: 73% EXTRACTED · 27% INFERRED · 0% AMBIGUOUS · INFERRED: 645 edges (avg confidence: 0.52)
+- 1401 nodes · 2453 edges · 194 communities (114 shown, 80 thin omitted)
+- Extraction: 74% EXTRACTED · 26% INFERRED · 0% AMBIGUOUS · INFERRED: 645 edges (avg confidence: 0.52)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `d1805481`
+- Built from commit: `d82332ca`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -158,6 +158,11 @@
 - Path
 - Student
 - Subject
+- pg
+- formatStudyPlan
+- getAttendanceRules
+- NON_WORKING_TYPES
+- overallAttendancePctBulk
 
 ## God Nodes (most connected - your core abstractions)
 1. `StudentContextMixin` - 47 edges
@@ -186,11 +191,11 @@
 ## Import Cycles
 - None detected.
 
-## Communities (188 total, 77 thin omitted)
+## Communities (194 total, 80 thin omitted)
 
 ### Community 0 - "UniBridge Free-Tier Deployment Plan"
-Cohesion: 0.16
-Nodes (8): WIPE_TABLES, adapter, pool, prisma, universityId(), requireAuth(), ApiError, asyncHandler()
+Cohesion: 0.21
+Nodes (8): WIPE_TABLES, chunkedCreate(), gradeFor(), main(), rand(), adapter, pool, prisma
 
 ### Community 1 - "Confirmed Bugs"
 Cohesion: 0.10
@@ -198,15 +203,15 @@ Nodes (37): Store, HodService, StudentListParams, AcademicYear, AcademicYearStat
 
 ### Community 2 - "UniBridge Frontend & Backend Changes for Faster Response"
 Cohesion: 0.07
-Nodes (22): api, queue, hodApi, Params, SubjectComponentCfg, SubjectConfig, SubjectConfigInput, Notification (+14 more)
+Nodes (24): api, queue, facultyApi, Params, hodApi, Params, SubjectComponentCfg, SubjectConfig (+16 more)
 
 ### Community 3 - "Observability: verify every performance change"
-Cohesion: 0.04
-Nodes (12): DAY_LABELS, DAY_NAMES, DayStatus, formatStudyPlan(), getAttendanceRules(), NON_WORKING_TYPES, overallAttendancePctBulk(), overallAttendancePctBulkArr() (+4 more)
+Cohesion: 0.05
+Nodes (4): DAY_LABELS, DAY_NAMES, DayStatus, Scope
 
 ### Community 4 - "Backend changes"
 Cohesion: 0.11
-Nodes (19): dependencies, compression, cors, helmet, morgan, multer, pdfkit, pg (+11 more)
+Nodes (19): dependencies, compression, express, helmet, pdfkit, @prisma/client, tsx, @types/multer (+11 more)
 
 ### Community 5 - "Frontend changes"
 Cohesion: 0.11
@@ -229,8 +234,8 @@ Cohesion: 0.12
 Nodes (17): axios, date-fns, dependencies, axios, date-fns, lucide-react, react, react-hot-toast (+9 more)
 
 ### Community 10 - "storage.ts"
-Cohesion: 0.38
-Nodes (11): amzDate(), basePath, enc(), encPath(), hmac(), presignGetUrl(), sha256hex(), signingKey() (+3 more)
+Cohesion: 0.17
+Nodes (19): env, envSchema, amzDate(), basePath, enc(), encPath(), hmac(), presignGetUrl() (+11 more)
 
 ### Community 11 - "AppShell.tsx"
 Cohesion: 0.22
@@ -301,7 +306,7 @@ Cohesion: 0.36
 Nodes (8): AuthStore, homePathOf(), portalOf(), useAuthStore, useIsFaculty(), useIsHod(), useIsStudent(), useUser()
 
 ### Community 32 - "NotesPage.tsx"
-Cohesion: 0.24
+Cohesion: 0.22
 Nodes (4): Assignment, EditNoteModal(), toIso(), UploadNoteModal()
 
 ### Community 34 - "auth.ts"
@@ -348,6 +353,10 @@ Nodes (51): AIConversation, BackgroundJob, Note, NoteInsight, PYQFile, PYQInsigh
 Cohesion: 0.40
 Nodes (3): BadgeProps, Tone, tones
 
+### Community 55 - "QuizzesPage.tsx"
+Cohesion: 0.25
+Nodes (5): Assignment, blankQuestion(), Draft, LETTERS, QuestionsModal()
+
 ### Community 60 - "Select.tsx"
 Cohesion: 0.50
 Nodes (3): Select, SelectOption, SelectProps
@@ -365,20 +374,24 @@ Cohesion: 0.12
 Nodes (25): build_features(), _generate_synthetic_data(), get_model(), Any, Train and persist the best ML regressor for marks prediction., retrain_from_db(), train_model(), model_metadata() (+17 more)
 
 ### Community 97 - "buildPagination"
-Cohesion: 0.19
-Nodes (13): AIDocument, AIDocumentChunk, AIDocumentMetadata, CalendarEvent, Flashcard, Meta, Phase, PrismaMirrorModel (+5 more)
+Cohesion: 0.28
+Nodes (11): AIDocument, AIDocumentChunk, AIDocumentMetadata, CalendarEvent, Flashcard, Meta, Phase, PrismaMirrorModel (+3 more)
 
 ### Community 114 - "AIAssistantPage.tsx"
 Cohesion: 0.29
 Nodes (3): renderInlineMarkdown(), StructuredAssistantContent(), SubjectOption
 
 ### Community 129 - "hod.ts"
-Cohesion: 0.13
-Nodes (10): requireSuperAdmin(), hodScope(), adminRouter, upload, authRouter, facultyRouter, upload, apiRouter (+2 more)
+Cohesion: 0.23
+Nodes (7): universityId(), requireAuth(), requireFacultyPortal(), requireSuperAdmin(), authRouter, facultyRouter, upload
 
 ### Community 132 - "useTableSort.ts"
 Cohesion: 0.67
 Nodes (3): getVal(), SortDir, useTableSort()
+
+### Community 133 - "http.ts"
+Cohesion: 0.21
+Nodes (5): hodScope(), adminRouter, upload, ApiError, asyncHandler()
 
 ### Community 134 - "http.ts"
 Cohesion: 0.15
@@ -386,23 +399,23 @@ Nodes (11): AIServiceError, Any, SharedAIService, GeminiDocumentService, _image_
 
 ### Community 135 - "studyPlanner.service.ts"
 Cohesion: 0.28
-Nodes (14): academicInputsForStudent(), AcademicSubject, activePhaseForToday(), addDays(), buildTasks(), generateStudyPlanForStudent(), getLatestStudyPlan(), jsonStrings() (+6 more)
+Nodes (13): academicInputsForStudent(), AcademicSubject, activePhaseForToday(), addDays(), buildTasks(), generateStudyPlanForStudent(), jsonStrings(), nearestExamDate() (+5 more)
 
 ### Community 136 - "app.ts"
-Cohesion: 0.33
-Nodes (7): createApp(), env, envSchema, errorHandler(), notFoundHandler(), app, portalService
+Cohesion: 0.22
+Nodes (8): createApp(), errorHandler(), notFoundHandler(), apiRouter, studentRouter, upload, app, portalService
 
 ### Community 137 - "package.json"
 Cohesion: 0.20
 Nodes (9): name, private, scripts, build, dev, lint, preview, type (+1 more)
 
 ### Community 138 - "scripts"
-Cohesion: 0.25
-Nodes (8): scripts, build, dev, postinstall, prisma:generate, prisma:migrate, prisma:push, start
+Cohesion: 0.22
+Nodes (9): scripts, build, dev, postinstall, prisma:generate, prisma:migrate, prisma:push, reset:import-faculty (+1 more)
 
 ### Community 139 - "studentAiBridge.service.ts"
-Cohesion: 0.39
-Nodes (6): baseUrl(), DjangoResponse, requestInternal(), requestStudent(), serviceHeaders(), studentAiBridge
+Cohesion: 0.36
+Nodes (9): chunked(), clamp(), gradeFor(), GRID, main(), rand(), SLOTS, studentBase() (+1 more)
 
 ### Community 140 - "package.json"
 Cohesion: 0.40
@@ -412,9 +425,9 @@ Nodes (4): name, private, type, version
 Cohesion: 0.36
 Nodes (8): chunked(), clamp(), GRID, LECTURES, main(), rand(), studentBase(), T
 
-### Community 153 - "seed-sy3-marks.ts"
-Cohesion: 0.70
-Nodes (4): chunkedCreate(), gradeFor(), main(), rand()
+### Community 148 - "@types/pdfkit"
+Cohesion: 0.67
+Nodes (3): FacultyRow, main(), parseCsv()
 
 ### Community 161 - "getFacultyScopeData"
 Cohesion: 0.40
@@ -430,11 +443,11 @@ Nodes (12): djangoAiApi, djangoAiDelete(), djangoAiErrorMessage(), djangoAiGet()
 
 ### Community 168 - "formatStudyPlan"
 Cohesion: 0.26
-Nodes (13): Semester, normalize_list(), analyze_pyq_statistics(), _extract_questions(), _matching_semester(), process_pyq_document(), _store_legacy_insight(), _store_pyq_chunks() (+5 more)
+Nodes (12): Semester, analyze_pyq_statistics(), _extract_questions(), _matching_semester(), process_pyq_document(), _store_legacy_insight(), _store_pyq_chunks(), _store_questions() (+4 more)
 
 ### Community 169 - "getAttendanceRules"
-Cohesion: 0.25
-Nodes (13): extract_document_text(), _extract_note_structure(), _extract_scanned_pdf_text(), _keywords(), _local_pdf_path(), process_note_document(), Path, Use Gemini vision only when a PDF has no usable embedded text layer. (+5 more)
+Cohesion: 0.23
+Nodes (14): normalize_list(), extract_document_text(), _extract_note_structure(), _extract_scanned_pdf_text(), _keywords(), _local_pdf_path(), process_note_document(), Path (+6 more)
 
 ### Community 176 - "InternalServicePermission"
 Cohesion: 0.40
@@ -453,18 +466,18 @@ Cohesion: 0.50
 Nodes (4): generate_study_plan(), _planner_context(), Student, date
 
 ## Knowledge Gaps
-- **470 isolated node(s):** `Meta`, `Scope`, `DAY_NAMES`, `DayStatus`, `DAY_LABELS` (+465 more)
+- **476 isolated node(s):** `name`, `version`, `private`, `type`, `dev` (+471 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **77 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **80 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `Note` connect `getFacultyScopeData` to `buildPagination`, `overallAttendancePctBulk`, `getAttendanceRules`, `hodAllBatchIds`?**
-  _High betweenness centrality (0.004) - this node is a cross-community bridge._
-- **Why does `prisma` connect `UniBridge Free-Tier Deployment Plan` to `seed-sy3-timetable-attendance.ts`, `seed-sy3-marks.ts`, `Confirmed Bugs`?**
   _High betweenness centrality (0.002) - this node is a cross-community bridge._
-- **Why does `dependencies` connect `Backend changes` to `http.ts`, `package.json`, `settings.py`, `prisma`, `@prisma/adapter-pg`, `@prisma/client`, `@types/pdfkit`, `zod`?**
+- **Why does `StudentAiApiTests` connect `overallAttendancePctBulk` to `formatStudyPlan`, `buildPagination`, `getFacultyScopeData`?**
+  _High betweenness centrality (0.002) - this node is a cross-community bridge._
+- **Why does `SharedAIService` connect `http.ts` to `getFacultyScopeData`, `generate_study_plan`, `hodAllBatchIds`?**
   _High betweenness centrality (0.002) - this node is a cross-community bridge._
 - **Are the 25 inferred relationships involving `StudentContextMixin` (e.g. with `AIConversation` and `BackgroundJob`) actually correct?**
   _`StudentContextMixin` has 25 INFERRED edges - model-reasoned connections that need verification._

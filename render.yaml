@@ -1,0 +1,75 @@
+# Render Blueprint — deploys BOTH services into ONE Render project.
+# Create via: Render Dashboard → New → Blueprint → pick this repo.
+# Secrets are marked `sync: false`, so Render prompts for them instead of storing them in git.
+services:
+  # ── Node/Express API ────────────────────────────────────────
+  - type: web
+    name: unibridge-api
+    runtime: docker
+    plan: free
+    region: singapore # keep both services + Supabase in the same region
+    dockerfilePath: ./Backend/Dockerfile
+    dockerContext: ./Backend
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: STORAGE_BUCKET_URL
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      # Origin ONLY — the bridge appends /api/v1/student-ai/ itself.
+      # Paste the AI service's URL after its first deploy.
+      - key: DJANGO_AI_BASE_URL
+        sync: false
+      - key: DJANGO_AI_SERVICE_TOKEN
+        sync: false
+
+  # ── Django AI assistant ─────────────────────────────────────
+  - type: web
+    name: unibridge-ai
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerfilePath: "./AI Assistant/Django AI assistant/Dockerfile"
+    dockerContext: "./AI Assistant/Django AI assistant"
+    autoDeploy: true
+    healthCheckPath: /api/v1/student-ai/health
+    envVars:
+      - key: DEBUG
+        value: "False"
+      # Django 400s every request unless its own hostname is listed here.
+      - key: ALLOWED_HOSTS
+        sync: false
+      # Browser calls Django directly → must include the Vercel origin(s), comma-separated.
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      # Must equal the API's DJANGO_AI_SERVICE_TOKEN.
+      - key: SERVICE_TOKEN
+        sync: false
+      - key: FREELLMAPI_BASE_URL
+        sync: false
+      - key: FREELLMAPI_API_KEY
+        sync: false
+      - key: FREELLMAPI_MODEL
+        value: auto
+      - key: AI_TIMEOUT_SECONDS
+        value: "60"
+      - key: AI_MAX_RETRIES
+        value: "2"
+      - key: AI_RETRY_BACKOFF_SECONDS
+        value: "2"

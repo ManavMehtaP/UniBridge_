@@ -34,6 +34,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Serves collected static (Django admin) when DEBUG=False — Django won't do it itself.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "unibridge_ai.cors.SimpleCorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
