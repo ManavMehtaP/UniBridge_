@@ -3832,7 +3832,10 @@ export const portalService = {
       orderBy: { updatedAt: "desc" },
     });
     if (insights.length === 0 && pyqFiles.length > 0) {
-      await Promise.all(pyqFiles.slice(0, 3).map((pyqFile) => bestEffortStudentAi(() => studentAiBridge.triggerPyqProcessing(pyqFile.id))));
+      await Promise.all(pyqFiles.slice(0, 3).map((pyqFile) => bestEffortStudentAi(() => studentAiBridge.triggerPyqProcessing(
+        pyqFile.id,
+        storageEnabled ? presignGetUrl(pyqFile.fileKey, 60 * 60) : undefined,
+      ))));
     }
     const topicFrequency = analysis ? Object.entries((analysis.topicFrequencies as Record<string, number>) ?? {}) : [];
     const importantTopics = topicFrequency.length > 0
