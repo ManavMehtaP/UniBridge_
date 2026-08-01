@@ -4,13 +4,14 @@ import { cn } from '@/lib/utils'
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   leftIcon?: React.ReactNode
   invalid?: boolean
+  label?: React.ReactNode
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { className, leftIcon, invalid, ...props },
+  { className, leftIcon, invalid, label, ...props },
   ref,
 ) {
-  return (
+  const field = (
     <div className="relative flex items-center">
       {leftIcon && (
         <span className="pointer-events-none absolute left-3 text-text-muted">{leftIcon}</span>
@@ -28,5 +29,13 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
         {...props}
       />
     </div>
+  )
+  if (!label) return field
+  // Wrapping <label> focuses the input on click — no htmlFor wiring needed.
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-text-secondary">{label}</span>
+      {field}
+    </label>
   )
 })

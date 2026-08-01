@@ -273,7 +273,7 @@ function StandbyTab({ scheduleId }: { scheduleId: string }) {
           <thead><tr><Th>Slot</Th><Th>Faculty</Th><Th>Status</Th></tr></thead>
           <tbody>
             {list.data.map((s) => (
-              <Tr key={s.slot}><Td>Standby {s.slot}</Td><Td>{s.faculty}</Td><Td><Badge tone={s.isActive ? 'success' : 'muted'}>{s.isActive ? 'Active' : 'Standby'}</Badge></Td></Tr>
+              <Tr key={s.slot}><Td>Standby {s.slot}</Td><Td>{s.faculty}</Td><Td><Badge tone={s.isActive ? 'success' : 'neutral'}>{s.isActive ? 'Active' : 'Standby'}</Badge></Td></Tr>
             ))}
           </tbody>
         </Table>
