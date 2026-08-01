@@ -6,6 +6,7 @@ import { generateStudyPlanForStudent, getLatestStudyPlan, refreshStudyPlanAfterP
 import type { Role, YearLevel } from "../types/domain.js";
 import type { ExportTable } from "../utils/export.js";
 import { renderDailyAttendancePdf, renderWeeklyAttendancePdf, type DailyBatch, type WeeklyStudent } from "../utils/attendancePdf.js";
+import { parseTimetableExcel } from "../utils/timetableExcel.js";
 import { ApiError, buildPagination } from "../utils/http.js";
 import type { Prisma } from "@prisma/client";
 
@@ -322,7 +323,10 @@ async function hodActiveSemester(universityId: string, hodYear: string | null | 
     if (s && s.universityId === universityId) return s;
   }
   if (hodYear) {
-    const s = await prisma.semester.findFirst({ where: { universityId, status: "ACTIVE", yearLevel: hodYear as any } });
+    // Deterministic: if several active semesters share a year level, always pick the same one
+    // (most recently created), so myScope and onboarding don't resolve different rows — which
+    // would split data across semesters and make the onboarding wizard re-appear in a loop.
+    const s = await prisma.semester.findFirst({ where: { universityId, status: "ACTIVE", yearLevel: hodYear as any }, orderBy: { createdAt: "desc" } });
     if (s) return s;
   }
   return getActiveSemester(universityId);
@@ -1054,10 +1058,18 @@ export const portalService = {
       const other = await prisma.studentEnrollment.count({ where: { studentId: sid, batchId: { notIn: batchIds } } });
       if (other === 0) orphanIds.push(sid);
     }
+    // Children that FK to rows we're about to delete but have NO cascade — must be cleared
+    // first or Postgres raises a foreign-key violation and the whole reset rolls back:
+    //  · ChatMessage → MentorAssignment + Student (mentor chat)
+    //  · ProxyLecture → TimetableSlot (coordinator proxies)
+    const slotIds = (await prisma.timetableSlot.findMany({ where: { batchId: { in: batchIds } }, select: { id: true } })).map((s) => s.id);
+    const mentorAsgIds = (await prisma.mentorAssignment.findMany({ where: { studentId: { in: studentIds } }, select: { id: true } })).map((m) => m.id);
     await prisma.$transaction([
+      prisma.chatMessage.deleteMany({ where: { OR: [{ mentorAssignmentId: { in: mentorAsgIds } }, { studentId: { in: orphanIds } }] } }),
       prisma.attendanceRecord.deleteMany({ where: { enrollmentId: { in: enrollmentIds } } }),
       prisma.result.deleteMany({ where: { enrollmentId: { in: enrollmentIds } } }),
       prisma.mentorAssignment.deleteMany({ where: { studentId: { in: studentIds } } }),
+      prisma.proxyLecture.deleteMany({ where: { slotId: { in: slotIds } } }),
       prisma.studentEnrollment.deleteMany({ where: { id: { in: enrollmentIds } } }),
       prisma.facultyBatchAssignment.deleteMany({ where: { batchId: { in: batchIds } } }),
       prisma.timetableSlot.deleteMany({ where: { batchId: { in: batchIds } } }),
@@ -4964,26 +4976,94 @@ export const portalService = {
     };
   },
 
+  // Mentee-risk analytics for THIS faculty's assigned mentees only. Surfaces:
+  //  • low weekly attendance (latest week with data, < threshold)
+  //  • low overall attendance (< threshold)
+  //  • failing exam results — below the pass mark of 36% of that exam's max
+  //    (so <9/25, <18/50, <36/100 all fall out of one percentage rule)
+  //  • failing subjects overall — total across all published phases < 36%.
   async facultyAnalyticsMentees(facultyId: string, universityId: string, semesterId?: string) {
     const scope = await getFacultyScopeData(facultyId, universityId, semesterId);
-    const data = (await Promise.all(scope.mentorAssignments.map(async (a) => {
-      const student = await prisma.student.findUnique({ where: { id: a.studentId } });
-      const enrollment = await currentEnrollmentForStudent(a.studentId, scope.semester.id);
-      if (!enrollment) return null;
-      const attendancePct = await computeOverallAttendancePct(enrollment.id);
-      const results = await prisma.result.findMany({ where: { enrollmentId: enrollment.id, isPublished: true }, select: { marksObtained: true, maxMarks: true } });
-      const avgMarksPct = results.length === 0 ? 0 : average(results.map((r) => (r.marksObtained / r.maxMarks) * 100));
-      const batch = await batchById(enrollment.batchId);
-      const riskFactor = attendancePct < 75 && avgMarksPct < 40 ? "BOTH" : attendancePct < 75 ? "ATTENDANCE" : avgMarksPct < 40 ? "MARKS" : "NONE";
-      const subjectBreakdown = await Promise.all(scope.assignedSubjectIds.map(async (subjectId) => {
-        const subject = await subjectById(subjectId);
-        const subjectPct = await computeAttendancePct(enrollment.id, subjectId);
-        const lastResult = await prisma.result.findFirst({ where: { enrollmentId: enrollment.id, subjectId }, orderBy: { createdAt: "desc" } });
-        return { subjectCode: subject.code, attendancePct: subjectPct, t2Marks: lastResult?.marksObtained ?? null };
-      }));
-      return { enrollmentNo: student?.enrollmentNo ?? "", name: student?.name ?? "", batchCode: batch.code, avgAttendancePct: attendancePct, avgMarksPct, riskFactor, subjectBreakdown };
-    }))).filter(Boolean) as Array<any>;
-    return { semesterLabel: scope.semester.label, totalMentees: data.length, atRiskCount: data.filter((r) => r.riskFactor !== "NONE").length, data };
+    const semId = scope.semester.id;
+    const THRESH = 75;          // attendance threshold
+    const PASS = 0.36;          // marks pass ratio (36% → 9/25, 18/50, 36/100)
+    const r1 = (n: number) => Math.round(n * 10) / 10;
+    const empty = { semesterLabel: scope.semester.label, weekLabel: null as string | null, threshold: THRESH, passPct: 36, summary: { totalMentees: 0, lowWeeklyCount: 0, lowOverallCount: 0, failingCount: 0 }, mentees: [] as any[] };
+    if (scope.mentorAssignments.length === 0) return empty;
+
+    const studentIds = scope.mentorAssignments.map((a) => a.studentId);
+    const enrollments = await prisma.studentEnrollment.findMany({
+      where: { studentId: { in: studentIds }, semesterId: semId, isCurrent: true },
+      include: { student: { select: { enrollmentNo: true, name: true } }, batch: { select: { code: true } } },
+    });
+    if (enrollments.length === 0) return empty;
+    const enrIds = enrollments.map((e) => e.id);
+
+    // Latest week WITH attendance data → its Mon..lastDate window.
+    const latest = await prisma.attendanceRecord.findFirst({ where: { enrollmentId: { in: enrIds } }, orderBy: { lectureDate: "desc" }, select: { lectureDate: true } });
+    const monday = (d: Date) => { const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x; };
+    const weekStart = latest ? monday(latest.lectureDate) : null;
+    const weekEnd = latest?.lectureDate ?? null;
+    const weekAgg = new Map<string, { att: number; tot: number }>();
+    if (weekStart && weekEnd) {
+      const wg = await prisma.attendanceRecord.groupBy({ by: ["enrollmentId", "isPresent"], where: { enrollmentId: { in: enrIds }, lectureDate: { gte: weekStart, lte: weekEnd } }, _count: { _all: true } });
+      for (const g of wg) { const w = weekAgg.get(g.enrollmentId) ?? { att: 0, tot: 0 }; w.tot += g._count._all; if (g.isPresent) w.att += g._count._all; weekAgg.set(g.enrollmentId, w); }
+    }
+
+    const overallMap = await overallAttendancePctBulk(enrIds);
+
+    // All published results for these mentees, with phase label + subject code.
+    const results = await prisma.result.findMany({ where: { enrollmentId: { in: enrIds }, isPublished: true }, select: { enrollmentId: true, marksObtained: true, maxMarks: true, subjectId: true, phaseId: true } });
+    const phases = await prisma.phase.findMany({ where: { semesterId: semId }, select: { id: true, label: true, number: true } });
+    const phaseLabel = new Map(phases.map((p) => [p.id, p.label]));
+    const phaseNum = new Map(phases.map((p) => [p.id, p.number]));
+    const subjs = await prisma.subject.findMany({ where: { id: { in: [...new Set(results.map((r) => r.subjectId))] } }, select: { id: true, code: true } });
+    const subjCode = new Map(subjs.map((s) => [s.id, s.code]));
+    const resByEnr = new Map<string, typeof results>();
+    for (const r of results) { const arr = resByEnr.get(r.enrollmentId) ?? []; arr.push(r); resByEnr.set(r.enrollmentId, arr); }
+
+    const mentees = enrollments.map((e) => {
+      const w = weekAgg.get(e.id) ?? { att: 0, tot: 0 };
+      const weeklyPct = w.tot > 0 ? r1((w.att / w.tot) * 100) : null;
+      const overallPct = r1(overallMap.get(e.id) ?? 0);
+      const rs = resByEnr.get(e.id) ?? [];
+
+      const failingExams = rs
+        .filter((r) => r.maxMarks > 0 && r.marksObtained < PASS * r.maxMarks)
+        .map((r) => ({ subjectCode: subjCode.get(r.subjectId) ?? "?", phase: phaseLabel.get(r.phaseId) ?? "?", phaseNo: phaseNum.get(r.phaseId) ?? 0, marksObtained: r.marksObtained, maxMarks: r.maxMarks, pct: r1((r.marksObtained / r.maxMarks) * 100) }))
+        .sort((a, b) => a.phaseNo - b.phaseNo || a.pct - b.pct);
+
+      // Overall per subject: sum across all published phases; fail if < 36% of total max.
+      const bySubj = new Map<string, { obt: number; max: number }>();
+      for (const r of rs) { const s = bySubj.get(r.subjectId) ?? { obt: 0, max: 0 }; s.obt += r.marksObtained; s.max += r.maxMarks; bySubj.set(r.subjectId, s); }
+      const failingSubjects = [...bySubj.entries()]
+        .filter(([, s]) => s.max > 0 && s.obt < PASS * s.max)
+        .map(([id, s]) => ({ subjectCode: subjCode.get(id) ?? "?", totalObtained: r1(s.obt), totalMax: r1(s.max), pct: r1((s.obt / s.max) * 100) }))
+        .sort((a, b) => a.pct - b.pct);
+
+      const lowWeekly = weeklyPct !== null && weeklyPct < THRESH;
+      const lowOverall = overallPct < THRESH;
+      return {
+        enrollmentNo: e.student.enrollmentNo, name: e.student.name, batchCode: e.batch.code,
+        weeklyAttendancePct: weeklyPct, weeklyAttended: w.att, weeklyTotal: w.tot,
+        overallAttendancePct: overallPct, lowWeekly, lowOverall,
+        failingExams, failingSubjects,
+        hasRisk: lowWeekly || lowOverall || failingExams.length > 0 || failingSubjects.length > 0,
+      };
+    }).sort((a, b) => Number(b.hasRisk) - Number(a.hasRisk) || a.overallAttendancePct - b.overallAttendancePct);
+
+    return {
+      semesterLabel: scope.semester.label,
+      weekLabel: weekStart && weekEnd ? `${fmtDate(weekStart)} – ${fmtDate(weekEnd)}` : null,
+      threshold: THRESH, passPct: 36,
+      summary: {
+        totalMentees: mentees.length,
+        lowWeeklyCount: mentees.filter((m) => m.lowWeekly).length,
+        lowOverallCount: mentees.filter((m) => m.lowOverall).length,
+        failingCount: mentees.filter((m) => m.failingExams.length > 0 || m.failingSubjects.length > 0).length,
+      },
+      mentees,
+    };
   },
 
   // ─────────────────────────────────────────────────────────────
@@ -6687,81 +6767,77 @@ export const portalService = {
     await prisma.timetableSlot.delete({ where: { id } });
   },
 
-  timetableCsvTemplate() {
-    return "batch,day,start,end,subject,room,mentor_code\nC2,Mon,09:00,10:00,TOC,L3,VKB\n";
-  },
-
-  // CSV columns: batch, day, start, end, subject, room?, mentor_code?
-  // If opts.replaceExisting → wipe every existing slot in the CSV's batches (in this semester) first.
-  async uploadTimetableCsv(scope: Scope, buffer: Buffer | undefined, opts: { semesterId?: string; replaceExisting?: boolean }) {
-    if (!buffer) throw new ApiError(400, "VALIDATION_ERROR", "CSV file is required.");
-    const rows = parseCsvRecords(buffer, ["batch", "day", "start", "end", "subject"]);
+  // Upload the standard LJ class-timetable Excel (.xlsx). Batch, day, time, subject,
+  // room and faculty (via mentor code) are read straight from the sheet. A slot IS the
+  // faculty↔subject↔batch assignment that drives attendance/results, so we upsert that
+  // too. Unknown mentor codes still create the slot (faculty left blank) and are warned.
+  // If opts.replaceExisting → wipe existing slots in the file's batches (this semester) first.
+  async uploadTimetableExcel(scope: Scope, buffer: Buffer | undefined, opts: { semesterId?: string; replaceExisting?: boolean }) {
+    if (!buffer) throw new ApiError(400, "VALIDATION_ERROR", "An .xlsx timetable file is required.");
+    const { records, errors: parseErrors } = parseTimetableExcel(buffer);
     const semId = opts.semesterId || (await scopeSemester(scope)).id;
     const [batches, subjects, faculty] = await Promise.all([
       prisma.batch.findMany({ where: { id: { in: scope.hodBatchIds } } }),
       subjectsBySemester(semId),
-      prisma.faculty.findMany({ where: { universityId: scope.universityId, deletedAt: null }, select: { id: true, employeeId: true, mentorCode: true } }),
+      prisma.faculty.findMany({ where: { universityId: scope.universityId, deletedAt: null }, select: { id: true, mentorCode: true } }),
     ]);
+    // Normalise subject codes so the sheet's "FCSP-2"/"FSD-2" match DB "FCSP-II"/"FSD-2".
+    const normSub = (s: string) => s.toUpperCase().replace(/[\s-]/g, "").replace(/IV$/, "4").replace(/III$/, "3").replace(/II$/, "2");
     const batchByCode = new Map(batches.map((b) => [b.code.toUpperCase(), b]));
-    const subjByCode = new Map(subjects.map((s) => [s.code.toUpperCase(), s]));
+    const subjByCode = new Map(subjects.map((s) => [normSub(s.code), s]));
     const facByMentor = new Map(faculty.filter((f) => f.mentorCode).map((f) => [f.mentorCode!.toUpperCase(), f.id]));
-    const DAYS: Record<string, number> = { MON: 1, MONDAY: 1, TUE: 2, TUESDAY: 2, WED: 3, WEDNESDAY: 3, THU: 4, THURSDAY: 4, FRI: 5, FRIDAY: 5, SAT: 6, SATURDAY: 6 };
+    const DAYS: Record<string, number> = { MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+    // Combined cells like "IMM/COA" or "KDM/UMS": try the whole token, then the first part.
+    const findSubject = (raw: string) => subjByCode.get(normSub(raw)) ?? subjByCode.get(normSub(raw.split("/")[0]));
+    const findFaculty = (raw: string | null): string | null => raw ? (facByMentor.get(raw.toUpperCase()) ?? facByMentor.get(raw.split("/")[0].trim().toUpperCase()) ?? null) : null;
 
-    // If replacing, wipe existing slots in every batch touched by this CSV (respecting HOD scope).
     if (opts.replaceExisting) {
-      const csvBatchIds = new Set<string>();
-      for (const { record } of rows) {
-        const b = batchByCode.get(String(record.batch ?? "").trim().toUpperCase());
-        if (b) csvBatchIds.add(b.id);
-      }
-      if (csvBatchIds.size > 0) {
-        await prisma.timetableSlot.deleteMany({ where: { semesterId: semId, batchId: { in: [...csvBatchIds] } } });
-      }
+      const ids = new Set<string>();
+      for (const r of records) { const b = batchByCode.get(r.batch.toUpperCase()); if (b) ids.add(b.id); }
+      if (ids.size > 0) await prisma.timetableSlot.deleteMany({ where: { semesterId: semId, batchId: { in: [...ids] } } });
     }
 
     let created = 0, skipped = 0;
     const errors: { row: number; enrollmentNo: string; reason: string }[] = [];
-    for (const { row, record } of rows) {
-      const ref = `${record.batch}/${record.day}/${record.start}`;
+    const unmatchedMentors = new Set<string>();
+    parseErrors.forEach((m, i) => errors.push({ row: i + 1, enrollmentNo: "", reason: m }));
+
+    let idx = 0;
+    for (const rec of records) {
+      idx++;
+      const ref = `${rec.batch} · ${rec.day} ${rec.start}`;
       try {
-        const batch = batchByCode.get(String(record.batch ?? "").trim().toUpperCase());
-        if (!batch) { errors.push({ row, enrollmentNo: ref, reason: `Batch "${record.batch}" not in your scope.` }); continue; }
-        const subject = subjByCode.get(String(record.subject ?? "").trim().toUpperCase());
-        if (!subject) { errors.push({ row, enrollmentNo: ref, reason: `Subject "${record.subject}" not found.` }); continue; }
-        const dayRaw = String(record.day ?? "").trim().toUpperCase();
-        const dayOfWeek = /^[1-6]$/.test(dayRaw) ? Number(dayRaw) : DAYS[dayRaw];
-        if (!dayOfWeek) { errors.push({ row, enrollmentNo: ref, reason: `Invalid day "${record.day}" (use Mon–Sat or 1–6).` }); continue; }
-        const start = String(record.start ?? "").trim();
-        const end = String(record.end ?? "").trim();
-        if (!/^\d{1,2}:\d{2}$/.test(start) || !/^\d{1,2}:\d{2}$/.test(end)) { errors.push({ row, enrollmentNo: ref, reason: "start/end must be HH:MM." }); continue; }
-        let facultyId: string | null = null;
-        if (record.mentor_code) {
-          facultyId = facByMentor.get(String(record.mentor_code).trim().toUpperCase()) ?? null;
-          if (!facultyId) { errors.push({ row, enrollmentNo: ref, reason: `Mentor code "${record.mentor_code}" not found.` }); continue; }
-        }
+        const batch = batchByCode.get(rec.batch.toUpperCase());
+        if (!batch) { errors.push({ row: idx, enrollmentNo: ref, reason: `Batch "${rec.batch}" not in your scope.` }); continue; }
+        const subject = findSubject(rec.subject);
+        if (!subject) { errors.push({ row: idx, enrollmentNo: ref, reason: `Subject "${rec.subject}" not found in this semester.` }); continue; }
+        const dayOfWeek = DAYS[rec.day];
+        if (!dayOfWeek) { errors.push({ row: idx, enrollmentNo: ref, reason: `Invalid day "${rec.day}".` }); continue; }
+        const facultyId = findFaculty(rec.mentorCode);
+        if (rec.mentorCode && !facultyId) unmatchedMentors.add(rec.mentorCode.toUpperCase());
 
         // Append mode: skip duplicates (same batch/day/start/subject).
         if (!opts.replaceExisting) {
-          const dup = await prisma.timetableSlot.findFirst({ where: { semesterId: semId, batchId: batch.id, dayOfWeek, slotStart: start, subjectId: subject.id } });
+          const dup = await prisma.timetableSlot.findFirst({ where: { semesterId: semId, batchId: batch.id, dayOfWeek, slotStart: rec.start, subjectId: subject.id } });
           if (dup) { skipped++; continue; }
         }
         await prisma.timetableSlot.create({
-          data: { semesterId: semId, batchId: batch.id, subjectId: subject.id, facultyId, dayOfWeek, slotStart: start, slotEnd: end, room: record.room ? String(record.room).trim() : null },
+          data: { semesterId: semId, batchId: batch.id, subjectId: subject.id, facultyId, dayOfWeek, slotStart: rec.start, slotEnd: rec.end, room: rec.room },
         });
-        // ponytail: auto-assign — a timetable slot IS the faculty↔subject↔batch assignment
-        // that drives attendance/results. Upsert it (dedup) so we don't rely on a separate step.
+        // Auto-assign: the slot IS the faculty↔subject↔batch assignment (dedup upsert).
         if (facultyId) {
           const existing = await prisma.facultyBatchAssignment.findFirst({ where: { facultyId, subjectId: subject.id, batchId: batch.id, semesterId: semId } });
-          if (!existing) {
-            await prisma.facultyBatchAssignment.create({ data: { facultyId, subjectId: subject.id, batchId: batch.id, semesterId: semId } });
-          }
+          if (!existing) await prisma.facultyBatchAssignment.create({ data: { facultyId, subjectId: subject.id, batchId: batch.id, semesterId: semId } });
         }
         created++;
       } catch {
-        errors.push({ row, enrollmentNo: ref, reason: "Failed to import row." });
+        errors.push({ row: idx, enrollmentNo: ref, reason: "Failed to import this lecture." });
       }
     }
-    return { created, skipped, errors, totalRows: rows.length, replaced: !!opts.replaceExisting };
+    const warnings = unmatchedMentors.size > 0
+      ? [`These mentor codes weren't found — their lectures were added without a faculty: ${[...unmatchedMentors].sort().join(", ")}. Assign them in Faculty, or set the code, then re-upload.`]
+      : [];
+    return { created, skipped, errors, warnings, totalRows: records.length, replaced: !!opts.replaceExisting };
   },
 
   // ─── Attendance-only: batches under the faculty's HOD ──────

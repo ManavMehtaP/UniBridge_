@@ -212,7 +212,7 @@ function TimetableStep({ semesterId, onDone }: { semesterId: string; onDone: () 
   const upload = useMutation({
     mutationFn: (file: File) => {
       const fd = new FormData(); fd.append('file', file); fd.append('semesterId', semesterId); fd.append('replaceExisting', 'true')
-      return hodApi.timetable.uploadCsv(fd) as Promise<{ created: number; skipped?: number; errors: unknown[] }>
+      return hodApi.timetable.uploadExcel(fd) as Promise<{ created: number; skipped?: number; errors: unknown[] }>
     },
     onSuccess: (r) => { setResult(r); toast.success(`${r.created} slots · faculty auto-assigned`) },
     onError: (e) => toast.error(errorMessage(e)),
@@ -220,11 +220,8 @@ function TimetableStep({ semesterId, onDone }: { semesterId: string; onDone: () 
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-text-secondary">Upload the timetable. Faculty are <b>auto-assigned</b> to each batch from the <b>mentor_code</b> column.</p>
-        <Button size="sm" variant="ghost" leftIcon={<Download size={14} />} onClick={hodApi.timetable.downloadTemplate}>Template</Button>
-      </div>
-      <FileDrop onFile={(f) => upload.mutate(f)} disabled={upload.isPending} subtitle="Columns: batch, day, start, end, subject, room, mentor_code" />
+      <p className="text-sm text-text-secondary">Upload the standard LJ class-timetable <b>.xlsx</b>. Faculty are <b>auto-assigned</b> to each batch from the <b>mentor code</b> in the sheet.</p>
+      <FileDrop accept=".xlsx" onFile={(f) => upload.mutate(f)} disabled={upload.isPending} subtitle="Batch, day, time, subject, room & faculty are read from the sheet automatically" />
       {upload.isPending && <div className="flex items-center gap-2 text-xs text-text-muted"><Spinner size={14} /> Uploading…</div>}
       {result && (
         <div className="rounded-sm border border-border bg-surface-2 p-3 text-xs">

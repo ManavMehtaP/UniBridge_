@@ -18,6 +18,7 @@ export function CsvUploadModal({
   canSubmit = true,
   requiredColumns,
   optionalColumns,
+  accept = '.csv',
 }: {
   open: boolean
   onClose: () => void
@@ -32,6 +33,8 @@ export function CsvUploadModal({
   requiredColumns?: string[]
   /** Column headers that are recognised but not mandatory. */
   optionalColumns?: string[]
+  /** Accepted file extensions for the picker (e.g. '.csv' or '.xlsx'). */
+  accept?: string
 }) {
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
@@ -113,7 +116,7 @@ export function CsvUploadModal({
           </div>
         ) : null}
 
-        <FileDrop accept=".csv" onFile={setFile} selectedName={file?.name} />
+        <FileDrop accept={accept} onFile={setFile} selectedName={file?.name} />
 
         {result && (
           <div className="rounded-sm border border-border bg-surface-2 p-3 text-sm">
@@ -122,6 +125,11 @@ export function CsvUploadModal({
               {(result.inserted ?? result.created ?? result.assigned ?? result.mapped ?? 0)} added
               {result.updated ? `, ${result.updated} updated` : ''}
             </div>
+            {result.warnings && result.warnings.length > 0 && (
+              <ul className="mt-2 space-y-1 text-xs text-warning">
+                {result.warnings.map((w, i) => <li key={i}>⚠ {w}</li>)}
+              </ul>
+            )}
             {result.errors && result.errors.length > 0 && (
               <div className="mt-2">
                 <div className="mb-1 text-xs font-semibold text-danger">

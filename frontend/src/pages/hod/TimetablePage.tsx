@@ -119,7 +119,7 @@ export default function HodTimetablePage() {
         readOnly ? undefined : (
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" leftIcon={<Trash2 size={15} />} onClick={() => setConfirmClear(true)} disabled={!batchId || slots.length === 0}>Delete Timetable</Button>
-          <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload CSV</Button>
+          <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload Timetable</Button>
           <Button leftIcon={<Plus size={15} />} onClick={() => setEditing({ dayOfWeek: 1 })} disabled={!batchId}>Add Lecture</Button>
         </div>
         )
@@ -227,11 +227,9 @@ export default function HodTimetablePage() {
       <CsvUploadModal
         open={showUpload}
         onClose={() => { setShowUpload(false); setReplaceExisting(false) }}
-        title="Upload Timetable"
-        onUpload={hodApi.timetable.uploadCsv}
-        onDownloadTemplate={hodApi.timetable.downloadTemplate}
-        requiredColumns={['batch', 'day', 'start', 'end', 'subject']}
-        optionalColumns={['room', 'mentor_code']}
+        title="Upload Timetable (Excel)"
+        accept=".xlsx"
+        onUpload={hodApi.timetable.uploadExcel}
         buildForm={(form) => {
           if (scope.data?.activeSemester.id) form.append('semesterId', scope.data.activeSemester.id)
           if (replaceExisting) form.append('replaceExisting', '1')
@@ -241,10 +239,13 @@ export default function HodTimetablePage() {
             <label className="flex cursor-pointer items-center gap-2 rounded-sm border border-border bg-warning-light/30 px-3 py-2">
               <input type="checkbox" checked={replaceExisting} onChange={(e) => setReplaceExisting(e.target.checked)} className="h-4 w-4 accent-warning" />
               <span className="text-xs font-medium text-text-primary">
-                Replace existing timetable — delete every current lecture in the CSV's batches before importing.
+                Replace existing timetable — delete every current lecture in the file's batches before importing.
               </span>
             </label>
-            <p className="text-xs text-text-muted"><b>day</b> = Mon–Sat or 1–6 · <b>mentor_code</b> = the faculty's 3-char code.</p>
+            <p className="text-xs text-text-muted">
+              Upload the standard LJ class-timetable <b>.xlsx</b>. Batch, day, time, subject, room and faculty
+              (from the <b>mentor code</b>) are read automatically, and each faculty is assigned to their subject &amp; batch.
+            </p>
           </div>
         }
       />

@@ -99,6 +99,7 @@ export interface CsvResult {
   mapped?: number
   totalRows?: number
   errors?: { row: number; enrollmentNo?: string; reason: string }[]
+  warnings?: string[]
 }
 
 // ── Faculty ────────────────────────────────────────────
