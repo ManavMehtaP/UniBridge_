@@ -5678,19 +5678,40 @@ export const portalService = {
     }
     const mentors = await prisma.mentorAssignment.findMany({ where: { semesterId: sem.id, studentId: { in: roster.map((r) => r.studentId) } }, select: { studentId: true, mentorCode: true } });
     const mentorOf = new Map(mentors.map((m) => [m.studentId, m.mentorCode]));
+
+    // Current week = the Mon–`upto` window of the week containing `upto`. Week number
+    // counts from the first attendance date (not semester.startDate, which is back-dated).
+    const monday = (d: Date) => { const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x; };
+    const first = await prisma.attendanceRecord.findFirst({ where: { enrollmentId: { in: roster.map((r) => r.id) } }, orderBy: { lectureDate: "asc" }, select: { lectureDate: true } });
+    const weekStart = monday(upto);
+    const weekNo = first ? Math.floor((weekStart.getTime() - monday(first.lectureDate).getTime()) / (7 * 86400000)) + 1 : 1;
+    const weekGrouped = await prisma.attendanceRecord.groupBy({
+      by: ["enrollmentId", "isPresent"],
+      where: { enrollmentId: { in: roster.map((r) => r.id) }, lectureDate: { gte: weekStart, lte: upto } },
+      _count: { _all: true },
+    });
+    const weekAgg = new Map<string, { att: number; tot: number }>();
+    for (const g of weekGrouped) {
+      let w = weekAgg.get(g.enrollmentId); if (!w) { w = { att: 0, tot: 0 }; weekAgg.set(g.enrollmentId, w); }
+      w.tot += g._count._all; if (g.isPresent) w.att += g._count._all;
+    }
+
     const students: WeeklyStudent[] = roster.map((r) => {
       const a = agg.get(r.id) ?? { att: subjects.map(() => 0), tot: subjects.map(() => 0) };
+      const w = weekAgg.get(r.id) ?? { att: 0, tot: 0 };
       const overallAttended = a.att.reduce((s, v) => s + v, 0);
       const overallTotal = a.tot.reduce((s, v) => s + v, 0);
       return {
         roll: r.roll, div: r.batchCode, enrollmentNo: r.enrollmentNo, name: r.name,
+        weekAttended: w.att, weekTotal: w.tot,
         subjects: a.att.map((att, i) => ({ attended: att, total: a.tot[i] })),
         overallAttended, overallTotal, mentor: mentorOf.get(r.studentId) ?? "—",
       };
-    });
+    }).sort((x, y) => x.roll - y.roll || x.div.localeCompare(y.div));
+
     return renderWeeklyAttendancePdf({
       institute: INSTITUTE, department: `${sem.yearLevel}-${sem.number}`, semester: sem.label,
-      uptoLabel: `up to ${fmtDate(upto)}`, subjectCodes: subjects.map((s) => s.code), students, threshold: 75,
+      uptoLabel: `up to ${fmtDate(upto)}`, weekNo, subjectCodes: subjects.map((s) => s.code), students, threshold: 75,
     });
   },
 

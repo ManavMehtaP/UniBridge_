@@ -10,6 +10,11 @@ const RED = "#C0392B";       // partial-absence / below-threshold
 const INK = "#111111";
 const GREY = "#666666";
 const GRID = "#B8B8B8";
+// Reference "Compiled Attendance" sheet palette (matches the source HTML).
+const HBLUE = "#4F81BD";     // header cells
+const HGREEN = "#2E7D32";    // green title cell
+const LOWRED = "#E53935";    // below-threshold % cell fill
+const STRIPE = "#F7F7F7";    // even-row zebra
 
 function buffered(doc: PDFKit.PDFDocument): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -122,79 +127,151 @@ export function renderDailyAttendancePdf(data: DailyPdfData): Promise<Buffer> {
   return buffered(doc);
 }
 
-// ── Weekly: one wide compiled row per student ───────────────────────────────
+// ── Weekly: compiled sheet — 3 sub-columns per subject, exactly like the
+//    institutional "Compiled Attendance" spreadsheet (Total Attended / Total
+//    Lecture / Overall %), plus a current-week group, an OVERALL group and mentor.
 export interface WeeklyStudent {
   roll: number; div: string; enrollmentNo: string; name: string;
-  subjects: { attended: number; total: number }[]; // aligned to subjectCodes
+  weekAttended: number; weekTotal: number;             // current week (all subjects)
+  subjects: { attended: number; total: number }[];     // aligned to subjectCodes, cumulative
   overallAttended: number; overallTotal: number; mentor: string;
 }
 export interface WeeklyPdfData {
   institute: string; department: string; semester: string; uptoLabel: string;
+  weekNo: number | string;
   subjectCodes: string[]; students: WeeklyStudent[]; threshold: number;
 }
 
-const pct = (a: number, t: number) => (t > 0 ? Math.round((a / t) * 1000) / 10 : 0);
 // pdfkit's lineBreak:false overflows rather than clips, so a long name bleeds into
 // the next row. Hard-cap the character count to keep every row one line tall.
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const pctStr = (a: number, t: number) => (t > 0 ? ((a / t) * 100).toFixed(2) + "%" : "-");
 
 export function renderWeeklyAttendancePdf(data: WeeklyPdfData): Promise<Buffer> {
-  const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 20 });
+  // A3 landscape: 29 columns need the width to stay legible, matching the source sheet.
+  const PAGE = { size: "A3" as const, layout: "landscape" as const, margin: 18 };
+  const doc = new PDFDocument(PAGE);
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
   const width = right - left;
+  const WHITE = "#ffffff";
 
-  // identity(4) + one cell per subject + overall + mentor
-  const idW = [26, 26, 92, 120];
-  const tailN = data.subjectCodes.length + 2; // subjects + overall + mentor
-  const cellW = (width - idW.reduce((a, c) => a + c, 0)) / tailN;
-  const headers = ["Roll", "Div", "Enrollment", "Name", ...data.subjectCodes, "Overall", "Mentor"];
-  const colX = (i: number) => {
-    if (i < 4) return left + idW.slice(0, i).reduce((a, c) => a + c, 0);
-    return left + idW.reduce((a, c) => a + c, 0) + (i - 4) * cellW;
-  };
-  const colW = (i: number) => (i < 4 ? idW[i] : cellW);
-  const rowH = 16;
+  // Layout: identity(4) | 3 cells × (Week + subjects + Overall) | Mentor
+  const idW = [30, 30, 108, 200];               // Roll, Div, Enrollment, Name
+  const idLabels = ["Roll No.", "Div", "Enrollment No", "Name"];
+  const mentorW = 58;
+  const idTotal = idW.reduce((a, c) => a + c, 0);
+  const groupLabels = [`Compiled Attendance of Week-${data.weekNo}`, ...data.subjectCodes, "OVERALL"];
+  const G = groupLabels.length;                 // week + N subjects + overall
+  const dataCols = G * 3;
+  const cell = (width - idTotal - mentorW) / dataCols;
+  const groupW = cell * 3;
+
+  const idX = (i: number) => left + idW.slice(0, i).reduce((a, c) => a + c, 0);
+  const dataStart = left + idTotal;
+  const groupX = (g: number) => dataStart + g * groupW;
+  const cellX = (c: number) => dataStart + c * cell;
+  const mentorX = dataStart + dataCols * cell;
+
+  const titleH = 18, groupH = 20, subH = 24, headerH = titleH + groupH + subH;
+  const rowH = 14;
   const bottom = doc.page.height - doc.page.margins.bottom - rowH;
+  const grid = () => doc.lineWidth(0.5).strokeColor("#222222");
 
-  doc.rect(left, doc.y, width, 22).fill(BLUE);
-  doc.fillColor("#fff").font("Helvetica-Bold").fontSize(12).text(data.institute, left, doc.y + 5, { width, align: "center" });
-  doc.fillColor(INK).font("Helvetica").y += 22;
-  doc.rect(left, doc.y, width, 16).fill("#DDE8F5");
-  doc.fillColor("#1a3c66").fontSize(9).font("Helvetica-Bold")
-    .text(`${data.department} · ${data.semester} · Compiled Attendance ${data.uptoLabel}   (below ${data.threshold}% in red)`, left, doc.y + 3, { width, align: "center" });
-  doc.fillColor(INK).font("Helvetica").y += 16;
-  doc.moveDown(0.3);
+  // vertical separators shared by header body-rows and data rows
+  const verticals: number[] = [];
+  for (let i = 1; i < idW.length; i++) verticals.push(idX(i));
+  for (let c = 0; c <= dataCols; c++) verticals.push(cellX(c));
 
-  const drawHead = () => {
-    const y = doc.y;
-    doc.rect(left, y, width, rowH).fill(BLUE);
-    doc.fillColor("#fff").fontSize(7).font("Helvetica-Bold");
-    headers.forEach((h, i) => doc.text(h, colX(i) + 2, y + 5, { width: colW(i) - 3, align: i < 4 ? "left" : "center", lineBreak: false }));
-    doc.fillColor(INK).font("Helvetica").y = y + rowH;
-  };
-  drawHead();
+  const drawHeader = () => {
+    const y0 = doc.y;
+    const y1 = y0 + titleH, y2 = y1 + groupH;
 
-  data.students.forEach((s, ri) => {
-    if (doc.y > bottom) { doc.addPage({ size: "A4", layout: "landscape", margin: 20 }); drawHead(); }
-    const y = doc.y;
-    if (ri % 2 === 1) { doc.rect(left, y, width, rowH).fill("#F5F8FC"); doc.fillColor(INK); }
-    const overallPct = pct(s.overallAttended, s.overallTotal);
-    const below = overallPct < data.threshold;
-    doc.fontSize(7).font(below ? "Helvetica-Bold" : "Helvetica");
-    doc.fillColor(below ? RED : INK).text(String(s.roll), colX(0) + 2, y + 5, { width: colW(0) - 3, lineBreak: false });
-    doc.text(s.div, colX(1) + 2, y + 5, { width: colW(1) - 3, lineBreak: false });
-    doc.text(s.enrollmentNo, colX(2) + 2, y + 5, { width: colW(2) - 3, lineBreak: false });
-    doc.text(clip(s.name, 30), colX(3) + 2, y + 5, { width: colW(3) - 3, lineBreak: false });
-    s.subjects.forEach((sub, i) => {
-      const p = pct(sub.attended, sub.total);
-      doc.fillColor(sub.total > 0 && p < data.threshold ? RED : INK).font(sub.total > 0 && p < data.threshold ? "Helvetica-Bold" : "Helvetica")
-        .text(sub.total ? `${sub.attended}/${sub.total} ${p}%` : "—", colX(4 + i) + 1, y + 5, { width: cellW - 2, align: "center", lineBreak: false });
+    // Title row: blue over identity, green over the rest.
+    doc.rect(left, y0, idTotal, titleH).fill(HBLUE);
+    doc.fillColor(WHITE).font("Helvetica-Bold").fontSize(9)
+      .text(`${data.department} · ${data.semester} Compiled Attendance`, left + 2, y0 + (titleH - 9) / 2 - 1, { width: idTotal - 4, align: "center", lineBreak: false });
+    doc.rect(dataStart, y0, width - idTotal, titleH).fill(HGREEN);
+    doc.fillColor(WHITE).font("Helvetica-Bold").fontSize(9)
+      .text(`Subjectwise Compiled Attendance ${data.uptoLabel} · Week-${data.weekNo}`, dataStart + 2, y0 + (titleH - 9) / 2 - 1, { width: width - idTotal - 4, align: "center", lineBreak: false });
+
+    // Identity headers (span the group + sub rows).
+    idLabels.forEach((lbl, i) => {
+      doc.rect(idX(i), y1, idW[i], groupH + subH).fill(HBLUE);
+      doc.fillColor(WHITE).font("Helvetica-Bold").fontSize(7)
+        .text(lbl, idX(i) + 1, y1 + (groupH + subH) / 2 - 4, { width: idW[i] - 2, align: "center" });
     });
-    const oi = 4 + data.subjectCodes.length;
-    doc.fillColor(below ? RED : INK).font(below ? "Helvetica-Bold" : "Helvetica")
-      .text(`${s.overallAttended}/${s.overallTotal} ${overallPct}%`, colX(oi) + 1, y + 5, { width: cellW - 2, align: "center", lineBreak: false });
-    doc.fillColor(INK).font("Helvetica").text(s.mentor || "—", colX(oi + 1) + 1, y + 5, { width: cellW - 2, align: "center", lineBreak: false });
+    // Group headers.
+    groupLabels.forEach((lbl, g) => {
+      doc.rect(groupX(g), y1, groupW, groupH).fill(HBLUE);
+      doc.fillColor(WHITE).font("Helvetica-Bold").fontSize(6)
+        .text(lbl, groupX(g) + 1, y1 + 3, { width: groupW - 2, align: "center" });
+    });
+    // Sub headers (Total Attended / Total Lecture / Overall %).
+    for (let g = 0; g < G; g++) {
+      ["Total Attended", "Total Lecture", "Overall %"].forEach((lbl, k) => {
+        const cx = cellX(g * 3 + k);
+        doc.rect(cx, y2, cell, subH).fill(HBLUE);
+        doc.fillColor(WHITE).font("Helvetica-Bold").fontSize(5.5)
+          .text(lbl, cx + 1, y2 + 4, { width: cell - 2, align: "center" });
+      });
+    }
+    // Mentor header (spans group + sub rows).
+    doc.rect(mentorX, y1, mentorW, groupH + subH).fill(HBLUE);
+    doc.fillColor(WHITE).font("Helvetica-Bold").fontSize(6.5)
+      .text("MENTOR NAME", mentorX + 1, y1 + (groupH + subH) / 2 - 7, { width: mentorW - 2, align: "center" });
+
+    // Grid.
+    grid();
+    doc.rect(left, y0, width, headerH).stroke();
+    doc.moveTo(left, y1).lineTo(right, y1).stroke();       // under title
+    doc.moveTo(dataStart, y2).lineTo(mentorX, y2).stroke(); // under group row (data area)
+    for (let i = 1; i < idW.length; i++) doc.moveTo(idX(i), y1).lineTo(idX(i), y1 + groupH + subH).stroke();
+    for (let c = 0; c <= dataCols; c++) { const vx = cellX(c); doc.moveTo(vx, c % 3 === 0 ? y1 : y2).lineTo(vx, y1 + groupH + subH).stroke(); }
+
+    doc.fillColor(INK).font("Helvetica").y = y0 + headerH;
+  };
+
+  drawHeader();
+
+  const ty = (y: number) => y + (rowH - 6.5) / 2 - 0.5;
+  data.students.forEach((s, ri) => {
+    if (doc.y > bottom) { doc.addPage(PAGE); drawHeader(); }
+    const y = doc.y;
+    if (ri % 2 === 1) { doc.rect(left, y, width, rowH).fill(STRIPE); }
+
+    // Identity.
+    doc.fillColor(INK).font("Helvetica").fontSize(6.5);
+    doc.text(String(s.roll), idX(0) + 1, ty(y), { width: idW[0] - 2, align: "center", lineBreak: false });
+    doc.text(s.div, idX(1) + 1, ty(y), { width: idW[1] - 2, align: "center", lineBreak: false });
+    doc.text(s.enrollmentNo, idX(2) + 1, ty(y), { width: idW[2] - 2, align: "center", lineBreak: false });
+    doc.text(clip(s.name, 46), idX(3) + 2, ty(y), { width: idW[3] - 4, align: "center", lineBreak: false });
+
+    // Groups: week, subjects, overall — each as 3 cells.
+    const triples = [
+      { att: s.weekAttended, tot: s.weekTotal },
+      ...s.subjects.map((x) => ({ att: x.attended, tot: x.total })),
+      { att: s.overallAttended, tot: s.overallTotal },
+    ];
+    triples.forEach((t, g) => {
+      const attX = cellX(g * 3), lecX = cellX(g * 3 + 1), pctX = cellX(g * 3 + 2);
+      const low = t.tot > 0 && (t.att / t.tot) * 100 < data.threshold;
+      doc.fillColor(INK).font("Helvetica").fontSize(6.5);
+      doc.text(String(t.att), attX + 1, ty(y), { width: cell - 2, align: "center", lineBreak: false });
+      doc.text(String(t.tot), lecX + 1, ty(y), { width: cell - 2, align: "center", lineBreak: false });
+      if (low) { doc.rect(pctX, y, cell, rowH).fill(LOWRED); doc.fillColor(WHITE).font("Helvetica-Bold"); }
+      else { doc.fillColor(INK).font("Helvetica"); }
+      doc.fontSize(6.5).text(pctStr(t.att, t.tot), pctX + 1, ty(y), { width: cell - 2, align: "center", lineBreak: false });
+    });
+
+    // Mentor.
+    doc.fillColor(INK).font("Helvetica").fontSize(6.5)
+      .text(s.mentor || "—", mentorX + 1, ty(y), { width: mentorW - 2, align: "center", lineBreak: false });
+
+    // Grid: outer box + every vertical separator.
+    grid();
+    doc.rect(left, y, width, rowH).stroke();
+    for (const vx of verticals) doc.moveTo(vx, y).lineTo(vx, y + rowH).stroke();
     doc.y = y + rowH;
   });
 
