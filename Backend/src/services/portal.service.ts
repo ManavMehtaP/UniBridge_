@@ -3945,7 +3945,7 @@ export const portalService = {
       where: { id: pyqId },
       include: { subject: true, aiDocument: { include: { metadata: true } } },
     });
-    if (!pyq) throw new ApiError(404, "PYQ not found.");
+    if (!pyq) throw new ApiError(404, "PYQ_NOT_FOUND", "PYQ not found.");
     await ensureStudentSubject(studentId, universityId, pyq.subjectId);
     return {
       pyqId: pyq.id,

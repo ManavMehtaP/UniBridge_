@@ -67,6 +67,7 @@ const StuAnnouncements = lazy(() => import('@/pages/student/AnnouncementsPage'))
 const StuCalendar = lazy(() => import('@/pages/student/CalendarPage'))
 const StuMentorChat = lazy(() => import('@/pages/student/MentorChatPage'))
 const StuAI = lazy(() => import('@/pages/student/AIAssistantPage'))
+const StuInsights = lazy(() => import('@/pages/student/StudyInsightsPage'))
 const StuPlanner = lazy(() => import('@/pages/student/StudyPlannerPage'))
 const StuLeaderboard = lazy(() => import('@/pages/student/LeaderboardPage'))
 const StuSettings = lazy(() => import('@/pages/student/SettingsPage'))
@@ -145,6 +146,7 @@ export const router = createBrowserRouter([
           { path: '/student/calendar', element: <StuCalendar /> },
           { path: '/student/mentor', element: <StuMentorChat /> },
           { path: '/student/ai', element: <StuAI /> },
+          { path: '/student/exam-insights', element: <StuInsights /> },
           { path: '/student/study-planner', element: <StuPlanner /> },
           { path: '/student/leaderboard', element: <StuLeaderboard /> },
           { path: '/student/settings/:section?', element: <StuSettings /> },
