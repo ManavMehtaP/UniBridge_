@@ -353,7 +353,8 @@ studentRouter.get("/study-planner", asyncHandler(async (req, res) => {
 
 studentRouter.get("/leaderboard/my-rank", asyncHandler(async (req, res) => {
   const scope = req.query.scope === "class" ? "class" : "year";
-  res.json(await portalService.studentLeaderboardMyRank(req.user!.id, req.user!.universityId, req.query.phaseId as string | undefined, req.query.subjectId as string | undefined, scope));
+  const phases = String(req.query.phases ?? req.query.phaseId ?? "").split(",").map((phase) => phase.trim()).filter(Boolean);
+  res.json(await portalService.studentLeaderboardMyRank(req.user!.id, req.user!.universityId, phases, req.query.subjectId as string | undefined, scope));
 }));
 
 studentRouter.get("/leaderboard/subject/:subjectId", asyncHandler(async (req, res) => {
@@ -369,11 +370,12 @@ studentRouter.get("/leaderboard/subject/:subjectId", asyncHandler(async (req, re
 
 studentRouter.get("/leaderboard", asyncHandler(async (req, res) => {
   const scope = req.query.scope === "class" ? "class" : "year";
+  const phases = String(req.query.phases ?? req.query.phaseId ?? "").split(",").map((phase) => phase.trim()).filter(Boolean);
   res.json(
     await portalService.studentLeaderboard(
       req.user!.id,
       req.user!.universityId,
-      req.query.phaseId as string | undefined,
+      phases,
       req.query.subjectId as string | undefined,
       scope,
     ),

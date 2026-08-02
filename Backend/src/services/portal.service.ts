@@ -3791,10 +3791,13 @@ export const portalService = {
 
   // ── Student — Leaderboard ─────────────────────────────────
 
-  async studentLeaderboard(studentId: string, universityId: string, phaseId?: string, subjectId?: string, scope: "year" | "class" = "year") {
+  async studentLeaderboard(studentId: string, universityId: string, phaseFilters: string[] = [], subjectId?: string, scope: "year" | "class" = "year") {
     const { enrollment, semester } = await getStudentEnrollment(studentId, universityId);
-    const phase = phaseId ? await phaseById(phaseId) : await currentPhaseForSemester(semester.id);
-    if (!phase) throw new ApiError(404, "PHASE_NOT_FOUND", "No phase found.");
+    const semesterPhases = await prisma.phase.findMany({ where: { semesterId: semester.id }, orderBy: { number: "asc" } });
+    const selectedPhases = phaseFilters.length
+      ? semesterPhases.filter((phase) => phaseFilters.includes(phase.id) || phaseFilters.includes(phase.label.toUpperCase()))
+      : semesterPhases;
+    if (selectedPhases.length === 0) throw new ApiError(404, "PHASE_NOT_FOUND", "No matching phase found.");
     if (subjectId) await ensureStudentSubject(studentId, universityId, subjectId, semester.id);
     const cohortEnrollments = await prisma.studentEnrollment.findMany({
       where: {
@@ -3805,7 +3808,7 @@ export const portalService = {
       include: { student: true, batch: { select: { code: true } } },
     });
     const leaderboard = await Promise.all(cohortEnrollments.map(async (e) => {
-      const rows = await prisma.result.findMany({ where: { enrollmentId: e.id, phaseId: phase.id, isPublished: true, ...(subjectId ? { subjectId } : {}) } });
+      const rows = await prisma.result.findMany({ where: { enrollmentId: e.id, phaseId: { in: selectedPhases.map((phase) => phase.id) }, isPublished: true, ...(subjectId ? { subjectId } : {}) } });
       return { studentId: e.studentId, name: e.student.name, enrollmentNo: e.student.enrollmentNo, batchCode: e.batch.code, avgPct: rows.length === 0 ? 0 : average(rows.map((r) => (r.marksObtained / r.maxMarks) * 100)) };
     }));
     const sorted = leaderboard.sort((a, b) => b.avgPct - a.avgPct || a.enrollmentNo.localeCompare(b.enrollmentNo));
@@ -3814,7 +3817,8 @@ export const portalService = {
     const batch = await batchById(enrollment.batchId);
     return {
       batchCode: batch.code,
-      phaseLabel: phase.label,
+      phaseLabel: selectedPhases.map((phase) => phase.label).join(", "),
+      phaseLabels: selectedPhases.map((phase) => phase.label),
       scope,
       subjectId: subjectId ?? null,
       myRank: me.rank,
@@ -3825,13 +3829,13 @@ export const portalService = {
     };
   },
 
-  async studentLeaderboardMyRank(studentId: string, universityId: string, phaseId?: string, subjectId?: string, scope: "year" | "class" = "year") {
-    const lb = await this.studentLeaderboard(studentId, universityId, phaseId, subjectId, scope);
+  async studentLeaderboardMyRank(studentId: string, universityId: string, phaseFilters: string[] = [], subjectId?: string, scope: "year" | "class" = "year") {
+    const lb = await this.studentLeaderboard(studentId, universityId, phaseFilters, subjectId, scope);
     return { batchCode: lb.batchCode, phaseLabel: lb.phaseLabel, scope: lb.scope, subjectId: lb.subjectId, myRank: lb.myRank, totalStudents: lb.totalStudents, myAvgPct: lb.myAvgPct, percentile: lb.totalStudents === 0 ? 0 : Number((((lb.totalStudents - lb.myRank + 1) / lb.totalStudents) * 100).toFixed(1)) };
   },
 
   async studentSubjectLeaderboard(studentId: string, universityId: string, subjectId: string, phaseId?: string) {
-    const board = await this.studentLeaderboard(studentId, universityId, phaseId, subjectId);
+    const board = await this.studentLeaderboard(studentId, universityId, phaseId ? [phaseId] : [], subjectId);
     const { enrollment, semester } = await getStudentEnrollment(studentId, universityId);
     const phase = phaseId ? await phaseById(phaseId) : await currentPhaseForSemester(semester.id);
     const myResult = phase ? await prisma.result.findFirst({ where: { enrollmentId: enrollment.id, phaseId: phase.id, subjectId, isPublished: true } }) : null;
