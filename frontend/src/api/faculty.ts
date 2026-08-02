@@ -119,6 +119,7 @@ export const facultyApi = {
   // Multipart: file + fields (subjectId, year). Backend stores it and triggers AI PYQ analysis.
   uploadPyq: (form: FormData) => api.post('/faculty/pyq', form).then((r) => r.data),
   pyqs: () => api.get<{ data: FacultyPyq[] }>('/faculty/pyq').then((r) => r.data),
+  deletePyq: (id: string) => api.delete(`/faculty/pyq/${id}`),
 
   quizzes: (params: Params) =>
     api.get<PaginatedResponse<T.FacultyQuiz>>('/faculty/quizzes', { params }).then((r) => r.data),

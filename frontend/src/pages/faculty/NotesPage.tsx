@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { FileQuestion, FileText, Plus } from 'lucide-react'
+import { FileQuestion, FileText, Plus, Trash2 } from 'lucide-react'
 import { facultyApi, type FacultyPyq } from '@/api/faculty'
 import { errorMessage } from '@/api/client'
 import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
@@ -159,6 +159,12 @@ function UploadNoteModal({ open, onClose, subjectOpts, assignments, defaultSubje
 
 // PYQ paper upload — subject + exam year + file. Backend hands it to the AI service for topic analysis.
 function PyqFolder({ loading, files }: { loading: boolean; files: FacultyPyq[] }) {
+  const qc = useQueryClient()
+  const remove = useMutation({
+    mutationFn: (id: string) => facultyApi.deletePyq(id),
+    onSuccess: () => { toast.success('PYQ deleted'); qc.invalidateQueries({ queryKey: ['faculty', 'pyqs'] }) },
+    onError: (error) => toast.error(errorMessage(error)),
+  })
   if (loading) return <CardSkeleton height={200} />
   if (!files.length) return <EmptyState icon={<FileQuestion size={22} />} title="No PYQs uploaded" description="Add a previous-year paper to create its AI summary and student PYQ analysis." />
   return <div className="space-y-3">
@@ -166,7 +172,7 @@ function PyqFolder({ loading, files }: { loading: boolean; files: FacultyPyq[] }
       const status = file.status === 'completed' ? 'AI analysis complete' : file.status === 'failed' ? 'AI analysis failed' : 'AI analysis processing'
       const tone = file.status === 'completed' ? 'bg-success-light text-success' : file.status === 'failed' ? 'bg-danger-light text-danger' : 'bg-warning-light text-warning'
       return <div key={file.id} className="rounded-xl border border-border bg-surface p-5 shadow-card">
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold text-text-primary">{file.fileName}</p><p className="mt-1 text-sm text-text-secondary">{file.subject.code} - {file.subject.name} | Exam year {file.year}</p></div><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{status}</span></div>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold text-text-primary">{file.fileName}</p><p className="mt-1 text-sm text-text-secondary">{file.subject.code} - {file.subject.name} | Exam year {file.year}</p></div><div className="flex items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{status}</span><Button size="sm" variant="outline" leftIcon={<Trash2 size={14} />} loading={remove.isPending} onClick={() => { if (window.confirm(`Delete ${file.fileName}?`)) remove.mutate(file.id) }}>Delete</Button></div></div>
         {file.status === 'failed' ? <p className="mt-3 text-sm text-danger">{file.errorMessage || 'The document could not be processed. Open this page again after the AI service is running to retry.'}</p> : null}
         {file.summary ? <div className="mt-4 rounded-lg bg-primary-light/40 p-3 text-sm leading-6 text-text-secondary"><span className="font-semibold text-text-primary">AI summary: </span>{file.summary}</div> : null}
         {file.topics.length > 0 ? <div className="mt-3 flex flex-wrap gap-2">{file.topics.map((topic) => <span key={topic} className="rounded-full bg-surface-secondary px-2.5 py-1 text-xs font-medium text-text-secondary">{topic}</span>)}</div> : null}

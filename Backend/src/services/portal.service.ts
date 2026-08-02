@@ -1,6 +1,6 @@
 import prisma from "../config/prisma.js";
 import { env } from "../config/env.js";
-import { uploadObject, presignGetUrl, storageEnabled } from "../config/storage.js";
+import { deleteObject, uploadObject, presignGetUrl, storageEnabled } from "../config/storage.js";
 import { studentAiBridge } from "./studentAiBridge.service.js";
 import { generateStudyPlanForStudent, getLatestStudyPlan, refreshStudyPlanAfterProgress } from "./studyPlanner.service.js";
 import type { Role, YearLevel } from "../types/domain.js";
@@ -1927,6 +1927,17 @@ export const portalService = {
         analyzedAt: pyq.insight?.updatedAt ?? pyq.aiDocument?.processedAt ?? null,
       })),
     };
+  },
+
+  async deleteFacultyPyq(facultyId: string, pyqId: string) {
+    const pyq = await prisma.pYQFile.findFirst({ where: { id: pyqId, uploadedById: facultyId } });
+    if (!pyq) throw new ApiError(404, "PYQ_NOT_FOUND", "PYQ not found.");
+    await prisma.pYQFile.delete({ where: { id: pyq.id } });
+    try {
+      await deleteObject(pyq.fileKey);
+    } catch (error) {
+      console.error("PYQ storage delete failed", { pyqId, error });
+    }
   },
 
   // ── Attendance (HOD) ──────────────────────────────────────
