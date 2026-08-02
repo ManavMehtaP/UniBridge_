@@ -3141,15 +3141,23 @@ export const portalService = {
 
   async studentSubjects(studentId: string, universityId: string, semesterId?: string) {
     const { semester, enrollment } = await getStudentEnrollment(studentId, universityId, semesterId);
-    const subjectIds = await getStudentSubjectIds(studentId, universityId, semester.id);
-    const subjects = await Promise.all(
-      subjectIds.map(async (subjectId) => {
-        const subject = await subjectById(subjectId);
-        const assignment = await prisma.facultyBatchAssignment.findFirst({ where: { batchId: enrollment.batchId, semesterId: semester.id, subjectId: subject.id } });
-        const faculty = assignment ? await prisma.faculty.findUnique({ where: { id: assignment.facultyId }, select: { name: true } }) : null;
-        return { id: subject.id, code: subject.code, name: subject.name, credits: subject.credits, type: subject.type, facultyName: faculty?.name ?? null };
-      }),
-    );
+    // Keep this query deliberately narrow: this endpoint powers every subject picker.
+    // It must not fail because an unrelated optional Subject column has not reached a
+    // deployed database yet.
+    const assignments = await prisma.facultyBatchAssignment.findMany({
+      where: { batchId: enrollment.batchId, semesterId: semester.id },
+      select: {
+        subject: { select: { id: true, code: true, name: true, credits: true, type: true } },
+        faculty: { select: { name: true } },
+      },
+    });
+    const bySubject = new Map<string, { id: string; code: string; name: string; credits: number; type: Role | string; facultyName: string | null }>();
+    for (const assignment of assignments) {
+      if (!bySubject.has(assignment.subject.id)) {
+        bySubject.set(assignment.subject.id, { ...assignment.subject, facultyName: assignment.faculty?.name ?? null });
+      }
+    }
+    const subjects = [...bySubject.values()].sort((a, b) => a.code.localeCompare(b.code));
     return { semesterLabel: semester.label, subjects, totalCredits: subjects.reduce((s, sub) => s + sub.credits, 0) };
   },
 
