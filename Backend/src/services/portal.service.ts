@@ -3795,7 +3795,7 @@ export const portalService = {
     const { enrollment, semester } = await getStudentEnrollment(studentId, universityId);
     const semesterPhases = await prisma.phase.findMany({ where: { semesterId: semester.id }, orderBy: { number: "asc" } });
     const selectedPhases = phaseFilters.length
-      ? semesterPhases.filter((phase) => phaseFilters.includes(phase.id) || phaseFilters.includes(phase.label.toUpperCase()))
+      ? semesterPhases.filter((phase) => phaseFilters.includes(phase.id) || phaseFilters.includes(normalizePhaseKey(phase.label, phase.number)))
       : semesterPhases;
     if (selectedPhases.length === 0) throw new ApiError(404, "PHASE_NOT_FOUND", "No matching phase found.");
     if (subjectId) await ensureStudentSubject(studentId, universityId, subjectId, semester.id);

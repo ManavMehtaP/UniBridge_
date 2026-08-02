@@ -18,9 +18,10 @@ type Scope = 'year' | 'class'
 export default function LeaderboardPage() {
   const [scope, setScope] = useState<Scope>('year')
   const [subjectId, setSubjectId] = useState('')
-  const params = { limit: 20, scope, subjectId: subjectId || undefined }
-  const list = useQuery({ queryKey: ['student', 'leaderboard', scope, subjectId], queryFn: () => studentApi.leaderboard(params) })
-  const myRank = useQuery({ queryKey: ['student', 'my-rank', scope, subjectId], queryFn: () => studentApi.myRank({ scope, subjectId: subjectId || undefined }) })
+  const [selectedPhases, setSelectedPhases] = useState(['T1', 'T2', 'T3', 'T4'])
+  const params = { limit: 20, scope, subjectId: subjectId || undefined, phases: selectedPhases.join(',') }
+  const list = useQuery({ queryKey: ['student', 'leaderboard', scope, subjectId, selectedPhases], queryFn: () => studentApi.leaderboard(params) })
+  const myRank = useQuery({ queryKey: ['student', 'my-rank', scope, subjectId, selectedPhases], queryFn: () => studentApi.myRank({ scope, subjectId: subjectId || undefined, phases: selectedPhases.join(',') }) })
   const subjects = useQuery({ queryKey: ['student', 'subjects'], queryFn: studentApi.subjects })
 
   const entries = ((list.data as { data?: Entry[]; leaderboard?: Entry[] })?.data ?? (list.data as { leaderboard?: Entry[] } | undefined)?.leaderboard ?? [])
@@ -29,11 +30,16 @@ export default function LeaderboardPage() {
     ? subjects.data as Subject[]
     : (subjects.data as { subjects?: Subject[] } | undefined)?.subjects ?? []
   const scopeLabel = scope === 'year' ? 'Year-wise' : 'Class-wise'
+  const togglePhase = (phase: string) => {
+    setSelectedPhases((current) => current.includes(phase)
+      ? (current.length === 1 ? current : current.filter((item) => item !== phase))
+      : [...current, phase])
+  }
 
   return (
     <PageShell title="Leaderboard" subtitle={`${scopeLabel} ranking for ${subjectId ? 'the selected subject' : 'your average across all subjects'}`}>
       <Card className="mb-4">
-        <CardBody className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <CardBody className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_auto_320px] lg:items-end">
           <div>
             <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Ranking scope</div>
             <div className="flex flex-wrap gap-4 text-sm text-text-primary">
@@ -45,6 +51,14 @@ export default function LeaderboardPage() {
                 <input type="radio" name="leaderboard-scope" checked={scope === 'class'} onChange={() => setScope('class')} className="accent-primary" />
                 Class-wise
               </label>
+            </div>
+          </div>
+          <div>
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Exam phases</div>
+            <div className="flex gap-2">
+              {['T1', 'T2', 'T3', 'T4'].map((phase) => (
+                <button key={phase} type="button" onClick={() => togglePhase(phase)} className={cn('rounded-sm border px-3 py-2 text-sm font-semibold transition-colors', selectedPhases.includes(phase) ? 'border-primary bg-primary text-white' : 'border-border bg-surface text-text-secondary hover:border-primary hover:text-primary')} aria-pressed={selectedPhases.includes(phase)}>{phase}</button>
+              ))}
             </div>
           </div>
           <div className="w-full sm:w-72">
@@ -65,7 +79,7 @@ export default function LeaderboardPage() {
       )}
 
       <Card>
-        <CardHeader title={`${scopeLabel} Top Students`} subtitle={scope === 'year' ? 'Students in your current year and semester, ranked on the same subject set.' : 'Students in your class, ranked on the same subject set.'} />
+        <CardHeader title={`${scopeLabel} Top Students`} subtitle={`${selectedPhases.join(', ')} ${selectedPhases.length === 1 ? 'exam' : 'exam average'} · ${scope === 'year' ? 'students in your current year and semester, ranked on the same subject set.' : 'students in your class, ranked on the same subject set.'}`} />
         <CardBody className="pt-0">
           {list.isLoading ? <CardSkeleton height={200} /> : entries.length === 0 ? <EmptyState icon={<Trophy size={22} />} title="No leaderboard data yet" description="Published marks are needed before rankings can be calculated." className="border-0" /> : (
             <ul className="space-y-1">{entries.map((entry) => (
