@@ -178,5 +178,5 @@ export const studentApi = {
     api.post('/student/study-planner/ai-suggest', body).then((r) => r.data),
 
   leaderboard: (params?: Params) => api.get('/student/leaderboard', { params }).then((r) => r.data),
-  myRank: (phaseId?: string) => api.get('/student/leaderboard/my-rank', { params: { phaseId } }).then((r) => r.data),
+  myRank: (params?: Params) => api.get('/student/leaderboard/my-rank', { params }).then((r) => r.data),
 }

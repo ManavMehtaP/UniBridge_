@@ -3791,25 +3791,43 @@ export const portalService = {
 
   // ── Student — Leaderboard ─────────────────────────────────
 
-  async studentLeaderboard(studentId: string, universityId: string, phaseId?: string, subjectId?: string) {
+  async studentLeaderboard(studentId: string, universityId: string, phaseId?: string, subjectId?: string, scope: "year" | "class" = "year") {
     const { enrollment, semester } = await getStudentEnrollment(studentId, universityId);
     const phase = phaseId ? await phaseById(phaseId) : await currentPhaseForSemester(semester.id);
     if (!phase) throw new ApiError(404, "PHASE_NOT_FOUND", "No phase found.");
-    const batchEnrollments = await prisma.studentEnrollment.findMany({ where: { batchId: enrollment.batchId, semesterId: semester.id, isCurrent: true }, include: { student: true } });
-    const leaderboard = await Promise.all(batchEnrollments.map(async (e) => {
+    if (subjectId) await ensureStudentSubject(studentId, universityId, subjectId, semester.id);
+    const cohortEnrollments = await prisma.studentEnrollment.findMany({
+      where: {
+        semesterId: semester.id,
+        isCurrent: true,
+        ...(scope === "class" ? { batchId: enrollment.batchId } : {}),
+      },
+      include: { student: true, batch: { select: { code: true } } },
+    });
+    const leaderboard = await Promise.all(cohortEnrollments.map(async (e) => {
       const rows = await prisma.result.findMany({ where: { enrollmentId: e.id, phaseId: phase.id, isPublished: true, ...(subjectId ? { subjectId } : {}) } });
-      return { studentId: e.studentId, name: e.student.name, enrollmentNo: e.student.enrollmentNo, avgPct: rows.length === 0 ? 0 : average(rows.map((r) => (r.marksObtained / r.maxMarks) * 100)) };
+      return { studentId: e.studentId, name: e.student.name, enrollmentNo: e.student.enrollmentNo, batchCode: e.batch.code, avgPct: rows.length === 0 ? 0 : average(rows.map((r) => (r.marksObtained / r.maxMarks) * 100)) };
     }));
-    const sorted = leaderboard.sort((a, b) => b.avgPct - a.avgPct);
-    const mapped = sorted.map((r, i) => ({ rank: i + 1, name: r.name, enrollmentNo: r.enrollmentNo, avgPct: r.avgPct, isMe: r.studentId === studentId }));
-    const me = mapped.find((r) => r.isMe) ?? { rank: batchEnrollments.length, avgPct: 0 };
+    const sorted = leaderboard.sort((a, b) => b.avgPct - a.avgPct || a.enrollmentNo.localeCompare(b.enrollmentNo));
+    const mapped = sorted.map((r, i) => ({ rank: i + 1, name: r.name, enrollmentNo: r.enrollmentNo, batchCode: r.batchCode, avgPct: r.avgPct, isMe: r.studentId === studentId }));
+    const me = mapped.find((r) => r.isMe) ?? { rank: cohortEnrollments.length, avgPct: 0 };
     const batch = await batchById(enrollment.batchId);
-    return { batchCode: batch.code, phaseLabel: phase.label, myRank: me.rank, myAvgPct: me.avgPct, totalStudents: batchEnrollments.length, leaderboard: mapped.slice(0, 10) };
+    return {
+      batchCode: batch.code,
+      phaseLabel: phase.label,
+      scope,
+      subjectId: subjectId ?? null,
+      myRank: me.rank,
+      myAvgPct: me.avgPct,
+      totalStudents: cohortEnrollments.length,
+      leaderboard: mapped.slice(0, 20),
+      data: mapped.slice(0, 20),
+    };
   },
 
-  async studentLeaderboardMyRank(studentId: string, universityId: string, phaseId?: string) {
-    const lb = await this.studentLeaderboard(studentId, universityId, phaseId);
-    return { batchCode: lb.batchCode, phaseLabel: lb.phaseLabel, myRank: lb.myRank, totalStudents: lb.totalStudents, myAvgPct: lb.myAvgPct, percentile: lb.totalStudents === 0 ? 0 : Number((((lb.totalStudents - lb.myRank + 1) / lb.totalStudents) * 100).toFixed(1)) };
+  async studentLeaderboardMyRank(studentId: string, universityId: string, phaseId?: string, subjectId?: string, scope: "year" | "class" = "year") {
+    const lb = await this.studentLeaderboard(studentId, universityId, phaseId, subjectId, scope);
+    return { batchCode: lb.batchCode, phaseLabel: lb.phaseLabel, scope: lb.scope, subjectId: lb.subjectId, myRank: lb.myRank, totalStudents: lb.totalStudents, myAvgPct: lb.myAvgPct, percentile: lb.totalStudents === 0 ? 0 : Number((((lb.totalStudents - lb.myRank + 1) / lb.totalStudents) * 100).toFixed(1)) };
   },
 
   async studentSubjectLeaderboard(studentId: string, universityId: string, subjectId: string, phaseId?: string) {
