@@ -10,7 +10,6 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { CardSkeleton } from '@/components/ui/Skeleton'
-import { Tabs } from '@/components/ui/Tabs'
 import { Select } from '@/components/ui/Select'
 import { Badge } from '@/components/ui/Badge'
 import { cn } from '@/lib/utils'
@@ -20,7 +19,7 @@ type SubjectOption = { id: string; code: string; name: string }
 
 export default function AIAssistantPage() {
   const qc = useQueryClient()
-  const [tab, setTab] = useState('chat')
+  const [tab] = useState('chat')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [chatSubjectId, setChatSubjectId] = useState('')
   const [analysisSubjectId, setAnalysisSubjectId] = useState('')
@@ -46,6 +45,7 @@ export default function AIAssistantPage() {
   const marksPrediction = useQuery({
     queryKey: ['student', 'marks-prediction'],
     queryFn: studentApi.marksPrediction,
+    enabled: false,
     retry: false,
   })
   const pyqAnalysis = useQuery({
@@ -60,12 +60,6 @@ export default function AIAssistantPage() {
     const rows = ((conversations.data as { data?: AIConversation[] } | undefined)?.data ?? []) as AIConversation[]
     return [...rows].sort((a, b) => new Date(b.updatedAt ?? b.createdAt).getTime() - new Date(a.updatedAt ?? a.createdAt).getTime())
   }, [conversations.data])
-
-  useEffect(() => {
-    if (!analysisSubjectId && subjectOptions[0]) {
-      setAnalysisSubjectId(subjectOptions[0].id)
-    }
-  }, [analysisSubjectId, subjectOptions])
 
   useEffect(() => {
     if (conversationItems.length === 0) {
@@ -171,18 +165,7 @@ export default function AIAssistantPage() {
   return (
     <PageShell
       title="AI Assistant"
-      subtitle="Chat with study context, predict T4 marks, and review PYQ-driven weak points."
-      action={
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            { key: 'chat', label: 'Chat' },
-            { key: 'marks', label: 'T4 Prediction' },
-            { key: 'pyq', label: 'PYQ Analysis' },
-          ]}
-        />
-      }
+      subtitle="Ask questions using your selected subject, faculty notes, and study context."
     >
       {tab === 'chat' && (
         <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
