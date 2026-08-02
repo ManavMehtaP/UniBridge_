@@ -14,13 +14,6 @@ type DjangoChat = {
   messages?: Array<{ role: string; content: string }>
 }
 
-type DjangoPyqPrediction = {
-  important_topics?: string[]
-  frequently_asked_topics?: string[]
-  topic_ranking?: Array<{ topic: string; rank: number; probability: number }>
-  trend_analysis?: string
-}
-
 function normalizeChat(item: DjangoChat): T.AIConversation {
   return {
     id: item.chat_id,
@@ -40,29 +33,6 @@ function normalizeMessages(chatId: string, messages: Array<{ role: string; conte
     content: message.content,
     createdAt: new Date().toISOString(),
   }))
-}
-
-function normalizePyqPrediction(data: DjangoPyqPrediction, subjectId: string) {
-  const ranking = data.topic_ranking ?? []
-  return {
-    subjectId,
-    subjectCode: '',
-    subjectName: '',
-    status: ranking.length || data.important_topics?.length ? 'ready' : 'empty',
-    totalPYQsAnalyzed: ranking.length,
-    averagePct: null,
-    importantTopics: (data.important_topics ?? data.frequently_asked_topics ?? []).map((topic) => {
-      const ranked = ranking.find((item) => item.topic === topic)
-      return {
-        topic,
-        frequency: ranked ? Math.round(ranked.probability * 100) : 1,
-        priority: ranked && ranked.rank <= 3 ? 'HIGH' : 'MEDIUM',
-      }
-    }),
-    weakPoints: (data.important_topics ?? []).slice(0, 4).map((topic) => `${topic} is a high-value PYQ revision area.`),
-    files: [],
-    trendAnalysis: data.trend_analysis,
-  }
 }
 
 export const studentApi = {
@@ -159,10 +129,8 @@ export const studentApi = {
     djangoAiPost(`/chats/${id}/messages`, { message: content }),
   deleteAiConversation: (id: string) => djangoAiDelete(`/chats/${id}`),
   renameAiConversation: (id: string, title: string) => djangoAiPatch(`/chats/${id}`, { title }),
-  pyqAnalysis: async (subjectId: string) => {
-    const data = await djangoAiGet<DjangoPyqPrediction>(`/pyqs/subjects/${subjectId}/predictions`)
-    return normalizePyqPrediction(data, subjectId)
-  },
+  pyqAnalysis: (subjectId: string) => api.get(`/student/ai/pyq-analysis/${subjectId}`).then((r) => r.data),
+  pyqSummary: (pyqId: string) => api.get(`/student/ai/pyq/${pyqId}/summary`).then((r) => r.data),
   smartNoteSummary: (noteId: string) => api.get(`/student/ai/smart-notes/${noteId}/summary`).then((r) => r.data),
   marksPrediction: () => djangoAiGet('/students/me/marks/prediction'),
 

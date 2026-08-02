@@ -3875,7 +3875,11 @@ export const portalService = {
     await ensureStudentSubject(studentId, universityId, subjectId);
     const subject = await subjectById(subjectId);
     const { enrollment } = await getStudentEnrollment(studentId, universityId);
-    const pyqFiles = await prisma.pYQFile.findMany({ where: { subjectId }, orderBy: { createdAt: "desc" } });
+    const pyqFiles = await prisma.pYQFile.findMany({
+      where: { subjectId },
+      include: { aiDocument: { include: { metadata: { select: { generatedSummary: true } } } } },
+      orderBy: { createdAt: "desc" },
+    });
     const analysis = await prisma.pYQAnalysis.findFirst({ where: { subjectId, semesterId: enrollment.semesterId } });
     const insights = await prisma.pYQInsight.findMany({
       where: { subjectId, semesterId: enrollment.semesterId },
@@ -3890,8 +3894,16 @@ export const portalService = {
     }
     const topicFrequency = analysis ? Object.entries((analysis.topicFrequencies as Record<string, number>) ?? {}) : [];
     const importantTopics = topicFrequency.length > 0
-      ? topicFrequency.sort((a, b) => b[1] - a[1]).slice(0, 6).map(([topic, frequency]) => ({ topic, frequency, priority: frequency >= 5 ? "HIGH" : frequency >= 3 ? "MEDIUM" : "LOW" }))
-      : uniq(insights.flatMap((insight) => [ ...((insight.topics as string[]) ?? []), ...((insight.keywords as string[]) ?? []) ])).slice(0, 6).map((topic) => ({ topic, frequency: 1, priority: "MEDIUM" }));
+      ? topicFrequency
+        .filter(([, occurrences]) => Number(occurrences) > 1)
+        .sort((a, b) => Number(b[1]) - Number(a[1]))
+        .slice(0, 6)
+        .map(([topic, occurrences]) => ({
+          topic,
+          frequency: Number(occurrences),
+          priority: Number(occurrences) >= 4 ? "HIGH" : Number(occurrences) >= 3 ? "MEDIUM" : "LOW",
+        }))
+      : [];
     const results = await prisma.result.findMany({
       where: { enrollmentId: enrollment.id, subjectId, isPublished: true },
       orderBy: { createdAt: "asc" },
@@ -3911,15 +3923,37 @@ export const portalService = {
       weakPoints: averagePct !== null && averagePct < 60
         ? importantTopics.slice(0, 4).map((item) => `${item.topic} needs practice because your current published average is ${averagePct}%.`)
         : importantTopics.slice(0, 3).map((item) => `${item.topic} is a high-value revision area.`),
-      files: insights.map((insight) => ({
-        pyqId: insight.pyqFile.id,
-        year: insight.pyqFile.year,
-        difficulty: insight.difficulty,
-        topics: insight.topics,
-        keywords: insight.keywords,
-        questionTypes: insight.questionTypes,
-        updatedAt: insight.updatedAt,
-      })),
+      files: pyqFiles.map((pyqFile) => {
+        const insight = insights.find((item) => item.pyqFile.id === pyqFile.id);
+        return {
+          pyqId: pyqFile.id,
+          year: pyqFile.year,
+          status: pyqFile.aiDocument?.processingStatus ?? (insight ? "completed" : "queued"),
+          summary: pyqFile.aiDocument?.metadata?.generatedSummary ?? null,
+          difficulty: insight?.difficulty ?? "",
+          topics: insight?.topics ?? [],
+          keywords: insight?.keywords ?? [],
+          questionTypes: insight?.questionTypes ?? [],
+          updatedAt: insight?.updatedAt ?? pyqFile.createdAt,
+        };
+      }),
+    };
+  },
+
+  async studentPyqSummary(studentId: string, universityId: string, pyqId: string) {
+    const pyq = await prisma.pYQFile.findUnique({
+      where: { id: pyqId },
+      include: { subject: true, aiDocument: { include: { metadata: true } } },
+    });
+    if (!pyq) throw new ApiError(404, "PYQ not found.");
+    await ensureStudentSubject(studentId, universityId, pyq.subjectId);
+    return {
+      pyqId: pyq.id,
+      year: pyq.year,
+      subjectCode: pyq.subject.code,
+      status: pyq.aiDocument?.processingStatus ?? (pyq.isAnalyzed ? "completed" : "queued"),
+      summary: pyq.aiDocument?.metadata?.generatedSummary ?? null,
+      errorMessage: pyq.aiDocument?.errorMessage ?? null,
     };
   },
 

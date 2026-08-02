@@ -85,7 +85,7 @@ def analyze_pyq_statistics(subject_id: str) -> dict:
         "weak_points": [unit for unit, _count in unit_counter.most_common(5)],
         "unit_frequency": dict(unit_counter.most_common(10)),
         "topic_ranking": [
-            {"topic": topic, "rank": index + 1, "probability": round(count / total_topics, 4)}
+            {"topic": topic, "rank": index + 1, "occurrences": count, "probability": round(count / total_topics, 4)}
             for index, (topic, count) in enumerate(ranking)
         ],
         "repeated_questions": [text for text, count in repeated.most_common(10) if count > 1],
@@ -187,7 +187,9 @@ def _matching_semester(pyq_file: PYQFile) -> Semester:
 def _update_analysis(pyq_file: PYQFile, semester: Semester) -> dict:
     stats = analyze_pyq_statistics(str(pyq_file.subject_id))
     analysis, _created = PYQAnalysis.objects.get_or_create(subject=pyq_file.subject, semester=semester)
-    analysis.topic_frequencies = {item["topic"]: round(item["probability"], 4) for item in stats["topic_ranking"]}
+    # Keep raw occurrences. Probabilities made a single paper look like many PYQs
+    # and prevented the portal from applying meaningful importance thresholds.
+    analysis.topic_frequencies = {item["topic"]: item["occurrences"] for item in stats["topic_ranking"]}
     analysis.analyzed_at = timezone.now()
     analysis.save(update_fields=["topic_frequencies", "analyzed_at"])
     return stats
