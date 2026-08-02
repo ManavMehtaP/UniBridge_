@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+import re
 
 from django.utils import timezone
 
@@ -56,7 +57,16 @@ def process_pyq_document(pyq_file: PYQFile, *, source_url: str | None = None) ->
 
 
 def analyze_pyq_statistics(subject_id: str) -> dict:
-    questions = list(PYQQuestion.objects.filter(subject_id=subject_id))
+    raw_questions = PYQQuestion.objects.filter(subject_id=subject_id).select_related("pyq_file")
+    seen_papers: set[str] = set()
+    questions = []
+    for question in raw_questions:
+        original_name = re.sub(r"^\d+-", "", (question.pyq_file.file_key or "").rsplit("/", 1)[-1])
+        paper_key = f"{question.year}:{original_name or question.pyq_file_id}"
+        if paper_key in seen_papers:
+            continue
+        seen_papers.add(paper_key)
+        questions.extend(PYQQuestion.objects.filter(pyq_file_id=question.pyq_file_id))
     topic_counter: Counter[str] = Counter()
     unit_counter: Counter[str] = Counter()
     year_counter: dict[str, Counter[str]] = defaultdict(Counter)
@@ -105,7 +115,52 @@ def _extract_questions(pyq_file: PYQFile, extracted: str) -> dict:
         "patterns, and exam focus. keywords must contain the important concepts found in the paper."
     )
     user = f"Subject: {pyq_file.subject.code} {pyq_file.subject.name}\nYear: {pyq_file.year}\n\n{extracted[:30000]}"
-    return GeminiDocumentService().json_chat(system, user, fallback=fallback)
+    try:
+        return GeminiDocumentService().json_chat(system, user, fallback=fallback)
+    except Exception:
+        # A provider outage or quota limit must not strand an uploaded PYQ in
+        # "processing". Keep the source chunks and produce a deterministic
+        # extraction until Gemini is available for later uploads/retries.
+        return _local_pyq_extract(pyq_file, extracted)
+
+
+def _local_pyq_extract(pyq_file: PYQFile, extracted: str) -> dict:
+    lines = [" ".join(line.split()) for line in extracted.splitlines()]
+    candidates: list[str] = []
+    current = ""
+    for line in lines:
+        if not line:
+            continue
+        starts_question = bool(re.match(r"^(?:q(?:uestion)?\s*)?\d+[.)\-:]\s*", line, re.I))
+        if starts_question:
+            if current:
+                candidates.append(current)
+            current = re.sub(r"^(?:q(?:uestion)?\s*)?\d+[.)\-:]\s*", "", line, flags=re.I)
+        elif current:
+            current = f"{current} {line}"[:1800]
+            if line.endswith("?"):
+                candidates.append(current)
+                current = ""
+        elif line.endswith("?") and len(line) > 20:
+            candidates.append(line)
+    if current:
+        candidates.append(current)
+
+    words = re.findall(r"[A-Za-z][A-Za-z0-9+#.-]{2,}", extracted.lower())
+    ignored = {"the", "and", "for", "with", "that", "this", "from", "are", "what", "which", "into", "your", "answer", "marks", "question", "following"}
+    keywords = [word for word, _count in Counter(word for word in words if word not in ignored).most_common(12)]
+    questions = [{
+        "text": text,
+        "subject": pyq_file.subject.code,
+        "year": pyq_file.year,
+        "type": "Question",
+        "keywords": keywords[:6],
+    } for text in candidates[:100] if len(text) >= 12]
+    summary = (
+        f"PYQ {pyq_file.year} for {pyq_file.subject.code}. "
+        f"{len(questions)} questions were extracted locally while the Gemini provider was unavailable. "
+        f"Review the recurring concepts: {', '.join(keywords[:6]) or 'see extracted questions'}.")
+    return {"questions": questions, "summary": summary, "keywords": keywords}
 
 
 def _store_questions(pyq_file: PYQFile, document: AIDocument, raw_questions: object) -> int:

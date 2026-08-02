@@ -168,9 +168,20 @@ def extract_document_text(path: str | Path, mime_type: str | None = None) -> str
     if (mime_type or "").lower().startswith("image/") or suffix in IMAGE_EXTENSIONS:
         return GeminiDocumentService().extract_image_text(path, mime_type=mime_type)
     extracted = extract_text(path)
-    if suffix != ".pdf" or len(extracted.strip()) >= 80:
+    if suffix != ".pdf" or _has_usable_pdf_text(extracted):
         return extracted
     return _extract_scanned_pdf_text(path)
+
+
+def _has_usable_pdf_text(extracted: str) -> bool:
+    """Reject PDFs whose text layer is only a repeated scan watermark/header."""
+    tokens = re.findall(r"[A-Za-z0-9]{2,}", extracted.lower())
+    if len(tokens) < 20:
+        return False
+    unique_ratio = len(set(tokens)) / len(tokens)
+    lines = [" ".join(line.split()).lower() for line in extracted.splitlines() if line.strip()]
+    repeated_line_ratio = len(set(lines)) / len(lines) if lines else 0
+    return len(extracted.strip()) >= 80 and unique_ratio >= 0.12 and repeated_line_ratio >= 0.2
 
 
 def _extract_scanned_pdf_text(path: str | Path) -> str:

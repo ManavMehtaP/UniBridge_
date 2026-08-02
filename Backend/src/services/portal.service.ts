@@ -1883,7 +1883,12 @@ export const portalService = {
       where: { universityId: subject.universityId, number: subject.semesterNumber },
       orderBy: { startDate: "desc" },
     });
-    const pyq = await prisma.pYQFile.create({ data: { subjectId, uploadedById, year, fileUrl, fileKey } });
+    const originalName = fileKey.split("/").at(-1)?.replace(/^\d+-/, "") ?? fileKey;
+    const existing = await prisma.pYQFile.findFirst({
+      where: { subjectId, uploadedById, year, fileKey: { endsWith: `-${originalName}` } },
+      orderBy: { createdAt: "desc" },
+    });
+    const pyq = existing ?? await prisma.pYQFile.create({ data: { subjectId, uploadedById, year, fileUrl, fileKey } });
     if (activeSemester) {
       await prisma.pYQAnalysis.upsert({
         where: { subjectId_semesterId: { subjectId, semesterId: activeSemester.id } },
@@ -1892,7 +1897,7 @@ export const portalService = {
       });
     }
     await bestEffortStudentAi(() => studentAiBridge.triggerPyqProcessing(pyq.id, presignGetUrl(fileKey, 3600) || undefined));
-    return { uploaded: 1, subjectId, pyqId: pyq.id, processingStatus: studentAiBridge.isConfigured() ? "queued" : "uploaded" };
+    return { uploaded: existing ? 0 : 1, subjectId, pyqId: pyq.id, processingStatus: studentAiBridge.isConfigured() ? "queued" : "uploaded", duplicate: !!existing };
   },
 
   async facultyPyqs(facultyId: string) {
@@ -3875,10 +3880,18 @@ export const portalService = {
     await ensureStudentSubject(studentId, universityId, subjectId);
     const subject = await subjectById(subjectId);
     const { enrollment } = await getStudentEnrollment(studentId, universityId);
-    const pyqFiles = await prisma.pYQFile.findMany({
+    const allPyqFiles = await prisma.pYQFile.findMany({
       where: { subjectId },
       include: { aiDocument: { include: { metadata: { select: { generatedSummary: true } } } } },
       orderBy: { createdAt: "desc" },
+    });
+    const seenPapers = new Set<string>();
+    const pyqFiles = allPyqFiles.filter((file) => {
+      const originalName = file.fileKey.split("/").at(-1)?.replace(/^\d+-/, "") ?? file.id;
+      const paperKey = `${file.year}:${originalName}`;
+      if (seenPapers.has(paperKey)) return false;
+      seenPapers.add(paperKey);
+      return true;
     });
     const analysis = await prisma.pYQAnalysis.findFirst({ where: { subjectId, semesterId: enrollment.semesterId } });
     const insights = await prisma.pYQInsight.findMany({
