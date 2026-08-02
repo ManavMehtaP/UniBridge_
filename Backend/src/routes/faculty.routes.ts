@@ -327,6 +327,10 @@ facultyRouter.post("/pyq", upload.single("file"), asyncHandler(async (req, res) 
   ));
 }));
 
+facultyRouter.get("/pyq", asyncHandler(async (req, res) => {
+  res.json(await portalService.facultyPyqs(req.user!.id));
+}));
+
 facultyRouter.post("/quizzes/ai-generate", asyncHandler(async (req, res) => {
   res.status(201).json(await portalService.createAiQuizJob(req.user!.id, req.user!.universityId, req.body));
 }));

@@ -118,6 +118,7 @@ export const facultyApi = {
   deleteNote: (id: string) => api.delete(`/faculty/notes/${id}`).then((r) => r.data),
   // Multipart: file + fields (subjectId, year). Backend stores it and triggers AI PYQ analysis.
   uploadPyq: (form: FormData) => api.post('/faculty/pyq', form).then((r) => r.data),
+  pyqs: () => api.get<{ data: FacultyPyq[] }>('/faculty/pyq').then((r) => r.data),
 
   quizzes: (params: Params) =>
     api.get<PaginatedResponse<T.FacultyQuiz>>('/faculty/quizzes', { params }).then((r) => r.data),
@@ -170,4 +171,20 @@ export const facultyApi = {
     api.get('/faculty/analytics/marks', { params }).then((r) => r.data),
   analyticsMentees: () => api.get('/faculty/analytics/mentees').then((r) => r.data),
   quizPerformance: (params: Params) => api.get('/faculty/analytics/quiz-performance', { params }).then((r) => r.data),
+}
+
+export type FacultyPyq = {
+  id: string
+  year: string
+  fileName: string
+  createdAt: string
+  isAnalyzed: boolean
+  subject: { code: string; name: string }
+  status: 'queued' | 'processing' | 'completed' | 'failed' | string
+  errorMessage: string | null
+  totalChunks: number
+  summary: string | null
+  topics: string[]
+  keywords: string[]
+  analyzedAt: string | null
 }

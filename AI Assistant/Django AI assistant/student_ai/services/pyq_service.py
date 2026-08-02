@@ -40,7 +40,7 @@ def process_pyq_document(pyq_file: PYQFile, *, source_url: str | None = None) ->
         _store_pyq_chunks(pyq_file, document, extracted, parsed)
         semester = _matching_semester(pyq_file)
         analysis = _update_analysis(pyq_file, semester)
-        _store_legacy_insight(pyq_file, semester, extracted, analysis)
+        _store_legacy_insight(pyq_file, semester, extracted, analysis, parsed)
         pyq_file.is_analyzed = True
         pyq_file.save(update_fields=["is_analyzed"])
         document.processing_status = "completed"
@@ -96,11 +96,13 @@ def analyze_pyq_statistics(subject_id: str) -> dict:
 
 
 def _extract_questions(pyq_file: PYQFile, extracted: str) -> dict:
-    fallback = {"questions": []}
+    fallback = {"questions": [], "summary": "", "keywords": []}
     system = (
-        "Extract every previous-year question from the document. Return valid JSON only with key questions. "
+        "Analyze this previous-year-question paper. Return valid JSON only with keys questions, summary, and keywords. "
         "Each question object must include text, subject, unit, module, marks, type, year, difficulty, "
-        "keywords, bloom_level, source_page, and exam if available. Do not summarize; extract individual questions."
+        "keywords, bloom_level, source_page, and exam if available. Extract every individual question exactly enough "
+        "to be useful for revision. summary must be a concise student-facing overview of recurring topics, question "
+        "patterns, and exam focus. keywords must contain the important concepts found in the paper."
     )
     user = f"Subject: {pyq_file.subject.code} {pyq_file.subject.name}\nYear: {pyq_file.year}\n\n{extracted[:30000]}"
     return GeminiDocumentService().json_chat(system, user, fallback=fallback)
@@ -164,7 +166,7 @@ def _store_pyq_chunks(pyq_file: PYQFile, document: AIDocument, extracted: str, p
             "units": [],
             "chapter_count": 0,
             "keywords": normalize_list(parsed.get("keywords"), limit=30),
-            "generated_summary": f"Structured PYQ extraction for {pyq_file.subject.code} {pyq_file.year}.",
+            "generated_summary": str(parsed.get("summary") or f"Structured PYQ extraction for {pyq_file.subject.code} {pyq_file.year}.")[:5000],
             "prerequisites": [],
             "tables": [],
             "formulas": [],
@@ -191,7 +193,7 @@ def _update_analysis(pyq_file: PYQFile, semester: Semester) -> dict:
     return stats
 
 
-def _store_legacy_insight(pyq_file: PYQFile, semester: Semester, extracted: str, analysis: dict) -> None:
+def _store_legacy_insight(pyq_file: PYQFile, semester: Semester, extracted: str, analysis: dict, parsed: dict) -> None:
     PYQInsight.objects.update_or_create(
         pyq_file=pyq_file,
         defaults={
@@ -199,7 +201,7 @@ def _store_legacy_insight(pyq_file: PYQFile, semester: Semester, extracted: str,
             "semester_id": semester.id,
             "extracted_text": extracted[:50000],
             "topics": analysis.get("important_topics", []),
-            "keywords": analysis.get("frequently_asked_topics", []),
+            "keywords": normalize_list(parsed.get("keywords"), limit=30) or analysis.get("frequently_asked_topics", []),
             "difficulty": "",
             "marks_weightage": [{"topic": item["topic"], "weight": item["probability"]} for item in analysis.get("topic_ranking", [])],
             "question_types": [],

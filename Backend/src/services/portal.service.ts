@@ -1895,6 +1895,35 @@ export const portalService = {
     return { uploaded: 1, subjectId, pyqId: pyq.id, processingStatus: studentAiBridge.isConfigured() ? "queued" : "uploaded" };
   },
 
+  async facultyPyqs(facultyId: string) {
+    const pyqs = await prisma.pYQFile.findMany({
+      where: { uploadedById: facultyId },
+      include: {
+        subject: { select: { code: true, name: true } },
+        insight: { select: { topics: true, keywords: true, status: true, updatedAt: true } },
+        aiDocument: { include: { metadata: { select: { generatedSummary: true } } } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    return {
+      data: pyqs.map((pyq) => ({
+        id: pyq.id,
+        year: pyq.year,
+        fileName: pyq.fileKey.split("/").at(-1) ?? "PYQ document",
+        createdAt: pyq.createdAt,
+        isAnalyzed: pyq.isAnalyzed,
+        subject: pyq.subject,
+        status: pyq.aiDocument?.processingStatus ?? (pyq.isAnalyzed ? "completed" : "queued"),
+        errorMessage: pyq.aiDocument?.errorMessage ?? null,
+        totalChunks: pyq.aiDocument?.totalChunks ?? 0,
+        summary: pyq.aiDocument?.metadata?.generatedSummary ?? null,
+        topics: (pyq.insight?.topics as string[] | undefined) ?? [],
+        keywords: (pyq.insight?.keywords as string[] | undefined) ?? [],
+        analyzedAt: pyq.insight?.updatedAt ?? pyq.aiDocument?.processedAt ?? null,
+      })),
+    };
+  },
+
   // ── Attendance (HOD) ──────────────────────────────────────
 
   async attendanceSummary(scope: Scope, semesterId?: string) {
