@@ -3426,13 +3426,13 @@ export const portalService = {
     const { semester, enrollment } = await getStudentEnrollment(studentId, universityId, query.semesterId as string | undefined);
     const subjectIds = await getStudentSubjectIds(studentId, universityId, semester.id);
     const now = new Date();
-    const quizzes = await prisma.quiz.findMany({ where: { isPublished: true, deletedAt: null, semesterId: semester.id, subjectId: { in: subjectIds }, OR: [{ studentId }, { studentId: null, targets: { some: { batchId: enrollment.batchId } } }] }, include: { subject: { select: { code: true, name: true } }, _count: { select: { questions: true } }, attempts: { where: { studentId }, select: { score: true, submittedAt: true, attemptNumber: true } } }, orderBy: { createdAt: "desc" } });
+    const quizzes = await prisma.quiz.findMany({ where: { isPublished: true, deletedAt: null, semesterId: semester.id, subjectId: { in: subjectIds }, OR: [{ studentId }, { studentId: null, targets: { some: { batchId: enrollment.batchId } } }] }, include: { subject: { select: { code: true, name: true } }, _count: { select: { questions: true } }, attempts: { where: { studentId }, select: { score: true, submittedAt: true, attemptNumber: true }, orderBy: { submittedAt: "desc" } } }, orderBy: { createdAt: "desc" } });
     const rows = quizzes.map((quiz) => {
       const bestScore = quiz.attempts.length ? Math.max(...quiz.attempts.map((attempt) => attempt.score)) : null;
       const expired = isQuizExpired(quiz.dueDate);
       const attemptsTaken = quiz.attempts.length;
       const status = attemptsTaken >= quiz.maxAttempts ? "ATTEMPTED" : expired ? "EXPIRED" : attemptsTaken ? "RETRY" : "PENDING";
-      return { id: quiz.id, title: quiz.title, description: quiz.description, subject: quiz.subject, subjectId: quiz.subjectId, semesterId: quiz.semesterId, questionCount: quiz._count.questions, timeLimitMins: quiz.timeLimitMins, isAiGenerated: quiz.isAiGenerated, isStudentGenerated: quiz.studentId === studentId, chapters: quiz.chapterNames, maxAttempts: quiz.maxAttempts, attemptsTaken, dueDate: quiz.dueDate, status, attemptedAt: quiz.attempts[0]?.submittedAt ?? null, score: bestScore };
+      return { id: quiz.id, title: quiz.title, description: quiz.description, subject: quiz.subject, subjectId: quiz.subjectId, semesterId: quiz.semesterId, questionCount: quiz._count.questions, timeLimitMins: quiz.timeLimitMins, isAiGenerated: quiz.isAiGenerated, isStudentGenerated: quiz.studentId === studentId, chapters: quiz.chapterNames, maxAttempts: quiz.maxAttempts, attemptsTaken, dueDate: quiz.dueDate, createdAt: quiz.createdAt, status, attemptedAt: quiz.attempts[0]?.submittedAt ?? null, score: bestScore };
     });
     return paginate(
       rows.filter((r) => !query.subjectId || r.subjectId === query.subjectId).filter((r) => !query.status || r.status === query.status).map(({ subjectId: _, semesterId: __, ...rest }) => rest),

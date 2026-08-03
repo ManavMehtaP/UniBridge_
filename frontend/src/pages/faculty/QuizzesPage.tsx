@@ -27,9 +27,9 @@ export default function QuizzesPage() {
 
   const list = useQuery({ queryKey: ['faculty', 'quizzes'], queryFn: () => facultyApi.quizzes({ page: 1, limit: 30 }) })
 
-  const togglePublish = useMutation({
-    mutationFn: (q: FacultyQuiz) => q.isPublished ? facultyApi.unpublishQuiz(q.id) : facultyApi.publishQuiz(q.id),
-    onSuccess: () => { toast.success('Updated'); qc.invalidateQueries({ queryKey: ['faculty', 'quizzes'] }) },
+  const publish = useMutation({
+    mutationFn: (id: string) => facultyApi.publishQuiz(id),
+    onSuccess: () => { toast.success('Quiz published'); qc.invalidateQueries({ queryKey: ['faculty', 'quizzes'] }) },
     onError: (e) => toast.error(errorMessage(e)),
   })
 
@@ -79,9 +79,11 @@ export default function QuizzesPage() {
                   <button onClick={() => setQuestionsOf(q)} title="Edit questions" className="flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-[11px] font-semibold text-text-secondary hover:bg-primary-light hover:text-primary">
                     <ListChecks size={14} /> Questions
                   </button>
-                  <button onClick={() => togglePublish.mutate(q)} title={q.isPublished ? 'Unpublish' : 'Publish'} className="flex h-7 w-7 items-center justify-center rounded-sm text-text-secondary hover:bg-primary-light hover:text-primary">
-                    <Send size={14} />
-                  </button>
+                  {!q.isPublished && (
+                    <button onClick={() => publish.mutate(q.id)} title="Publish" className="flex h-7 w-7 items-center justify-center rounded-sm text-text-secondary hover:bg-primary-light hover:text-primary">
+                      <Send size={14} />
+                    </button>
+                  )}
                   <button onClick={() => setDeleteOf(q)} title="Delete" className="flex h-7 w-7 items-center justify-center rounded-sm text-text-secondary hover:bg-danger-light hover:text-danger">
                     <Trash2 size={14} />
                   </button>
@@ -179,6 +181,7 @@ const blankQuestion = (): Draft => ({ text: '', options: ['', '', '', ''], corre
 // actually makes a quiz usable. Answers + explanations set here are what students see on review.
 function QuestionsModal({ quiz, onClose, onSuccess }: { quiz: FacultyQuiz | null; onClose: () => void; onSuccess: () => void }) {
   const [items, setItems] = useState<Draft[]>([])
+  const readOnly = !!quiz?.isPublished
 
   const detail = useQuery({
     queryKey: ['faculty', 'quiz', quiz?.id],
@@ -216,27 +219,29 @@ function QuestionsModal({ quiz, onClose, onSuccess }: { quiz: FacultyQuiz | null
       open={!!quiz} onClose={onClose} title={`Questions — ${quiz?.title ?? ''}`} size="lg"
       footer={
         <>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => save.mutate()} loading={save.isPending} disabled={!valid}>Save {items.length} question{items.length === 1 ? '' : 's'}</Button>
+          <Button variant="outline" onClick={onClose}>{readOnly ? 'Close' : 'Cancel'}</Button>
+          {!readOnly && <Button onClick={() => save.mutate()} loading={save.isPending} disabled={!valid}>Save {items.length} question{items.length === 1 ? '' : 's'}</Button>}
         </>
       }
     >
       <div className="space-y-4">
+        {readOnly && <div className="rounded-sm bg-surface-hover px-3 py-2 text-xs text-text-muted">Published quizzes are view only. Questions and answers can still be reviewed here, but they can no longer be changed.</div>}
         {items.map((q, i) => (
           <div key={i} className="rounded-card border border-border bg-surface-2 p-4">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Question {i + 1}</span>
-              {items.length > 1 && (
+              {!readOnly && items.length > 1 && (
                 <button onClick={() => setItems((prev) => prev.filter((_, idx) => idx !== i))} className="text-xs font-semibold text-danger hover:underline">Remove</button>
               )}
             </div>
-            <Input value={q.text} onChange={(e) => patch(i, { text: e.target.value })} placeholder="What does CPU stand for?" />
+            <Input value={q.text} onChange={(e) => patch(i, { text: e.target.value })} placeholder="What does CPU stand for?" disabled={readOnly} />
             <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
               {q.options.map((opt, oi) => (
                 <label key={oi} className="flex items-center gap-2">
                   <input
                     type="radio" name={`correct-${i}`} checked={q.correctOption === LETTERS[oi]}
                     onChange={() => patch(i, { correctOption: LETTERS[oi] })}
+                    disabled={readOnly}
                     className="accent-primary" title={`Mark ${LETTERS[oi]} correct`}
                   />
                   <span className="w-4 text-xs font-bold text-text-muted">{LETTERS[oi]}</span>
@@ -244,15 +249,16 @@ function QuestionsModal({ quiz, onClose, onSuccess }: { quiz: FacultyQuiz | null
                     value={opt}
                     onChange={(e) => patch(i, { options: q.options.map((o, idx) => (idx === oi ? e.target.value : o)) })}
                     placeholder={`Option ${LETTERS[oi]}`}
+                    disabled={readOnly}
                   />
                 </label>
               ))}
             </div>
             <p className="mt-2 text-[11px] text-text-muted">Selected radio = correct answer (currently <b>{q.correctOption}</b>).</p>
-            <Input className="mt-2" value={q.explanation} onChange={(e) => patch(i, { explanation: e.target.value })} placeholder="Explanation shown to students on review (optional)" />
+            <Input className="mt-2" value={q.explanation} onChange={(e) => patch(i, { explanation: e.target.value })} placeholder="Explanation shown to students on review (optional)" disabled={readOnly} />
           </div>
         ))}
-        <Button variant="outline" leftIcon={<Plus size={15} />} onClick={() => setItems((prev) => [...prev, blankQuestion()])}>Add question</Button>
+        {!readOnly && <Button variant="outline" leftIcon={<Plus size={15} />} onClick={() => setItems((prev) => [...prev, blankQuestion()])}>Add question</Button>}
       </div>
     </Modal>
   )
