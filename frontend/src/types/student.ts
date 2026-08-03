@@ -78,6 +78,8 @@ export interface StudentQuiz {
   subject: { code: string; name: string }
   timeLimitMins?: number | null
   dueDate?: string | null
+  createdAt?: string
+  attemptedAt?: string | null
   questionCount?: number
   isAttempted?: boolean
   score?: number | null

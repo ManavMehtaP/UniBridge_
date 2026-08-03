@@ -59,6 +59,27 @@ export async function uploadObject(key: string, body: Buffer, contentType: strin
   return key;
 }
 
+export async function deleteObject(key: string): Promise<void> {
+  if (!storageEnabled) return;
+  const now = new Date();
+  const amzdate = amzDate(now);
+  const datestamp = amzdate.slice(0, 8);
+  const canonicalUri = `${basePath}/${enc(bucket)}/${encPath(key)}`;
+  const payloadHash = sha256hex("");
+  const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzdate}\n`;
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest = ["DELETE", canonicalUri, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const scope = `${datestamp}/${region}/s3/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", amzdate, scope, sha256hex(canonicalRequest)].join("\n");
+  const signature = hmac(signingKey(datestamp), stringToSign).toString("hex");
+  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const res = await fetch(`${endpoint}/${enc(bucket)}/${encPath(key)}`, {
+    method: "DELETE",
+    headers: { "x-amz-date": amzdate, "x-amz-content-sha256": payloadHash, Authorization: authorization },
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`Storage delete failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+}
+
 // Presigned GET URL (SigV4 query auth) — works for private buckets, expires after expiresSec.
 export function presignGetUrl(key: string, expiresSec = 3600): string {
   if (!storageEnabled) return "";

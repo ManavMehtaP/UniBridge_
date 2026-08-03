@@ -33,6 +33,7 @@ export const studentNavItems: NavSection[] = [
       { id: 'self-notes', label: 'My Notes', path: '/student/self-notes', icon: PenTool },
       { id: 'quizzes', label: 'Quizzes', path: '/student/quizzes', icon: HelpCircle },
       { id: 'ai', label: 'AI Assistant', path: '/student/ai', icon: Sparkles },
+      { id: 'insights', label: 'Exam Insights', path: '/student/exam-insights', icon: BarChart2 },
       { id: 'planner', label: 'Study Planner', path: '/student/study-planner', icon: Target },
     ],
   },

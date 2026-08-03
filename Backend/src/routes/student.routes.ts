@@ -307,6 +307,10 @@ studentRouter.get("/ai/pyq-analysis/:subjectId", asyncHandler(async (req, res) =
   res.json(await portalService.studentPyqAnalysis(req.user!.id, req.user!.universityId, str(req.params.subjectId)));
 }));
 
+studentRouter.get("/ai/pyq/:pyqId/summary", asyncHandler(async (req, res) => {
+  res.json(await portalService.studentPyqSummary(req.user!.id, req.user!.universityId, str(req.params.pyqId)));
+}));
+
 studentRouter.get("/ai/smart-notes/:noteId/summary", asyncHandler(async (req, res) => {
   res.json(await portalService.studentSmartNoteSummary(req.user!.id, req.user!.universityId, str(req.params.noteId)));
 }));

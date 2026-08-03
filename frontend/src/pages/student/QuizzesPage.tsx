@@ -17,6 +17,11 @@ type Question = { id: string; text: string; options: { id: string; label: string
 type QuizAttempt = { quizId: string; title: string; attemptNumber: number; timeLimitMins?: number | null; expiresAt?: string; questions: Question[] }
 type QuizResult = { quizId: string; score: number; correctCount: number; totalQuestions: number; attemptsTaken: number; maxAttempts?: number; results: Array<{ questionId: string; questionText: string; options?: { id: string; label: string; text: string }[]; selectedOption: string; correctOption: string; isCorrect: boolean; explanation?: string }> }
 
+function formatDate(value?: string | null) {
+  if (!value) return 'Not set'
+  return new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(new Date(value))
+}
+
 export default function StudentQuizzesPage() {
   const client = useQueryClient()
   const [generatorOpen, setGeneratorOpen] = useState(false)
@@ -43,6 +48,14 @@ export default function StudentQuizzesPage() {
     : Array.isArray((subjects.data as { subjects?: unknown } | undefined)?.subjects)
       ? (subjects.data as { subjects: Array<{ id: string; code: string; name: string }> }).subjects
       : []
+  const quizzes = list.data?.data ?? []
+  const activeQuizzes = quizzes.filter((quiz) => quiz.status !== 'ATTEMPTED' && quiz.status !== 'EXPIRED')
+  const completedQuizzes = quizzes
+    .filter((quiz) => quiz.status === 'ATTEMPTED')
+    .sort((a, b) => new Date(b.attemptedAt ?? b.dueDate ?? b.createdAt ?? 0).getTime() - new Date(a.attemptedAt ?? a.dueDate ?? a.createdAt ?? 0).getTime())
+  const missedQuizzes = quizzes
+    .filter((quiz) => quiz.status === 'EXPIRED')
+    .sort((a, b) => new Date(b.dueDate ?? b.createdAt ?? 0).getTime() - new Date(a.dueDate ?? a.createdAt ?? 0).getTime())
 
   const toggleChapter = (chapter: string) => setSelectedChapters((current) => current.includes(chapter) ? current.filter((item) => item !== chapter) : [...current, chapter])
   const openAttempt = (quiz: StudentQuiz) => start.mutate(quiz.id)
@@ -75,14 +88,35 @@ export default function StudentQuizzesPage() {
     <PageShell title="Quizzes" subtitle={list.data ? `${list.data.total} available` : 'Generate practice quizzes from faculty notes'} action={<Button leftIcon={<Sparkles size={15} />} onClick={() => setGeneratorOpen(true)}>Generate with AI</Button>}>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_320px]">
         <div>
-          {list.isLoading ? <CardSkeleton height={200} /> : list.data && list.data.data.length === 0 ? (
+          {list.isLoading ? <CardSkeleton height={200} /> : quizzes.length === 0 ? (
             <EmptyState icon={<HelpCircle size={22} />} title="No quizzes available" description="Generate an AI practice quiz from your faculty notes." />
-          ) : <div className="space-y-3">{list.data?.data.map((quiz) => {
+          ) : activeQuizzes.length === 0 ? (
+            <EmptyState icon={<HelpCircle size={22} />} title="No active quizzes" description="Your completed and missed quizzes are listed on the right." />
+          ) : <div className="space-y-3">{activeQuizzes.map((quiz) => {
             const canRetry = (quiz.attemptsTaken ?? 0) < (quiz.maxAttempts ?? 1) && quiz.status !== 'EXPIRED'
-            return <Card key={quiz.id} className="p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><div className="text-sm font-semibold text-text-primary">{quiz.title}</div>{quiz.isStudentGenerated && <Badge tone="primary">AI practice</Badge>}{quiz.attemptsTaken ? <Badge tone="success">{quiz.attemptsTaken}/{quiz.maxAttempts ?? 1} attempts</Badge> : null}</div><div className="mt-0.5 text-xs text-text-muted">{quiz.subject.code} · {quiz.subject.name}</div>{quiz.description && <p className="mt-1.5 text-xs text-text-secondary">{quiz.description}</p>}<div className="mt-2 flex flex-wrap gap-3 text-[11px] text-text-secondary"><span><b>{quiz.questionCount ?? 0}</b> MCQs</span>{quiz.score != null && <span>Best marks <b>{quiz.score}%</b></span>}{quiz.timeLimitMins && <span>{quiz.timeLimitMins} min</span>}</div></div><div className="flex gap-2">{quiz.isStudentGenerated && <><Button variant="ghost" size="sm" leftIcon={<Pencil size={13} />} loading={renameQuiz.isPending} onClick={() => { const title = window.prompt('Quiz title', quiz.title); if (title?.trim() && title.trim() !== quiz.title) renameQuiz.mutate({ id: quiz.id, title }) }}>Rename</Button><Button variant="ghost" size="sm" leftIcon={<Trash2 size={13} />} loading={removeQuiz.isPending} onClick={() => { if (window.confirm(`Delete ${quiz.title}?`)) removeQuiz.mutate(quiz.id) }}>Delete</Button></>}{quiz.attemptsTaken ? <><Button variant="outline" size="sm" onClick={() => loadReview.mutate(quiz.id)}>Review</Button>{canRetry && <Button size="sm" leftIcon={<RefreshCw size={13} />} onClick={() => openAttempt(quiz)} loading={start.isPending}>Retry</Button>}</> : <Button size="sm" leftIcon={<Play size={13} />} onClick={() => openAttempt(quiz)} loading={start.isPending}>Start</Button>}</div></div></Card>
+            return <Card key={quiz.id} className="p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><div className="text-sm font-semibold text-text-primary">{quiz.title}</div>{quiz.isStudentGenerated && <Badge tone="primary">AI practice</Badge>}{quiz.attemptsTaken ? <Badge tone="success">{quiz.attemptsTaken}/{quiz.maxAttempts ?? 1} attempts</Badge> : null}</div><div className="mt-0.5 text-xs text-text-muted">{quiz.subject.code} · {quiz.subject.name}</div>{quiz.description && <p className="mt-1.5 text-xs text-text-secondary">{quiz.description}</p>}<div className="mt-2 flex flex-wrap gap-3 text-[11px] text-text-secondary"><span><b>{quiz.questionCount ?? 0}</b> MCQs</span>{quiz.score != null && <span>Best marks <b>{quiz.score}%</b></span>}{quiz.timeLimitMins && <span>{quiz.timeLimitMins} min</span>}<span>Start date <b>{formatDate(quiz.createdAt)}</b></span><span>End date <b>{formatDate(quiz.dueDate)}</b></span></div></div><div className="flex gap-2">{quiz.isStudentGenerated && <><Button variant="ghost" size="sm" leftIcon={<Pencil size={13} />} loading={renameQuiz.isPending} onClick={() => { const title = window.prompt('Quiz title', quiz.title); if (title?.trim() && title.trim() !== quiz.title) renameQuiz.mutate({ id: quiz.id, title }) }}>Rename</Button><Button variant="ghost" size="sm" leftIcon={<Trash2 size={13} />} loading={removeQuiz.isPending} onClick={() => { if (window.confirm(`Delete ${quiz.title}?`)) removeQuiz.mutate(quiz.id) }}>Delete</Button></>}{quiz.attemptsTaken ? <><Button variant="outline" size="sm" onClick={() => loadReview.mutate(quiz.id)}>Review</Button>{canRetry && <Button size="sm" leftIcon={<RefreshCw size={13} />} onClick={() => openAttempt(quiz)} loading={start.isPending}>Retry</Button>}</> : <Button size="sm" leftIcon={<Play size={13} />} onClick={() => openAttempt(quiz)} loading={start.isPending}>Start</Button>}</div></div></Card>
           })}</div>}
         </div>
-        <Card><div className="border-b border-border p-4 text-sm font-semibold text-text-primary">Completed Quizzes</div><div className="p-4"><p className="mb-3 text-xs text-text-muted">Name, best marks and attempts taken.</p><div className="space-y-2">{list.data?.data.filter((quiz) => quiz.attemptsTaken).map((quiz) => <button key={quiz.id} className="w-full rounded-sm bg-surface-2 px-3 py-2 text-left text-xs hover:bg-primary-light" onClick={() => loadReview.mutate(quiz.id)}><div className="font-semibold text-text-primary">{quiz.title}</div><div className="mt-0.5 text-text-muted">{quiz.score}% · {quiz.attemptsTaken}/{quiz.maxAttempts ?? 1} attempts</div></button>) || <p className="text-xs text-text-muted">No attempts yet.</p>}</div></div></Card>
+        <div className="space-y-4">
+          <Card>
+            <div className="border-b border-border p-4 text-sm font-semibold text-text-primary">Completed Quizzes</div>
+            <div className="p-4">
+              <p className="mb-3 text-xs text-text-muted">Name, best marks, attempts taken, and dates.</p>
+              <div className="space-y-2 md:max-h-80 md:overflow-y-auto">
+                {completedQuizzes.length ? completedQuizzes.map((quiz) => <button key={quiz.id} className="w-full rounded-sm bg-surface-2 px-3 py-2 text-left text-xs hover:bg-primary-light" onClick={() => loadReview.mutate(quiz.id)}><div className="font-semibold text-text-primary">{quiz.title}</div><div className="mt-0.5 text-text-muted">{quiz.score}% · {quiz.attemptsTaken}/{quiz.maxAttempts ?? 1} attempts</div><div className="mt-0.5 text-text-muted">Start {formatDate(quiz.createdAt)} · End {formatDate(quiz.dueDate)}</div></button>) : <p className="text-xs text-text-muted">No completed quizzes yet.</p>}
+              </div>
+            </div>
+          </Card>
+          <Card>
+            <div className="border-b border-border p-4 text-sm font-semibold text-text-primary">Missed Quizzes</div>
+            <div className="p-4">
+              <p className="mb-3 text-xs text-text-muted">Quizzes whose end date passed before completion.</p>
+              <div className="space-y-2 md:max-h-80 md:overflow-y-auto">
+                {missedQuizzes.length ? missedQuizzes.map((quiz) => <div key={quiz.id} className="w-full rounded-sm bg-surface-2 px-3 py-2 text-left text-xs"><div className="font-semibold text-text-primary">{quiz.title}</div><div className="mt-0.5 text-text-muted">{quiz.subject.code} · {quiz.subject.name}</div><div className="mt-0.5 text-text-muted">Start {formatDate(quiz.createdAt)} · End {formatDate(quiz.dueDate)}</div></div>) : <p className="text-xs text-text-muted">No missed quizzes.</p>}
+              </div>
+            </div>
+          </Card>
+        </div>
       </div>
 
       <Modal open={generatorOpen} onClose={() => setGeneratorOpen(false)} title="Generate AI practice quiz" subtitle="Questions are written from the faculty notes you pick." size="md" footer={<><Button variant="outline" onClick={() => setGeneratorOpen(false)}>Cancel</Button><Button loading={generate.isPending} disabled={!subjectId || !selectedChapters.length} onClick={() => generate.mutate({ subjectId, chapters: selectedChapters })}>Generate MCQs</Button></>}>

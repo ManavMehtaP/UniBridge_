@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+import re
 
 from django.utils import timezone
 
@@ -40,7 +41,7 @@ def process_pyq_document(pyq_file: PYQFile, *, source_url: str | None = None) ->
         _store_pyq_chunks(pyq_file, document, extracted, parsed)
         semester = _matching_semester(pyq_file)
         analysis = _update_analysis(pyq_file, semester)
-        _store_legacy_insight(pyq_file, semester, extracted, analysis)
+        _store_legacy_insight(pyq_file, semester, extracted, analysis, parsed)
         pyq_file.is_analyzed = True
         pyq_file.save(update_fields=["is_analyzed"])
         document.processing_status = "completed"
@@ -56,7 +57,16 @@ def process_pyq_document(pyq_file: PYQFile, *, source_url: str | None = None) ->
 
 
 def analyze_pyq_statistics(subject_id: str) -> dict:
-    questions = list(PYQQuestion.objects.filter(subject_id=subject_id))
+    raw_questions = PYQQuestion.objects.filter(subject_id=subject_id).select_related("pyq_file")
+    seen_papers: set[str] = set()
+    questions = []
+    for question in raw_questions:
+        original_name = re.sub(r"^\d+-", "", (question.pyq_file.file_key or "").rsplit("/", 1)[-1])
+        paper_key = f"{question.year}:{original_name or question.pyq_file_id}"
+        if paper_key in seen_papers:
+            continue
+        seen_papers.add(paper_key)
+        questions.extend(PYQQuestion.objects.filter(pyq_file_id=question.pyq_file_id))
     topic_counter: Counter[str] = Counter()
     unit_counter: Counter[str] = Counter()
     year_counter: dict[str, Counter[str]] = defaultdict(Counter)
@@ -85,7 +95,7 @@ def analyze_pyq_statistics(subject_id: str) -> dict:
         "weak_points": [unit for unit, _count in unit_counter.most_common(5)],
         "unit_frequency": dict(unit_counter.most_common(10)),
         "topic_ranking": [
-            {"topic": topic, "rank": index + 1, "probability": round(count / total_topics, 4)}
+            {"topic": topic, "rank": index + 1, "occurrences": count, "probability": round(count / total_topics, 4)}
             for index, (topic, count) in enumerate(ranking)
         ],
         "repeated_questions": [text for text, count in repeated.most_common(10) if count > 1],
@@ -96,14 +106,61 @@ def analyze_pyq_statistics(subject_id: str) -> dict:
 
 
 def _extract_questions(pyq_file: PYQFile, extracted: str) -> dict:
-    fallback = {"questions": []}
+    fallback = {"questions": [], "summary": "", "keywords": []}
     system = (
-        "Extract every previous-year question from the document. Return valid JSON only with key questions. "
+        "Analyze this previous-year-question paper. Return valid JSON only with keys questions, summary, and keywords. "
         "Each question object must include text, subject, unit, module, marks, type, year, difficulty, "
-        "keywords, bloom_level, source_page, and exam if available. Do not summarize; extract individual questions."
+        "keywords, bloom_level, source_page, and exam if available. Extract every individual question exactly enough "
+        "to be useful for revision. summary must be a concise student-facing overview of recurring topics, question "
+        "patterns, and exam focus. keywords must contain the important concepts found in the paper."
     )
     user = f"Subject: {pyq_file.subject.code} {pyq_file.subject.name}\nYear: {pyq_file.year}\n\n{extracted[:30000]}"
-    return GeminiDocumentService().json_chat(system, user, fallback=fallback)
+    try:
+        return GeminiDocumentService().json_chat(system, user, fallback=fallback)
+    except Exception:
+        # A provider outage or quota limit must not strand an uploaded PYQ in
+        # "processing". Keep the source chunks and produce a deterministic
+        # extraction until Gemini is available for later uploads/retries.
+        return _local_pyq_extract(pyq_file, extracted)
+
+
+def _local_pyq_extract(pyq_file: PYQFile, extracted: str) -> dict:
+    lines = [" ".join(line.split()) for line in extracted.splitlines()]
+    candidates: list[str] = []
+    current = ""
+    for line in lines:
+        if not line:
+            continue
+        starts_question = bool(re.match(r"^(?:q(?:uestion)?\s*)?\d+[.)\-:]\s*", line, re.I))
+        if starts_question:
+            if current:
+                candidates.append(current)
+            current = re.sub(r"^(?:q(?:uestion)?\s*)?\d+[.)\-:]\s*", "", line, flags=re.I)
+        elif current:
+            current = f"{current} {line}"[:1800]
+            if line.endswith("?"):
+                candidates.append(current)
+                current = ""
+        elif line.endswith("?") and len(line) > 20:
+            candidates.append(line)
+    if current:
+        candidates.append(current)
+
+    words = re.findall(r"[A-Za-z][A-Za-z0-9+#.-]{2,}", extracted.lower())
+    ignored = {"the", "and", "for", "with", "that", "this", "from", "are", "what", "which", "into", "your", "answer", "marks", "question", "following"}
+    keywords = [word for word, _count in Counter(word for word in words if word not in ignored).most_common(12)]
+    questions = [{
+        "text": text,
+        "subject": pyq_file.subject.code,
+        "year": pyq_file.year,
+        "type": "Question",
+        "keywords": keywords[:6],
+    } for text in candidates[:100] if len(text) >= 12]
+    summary = (
+        f"PYQ {pyq_file.year} for {pyq_file.subject.code}. "
+        f"{len(questions)} questions were extracted locally while the Gemini provider was unavailable. "
+        f"Review the recurring concepts: {', '.join(keywords[:6]) or 'see extracted questions'}.")
+    return {"questions": questions, "summary": summary, "keywords": keywords}
 
 
 def _store_questions(pyq_file: PYQFile, document: AIDocument, raw_questions: object) -> int:
@@ -164,7 +221,7 @@ def _store_pyq_chunks(pyq_file: PYQFile, document: AIDocument, extracted: str, p
             "units": [],
             "chapter_count": 0,
             "keywords": normalize_list(parsed.get("keywords"), limit=30),
-            "generated_summary": f"Structured PYQ extraction for {pyq_file.subject.code} {pyq_file.year}.",
+            "generated_summary": str(parsed.get("summary") or f"Structured PYQ extraction for {pyq_file.subject.code} {pyq_file.year}.")[:5000],
             "prerequisites": [],
             "tables": [],
             "formulas": [],
@@ -185,13 +242,15 @@ def _matching_semester(pyq_file: PYQFile) -> Semester:
 def _update_analysis(pyq_file: PYQFile, semester: Semester) -> dict:
     stats = analyze_pyq_statistics(str(pyq_file.subject_id))
     analysis, _created = PYQAnalysis.objects.get_or_create(subject=pyq_file.subject, semester=semester)
-    analysis.topic_frequencies = {item["topic"]: round(item["probability"], 4) for item in stats["topic_ranking"]}
+    # Keep raw occurrences. Probabilities made a single paper look like many PYQs
+    # and prevented the portal from applying meaningful importance thresholds.
+    analysis.topic_frequencies = {item["topic"]: item["occurrences"] for item in stats["topic_ranking"]}
     analysis.analyzed_at = timezone.now()
     analysis.save(update_fields=["topic_frequencies", "analyzed_at"])
     return stats
 
 
-def _store_legacy_insight(pyq_file: PYQFile, semester: Semester, extracted: str, analysis: dict) -> None:
+def _store_legacy_insight(pyq_file: PYQFile, semester: Semester, extracted: str, analysis: dict, parsed: dict) -> None:
     PYQInsight.objects.update_or_create(
         pyq_file=pyq_file,
         defaults={
@@ -199,7 +258,7 @@ def _store_legacy_insight(pyq_file: PYQFile, semester: Semester, extracted: str,
             "semester_id": semester.id,
             "extracted_text": extracted[:50000],
             "topics": analysis.get("important_topics", []),
-            "keywords": analysis.get("frequently_asked_topics", []),
+            "keywords": normalize_list(parsed.get("keywords"), limit=30) or analysis.get("frequently_asked_topics", []),
             "difficulty": "",
             "marks_weightage": [{"topic": item["topic"], "weight": item["probability"]} for item in analysis.get("topic_ranking", [])],
             "question_types": [],

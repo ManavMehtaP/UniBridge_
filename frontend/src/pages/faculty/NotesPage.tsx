@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { FileQuestion, FileText, Plus } from 'lucide-react'
-import { facultyApi } from '@/api/faculty'
+import { FileQuestion, FileText, Trash2 } from 'lucide-react'
+import { facultyApi, type FacultyPyq } from '@/api/faculty'
 import { errorMessage } from '@/api/client'
 import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
 import type { FacultyNote } from '@/types/faculty'
 import { PageShell } from '@/components/shared/PageShell'
 import { FileDrop } from '@/components/shared/FileDrop'
+import { SearchInput } from '@/components/shared/SearchInput'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { Input } from '@/components/ui/Input'
@@ -29,13 +30,22 @@ export default function NotesPage() {
   const [showFolder, setShowFolder] = useState(false)
   const [showPyq, setShowPyq] = useState(false)
   const [renameFolder, setRenameFolder] = useState<{ id: string; name: string } | null>(null)
+  const [deleteFolderOf, setDeleteFolderOf] = useState<{ id: string; name: string } | null>(null)
+  const [activeFolder, setActiveFolder] = useState<'notes' | 'pyq'>('notes')
+  const [fileSearch, setFileSearch] = useState('')
+  const deferredFileSearch = useDeferredValue(fileSearch)
 
-  const list = useQuery({ queryKey: ['faculty', 'notes'], queryFn: () => facultyApi.notes({ limit: 20 }) })
   const invalidate = () => qc.invalidateQueries({ queryKey: ['faculty', 'notes'] })
   const drive = useQuery({ queryKey: ['faculty', 'note-drive', driveSubjectId, parentId], queryFn: () => facultyApi.noteDrive({ subjectId: driveSubjectId, parentId: parentId ?? undefined }), enabled: !!driveSubjectId })
+  const pyqs = useQuery({ queryKey: ['faculty', 'pyqs'], queryFn: () => facultyApi.pyqs(), enabled: activeFolder === 'pyq' })
   const del = useMutation({
     mutationFn: (id: string) => facultyApi.deleteNote(id),
     onSuccess: () => { toast.success('Note deleted'); invalidate(); setDeleteOf(null) },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  const delFolder = useMutation({
+    mutationFn: (id: string) => facultyApi.deleteNoteFolder(id),
+    onSuccess: () => { toast.success('Folder deleted'); setDeleteFolderOf(null); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) },
     onError: (e) => toast.error(errorMessage(e)),
   })
 
@@ -45,26 +55,37 @@ export default function NotesPage() {
       .filter((a) => !seen.has(a.subject.id) && seen.add(a.subject.id))
       .map((a) => ({ value: a.subject.id, label: `${a.subject.code} — ${a.subject.name}` })) ?? []
   }, [scope.data])
+  const filteredFiles = useMemo(() => {
+    const term = deferredFileSearch.trim().toLowerCase()
+    if (!term) return drive.data?.files ?? []
+    return (drive.data?.files ?? []).filter((file) =>
+      [file.title, file.originalFileName, file.description, file.mimeType].some((value) => value?.toLowerCase().includes(term)),
+    )
+  }, [deferredFileSearch, drive.data?.files])
   useEffect(() => { if (!driveSubjectId && subjectOpts[0]) setDriveSubjectId(subjectOpts[0].value) }, [driveSubjectId, subjectOpts])
   useEffect(() => { setParentId(null) }, [driveSubjectId])
 
   return (
     <PageShell
-      title="Notes"
-      subtitle={list.data ? `${list.data.total} notes uploaded` : 'Upload PDFs and study materials'}
-      action={<div className="flex gap-2"><Button variant="outline" leftIcon={<Plus size={15} />} onClick={() => setShowFolder(true)} disabled={!driveSubjectId}>New folder</Button><Button variant="outline" leftIcon={<FileQuestion size={15} />} onClick={() => setShowPyq(true)}>Add PYQ</Button><Button leftIcon={<Plus size={15} />} onClick={() => setShowUpload(true)}>Upload Note</Button></div>}
+      title={activeFolder === 'notes' ? 'Notes' : 'PYQ'}
+      subtitle={activeFolder === 'notes' ? 'Upload PDFs and study materials' : 'Previous-year question papers with AI summaries and topic analysis'}
+      action={activeFolder === 'notes'
+        ? undefined
+        : <div className="flex gap-2"><Button variant="outline" onClick={() => setActiveFolder('notes')}>Go back</Button><Button leftIcon={<FileQuestion size={15} />} onClick={() => setShowPyq(true)}>Add PYQ</Button></div>}
     >
-      <div className="mb-4 max-w-md"><Select value={driveSubjectId} onChange={(e) => setDriveSubjectId(e.target.value)} placeholder="Select subject" options={subjectOpts} /></div>
-      {drive.isLoading ? (
-        <CardSkeleton height={200} />
-      ) : drive.data ? (
-        <NoteDrive breadcrumbs={drive.data.breadcrumbs} folders={drive.data.folders} files={drive.data.files} faculty onOpenFolder={(id) => setParentId(id)} onBreadcrumb={setParentId} onCreateFolder={() => setShowFolder(true)} onUpload={() => setShowUpload(true)} onRenameFolder={setRenameFolder} onDeleteFolder={(folder) => { facultyApi.deleteNoteFolder(folder.id).then(() => { toast.success('Folder deleted'); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }).catch((e) => toast.error(errorMessage(e))) }} onEditFile={(file) => { const note = { ...file, subject: drive.data.subject ?? { code: '', name: '' }, fileUrl: '', fileSize: file.fileSizeKb ?? undefined, fileType: file.mimeType, aiSummaryStatus: file.hasAiSummary ? 'complete' : 'pending', createdAt: file.createdAt } as FacultyNote; setEditOf(note) }} onDeleteFile={(file) => { const note = { ...file, subject: drive.data.subject ?? { code: '', name: '' }, fileUrl: '', fileSize: file.fileSizeKb ?? undefined, fileType: file.mimeType, aiSummaryStatus: file.hasAiSummary ? 'complete' : 'pending', createdAt: file.createdAt } as FacultyNote; setDeleteOf(note) }} />
-      ) : (
-        <EmptyState icon={<FileText size={22} />} title="Select a subject" description="Choose a subject to browse its folders." />
-      )}
+      {activeFolder === 'notes' ? <>
+        <div className="mb-4 max-w-md"><Select value={driveSubjectId} onChange={(e) => setDriveSubjectId(e.target.value)} placeholder="Select subject" options={subjectOpts} /></div>
+        {drive.isLoading ? (
+          <CardSkeleton height={200} />
+        ) : drive.data ? (
+          <NoteDrive breadcrumbs={drive.data.breadcrumbs} folders={drive.data.folders} files={filteredFiles} emptyFilesMessage={fileSearch.trim() ? 'No files match your search.' : 'This folder is empty.'} filesToolbar={<div className="w-full sm:w-72"><SearchInput value={fileSearch} onChange={setFileSearch} placeholder="Search uploaded files" className="w-full" /></div>} pinnedFolders={parentId ? [] : [{ id: 'pyq-folder', name: 'PYQ folder', onClick: () => setActiveFolder('pyq') }]} faculty onOpenFolder={(id) => setParentId(id)} onBreadcrumb={setParentId} onCreateFolder={() => setShowFolder(true)} onUpload={() => setShowUpload(true)} onRenameFolder={setRenameFolder} onDeleteFolder={(folder) => setDeleteFolderOf({ id: folder.id, name: folder.name })} onEditFile={(file) => { const note = { ...file, subject: drive.data.subject ?? { code: '', name: '' }, fileUrl: '', fileSize: file.fileSizeKb ?? undefined, fileType: file.mimeType, aiSummaryStatus: file.hasAiSummary ? 'complete' : 'pending', createdAt: file.createdAt } as FacultyNote; setEditOf(note) }} onDeleteFile={(file) => { const note = { ...file, subject: drive.data.subject ?? { code: '', name: '' }, fileUrl: '', fileSize: file.fileSizeKb ?? undefined, fileType: file.mimeType, aiSummaryStatus: file.hasAiSummary ? 'complete' : 'pending', createdAt: file.createdAt } as FacultyNote; setDeleteOf(note) }} />
+        ) : (
+          <EmptyState icon={<FileText size={22} />} title="Select a subject" description="Choose a subject to browse its folders." />
+        )}
+      </> : <PyqFolder loading={pyqs.isLoading} files={pyqs.data?.data ?? []} />}
 
       <UploadNoteModal open={showUpload} onClose={() => setShowUpload(false)} subjectOpts={subjectOpts} assignments={scope.data?.assignments ?? []} defaultSubjectId={driveSubjectId} folderId={parentId} onSuccess={() => { invalidate(); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }} />
-      <UploadPyqModal open={showPyq} onClose={() => setShowPyq(false)} subjectOpts={subjectOpts} defaultSubjectId={driveSubjectId} />
+      <UploadPyqModal open={showPyq} onClose={() => setShowPyq(false)} subjectOpts={subjectOpts} defaultSubjectId={driveSubjectId} onSuccess={() => qc.invalidateQueries({ queryKey: ['faculty', 'pyqs'] })} />
       <FolderModal open={showFolder} subjectId={driveSubjectId} parentId={parentId} onClose={() => setShowFolder(false)} onSuccess={() => { setShowFolder(false); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }} />
       <RenameFolderModal folder={renameFolder} onClose={() => setRenameFolder(null)} onSuccess={() => { setRenameFolder(null); qc.invalidateQueries({ queryKey: ['faculty', 'note-drive'] }) }} />
       <EditNoteModal note={editOf} onClose={() => setEditOf(null)} onSuccess={invalidate} />
@@ -77,6 +98,15 @@ export default function NotesPage() {
         loading={del.isPending}
         onConfirm={() => deleteOf && del.mutate(deleteOf.id)}
         onCancel={() => setDeleteOf(null)}
+      />
+      <ConfirmDialog
+        open={!!deleteFolderOf}
+        title="Delete folder?"
+        message={<>Delete <b>{deleteFolderOf?.name}</b>? This can&rsquo;t be undone.</>}
+        destructive
+        loading={delFolder.isPending}
+        onConfirm={() => deleteFolderOf && delFolder.mutate(deleteFolderOf.id)}
+        onCancel={() => setDeleteFolderOf(null)}
       />
     </PageShell>
   )
@@ -152,7 +182,31 @@ function UploadNoteModal({ open, onClose, subjectOpts, assignments, defaultSubje
 }
 
 // PYQ paper upload — subject + exam year + file. Backend hands it to the AI service for topic analysis.
-function UploadPyqModal({ open, onClose, subjectOpts, defaultSubjectId }: { open: boolean; onClose: () => void; subjectOpts: { value: string; label: string }[]; defaultSubjectId: string }) {
+function PyqFolder({ loading, files }: { loading: boolean; files: FacultyPyq[] }) {
+  const qc = useQueryClient()
+  const remove = useMutation({
+    mutationFn: (id: string) => facultyApi.deletePyq(id),
+    onSuccess: () => { toast.success('PYQ deleted'); qc.invalidateQueries({ queryKey: ['faculty', 'pyqs'] }) },
+    onError: (error) => toast.error(errorMessage(error)),
+  })
+  if (loading) return <CardSkeleton height={200} />
+  if (!files.length) return <EmptyState icon={<FileQuestion size={22} />} title="No PYQs uploaded" description="Add a previous-year paper to create its AI summary and student PYQ analysis." />
+  return <div className="space-y-3">
+    {files.map((file) => {
+      const status = file.status === 'completed' ? 'AI analysis complete' : file.status === 'failed' ? 'AI analysis failed' : 'AI analysis processing'
+      const tone = file.status === 'completed' ? 'bg-success-light text-success' : file.status === 'failed' ? 'bg-danger-light text-danger' : 'bg-warning-light text-warning'
+      return <div key={file.id} className="rounded-xl border border-border bg-surface p-5 shadow-card">
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold text-text-primary">{file.fileName}</p><p className="mt-1 text-sm text-text-secondary">{file.subject.code} - {file.subject.name} | Exam year {file.year}</p></div><div className="flex items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}>{status}</span><Button size="sm" variant="outline" leftIcon={<Trash2 size={14} />} loading={remove.isPending} onClick={() => { if (window.confirm(`Delete ${file.fileName}?`)) remove.mutate(file.id) }}>Delete</Button></div></div>
+        {file.status === 'failed' ? <p className="mt-3 text-sm text-danger">{file.errorMessage || 'The document could not be processed. Open this page again after the AI service is running to retry.'}</p> : null}
+        {file.summary ? <div className="mt-4 rounded-lg bg-primary-light/40 p-3 text-sm leading-6 text-text-secondary"><span className="font-semibold text-text-primary">AI summary: </span>{file.summary}</div> : null}
+        {file.topics.length > 0 ? <div className="mt-3 flex flex-wrap gap-2">{file.topics.map((topic) => <span key={topic} className="rounded-full bg-surface-secondary px-2.5 py-1 text-xs font-medium text-text-secondary">{topic}</span>)}</div> : null}
+        {file.status === 'completed' ? <p className="mt-3 text-xs text-text-muted">{file.totalChunks} AI chunks saved. This paper is available in student PYQ analysis and the AI assistant.</p> : null}
+      </div>
+    })}
+  </div>
+}
+
+function UploadPyqModal({ open, onClose, subjectOpts, defaultSubjectId, onSuccess }: { open: boolean; onClose: () => void; subjectOpts: { value: string; label: string }[]; defaultSubjectId: string; onSuccess: () => void }) {
   const [file, setFile] = useState<File | null>(null)
   const [subjectId, setSubjectId] = useState('')
   const [year, setYear] = useState('')
@@ -170,7 +224,7 @@ function UploadPyqModal({ open, onClose, subjectOpts, defaultSubjectId }: { open
     onError: (e) => toast.error(errorMessage(e)),
   })
 
-  function close() { setFile(null); setSubjectId(''); setYear(''); onClose() }
+  function close() { setFile(null); setSubjectId(''); setYear(''); onSuccess(); onClose() }
 
   return (
     <Modal

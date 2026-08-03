@@ -327,6 +327,15 @@ facultyRouter.post("/pyq", upload.single("file"), asyncHandler(async (req, res) 
   ));
 }));
 
+facultyRouter.get("/pyq", asyncHandler(async (req, res) => {
+  res.json(await portalService.facultyPyqs(req.user!.id));
+}));
+
+facultyRouter.delete("/pyq/:pyqId", asyncHandler(async (req, res) => {
+  await portalService.deleteFacultyPyq(req.user!.id, str(req.params.pyqId));
+  res.status(204).send();
+}));
+
 facultyRouter.post("/quizzes/ai-generate", asyncHandler(async (req, res) => {
   res.status(201).json(await portalService.createAiQuizJob(req.user!.id, req.user!.universityId, req.body));
 }));

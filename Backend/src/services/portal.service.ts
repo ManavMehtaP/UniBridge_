@@ -1,6 +1,6 @@
 import prisma from "../config/prisma.js";
 import { env } from "../config/env.js";
-import { uploadObject, presignGetUrl, storageEnabled } from "../config/storage.js";
+import { deleteObject, uploadObject, presignGetUrl, storageEnabled } from "../config/storage.js";
 import { studentAiBridge } from "./studentAiBridge.service.js";
 import { generateStudyPlanForStudent, getLatestStudyPlan, refreshStudyPlanAfterProgress } from "./studyPlanner.service.js";
 import type { Role, YearLevel } from "../types/domain.js";
@@ -1859,7 +1859,12 @@ export const portalService = {
       where: { universityId: subject.universityId, number: subject.semesterNumber },
       orderBy: { startDate: "desc" },
     });
-    const pyq = await prisma.pYQFile.create({ data: { subjectId, uploadedById, year, fileUrl, fileKey } });
+    const originalName = fileKey.split("/").at(-1)?.replace(/^\d+-/, "") ?? fileKey;
+    const existing = await prisma.pYQFile.findFirst({
+      where: { subjectId, uploadedById, year, fileKey: { endsWith: `-${originalName}` } },
+      orderBy: { createdAt: "desc" },
+    });
+    const pyq = existing ?? await prisma.pYQFile.create({ data: { subjectId, uploadedById, year, fileUrl, fileKey } });
     if (activeSemester) {
       await prisma.pYQAnalysis.upsert({
         where: { subjectId_semesterId: { subjectId, semesterId: activeSemester.id } },
@@ -1868,7 +1873,47 @@ export const portalService = {
       });
     }
     await bestEffortStudentAi(() => studentAiBridge.triggerPyqProcessing(pyq.id, presignGetUrl(fileKey, 3600) || undefined));
-    return { uploaded: 1, subjectId, pyqId: pyq.id, processingStatus: studentAiBridge.isConfigured() ? "queued" : "uploaded" };
+    return { uploaded: existing ? 0 : 1, subjectId, pyqId: pyq.id, processingStatus: studentAiBridge.isConfigured() ? "queued" : "uploaded", duplicate: !!existing };
+  },
+
+  async facultyPyqs(facultyId: string) {
+    const pyqs = await prisma.pYQFile.findMany({
+      where: { uploadedById: facultyId },
+      include: {
+        subject: { select: { code: true, name: true } },
+        insight: { select: { topics: true, keywords: true, status: true, updatedAt: true } },
+        aiDocument: { include: { metadata: { select: { generatedSummary: true } } } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    return {
+      data: pyqs.map((pyq) => ({
+        id: pyq.id,
+        year: pyq.year,
+        fileName: pyq.fileKey.split("/").at(-1) ?? "PYQ document",
+        createdAt: pyq.createdAt,
+        isAnalyzed: pyq.isAnalyzed,
+        subject: pyq.subject,
+        status: pyq.aiDocument?.processingStatus ?? (pyq.isAnalyzed ? "completed" : "queued"),
+        errorMessage: pyq.aiDocument?.errorMessage ?? null,
+        totalChunks: pyq.aiDocument?.totalChunks ?? 0,
+        summary: pyq.aiDocument?.metadata?.generatedSummary ?? null,
+        topics: (pyq.insight?.topics as string[] | undefined) ?? [],
+        keywords: (pyq.insight?.keywords as string[] | undefined) ?? [],
+        analyzedAt: pyq.insight?.updatedAt ?? pyq.aiDocument?.processedAt ?? null,
+      })),
+    };
+  },
+
+  async deleteFacultyPyq(facultyId: string, pyqId: string) {
+    const pyq = await prisma.pYQFile.findFirst({ where: { id: pyqId, uploadedById: facultyId } });
+    if (!pyq) throw new ApiError(404, "PYQ_NOT_FOUND", "PYQ not found.");
+    await prisma.pYQFile.delete({ where: { id: pyq.id } });
+    try {
+      await deleteObject(pyq.fileKey);
+    } catch (error) {
+      console.error("PYQ storage delete failed", { pyqId, error });
+    }
   },
 
   // ── Attendance (HOD) ──────────────────────────────────────
@@ -3150,15 +3195,23 @@ export const portalService = {
 
   async studentSubjects(studentId: string, universityId: string, semesterId?: string) {
     const { semester, enrollment } = await getStudentEnrollment(studentId, universityId, semesterId);
-    const subjectIds = await getStudentSubjectIds(studentId, universityId, semester.id);
-    const subjects = await Promise.all(
-      subjectIds.map(async (subjectId) => {
-        const subject = await subjectById(subjectId);
-        const assignment = await prisma.facultyBatchAssignment.findFirst({ where: { batchId: enrollment.batchId, semesterId: semester.id, subjectId: subject.id } });
-        const faculty = assignment ? await prisma.faculty.findUnique({ where: { id: assignment.facultyId }, select: { name: true } }) : null;
-        return { id: subject.id, code: subject.code, name: subject.name, credits: subject.credits, type: subject.type, facultyName: faculty?.name ?? null };
-      }),
-    );
+    // Keep this query deliberately narrow: this endpoint powers every subject picker.
+    // It must not fail because an unrelated optional Subject column has not reached a
+    // deployed database yet.
+    const assignments = await prisma.facultyBatchAssignment.findMany({
+      where: { batchId: enrollment.batchId, semesterId: semester.id },
+      select: {
+        subject: { select: { id: true, code: true, name: true, credits: true, type: true } },
+        faculty: { select: { name: true } },
+      },
+    });
+    const bySubject = new Map<string, { id: string; code: string; name: string; credits: number; type: Role | string; facultyName: string | null }>();
+    for (const assignment of assignments) {
+      if (!bySubject.has(assignment.subject.id)) {
+        bySubject.set(assignment.subject.id, { ...assignment.subject, facultyName: assignment.faculty?.name ?? null });
+      }
+    }
+    const subjects = [...bySubject.values()].sort((a, b) => a.code.localeCompare(b.code));
     return { semesterLabel: semester.label, subjects, totalCredits: subjects.reduce((s, sub) => s + sub.credits, 0) };
   },
 
@@ -3416,13 +3469,13 @@ export const portalService = {
     const { semester, enrollment } = await getStudentEnrollment(studentId, universityId, query.semesterId as string | undefined);
     const subjectIds = await getStudentSubjectIds(studentId, universityId, semester.id);
     const now = new Date();
-    const quizzes = await prisma.quiz.findMany({ where: { isPublished: true, deletedAt: null, semesterId: semester.id, subjectId: { in: subjectIds }, OR: [{ studentId }, { studentId: null, targets: { some: { batchId: enrollment.batchId } } }] }, include: { subject: { select: { code: true, name: true } }, _count: { select: { questions: true } }, attempts: { where: { studentId }, select: { score: true, submittedAt: true, attemptNumber: true } } }, orderBy: { createdAt: "desc" } });
+    const quizzes = await prisma.quiz.findMany({ where: { isPublished: true, deletedAt: null, semesterId: semester.id, subjectId: { in: subjectIds }, OR: [{ studentId }, { studentId: null, targets: { some: { batchId: enrollment.batchId } } }] }, include: { subject: { select: { code: true, name: true } }, _count: { select: { questions: true } }, attempts: { where: { studentId }, select: { score: true, submittedAt: true, attemptNumber: true }, orderBy: { submittedAt: "desc" } } }, orderBy: { createdAt: "desc" } });
     const rows = quizzes.map((quiz) => {
       const bestScore = quiz.attempts.length ? Math.max(...quiz.attempts.map((attempt) => attempt.score)) : null;
       const expired = isQuizExpired(quiz.dueDate);
       const attemptsTaken = quiz.attempts.length;
       const status = attemptsTaken >= quiz.maxAttempts ? "ATTEMPTED" : expired ? "EXPIRED" : attemptsTaken ? "RETRY" : "PENDING";
-      return { id: quiz.id, title: quiz.title, description: quiz.description, subject: quiz.subject, subjectId: quiz.subjectId, semesterId: quiz.semesterId, questionCount: quiz._count.questions, timeLimitMins: quiz.timeLimitMins, isAiGenerated: quiz.isAiGenerated, isStudentGenerated: quiz.studentId === studentId, chapters: quiz.chapterNames, maxAttempts: quiz.maxAttempts, attemptsTaken, dueDate: quiz.dueDate, status, attemptedAt: quiz.attempts[0]?.submittedAt ?? null, score: bestScore };
+      return { id: quiz.id, title: quiz.title, description: quiz.description, subject: quiz.subject, subjectId: quiz.subjectId, semesterId: quiz.semesterId, questionCount: quiz._count.questions, timeLimitMins: quiz.timeLimitMins, isAiGenerated: quiz.isAiGenerated, isStudentGenerated: quiz.studentId === studentId, chapters: quiz.chapterNames, maxAttempts: quiz.maxAttempts, attemptsTaken, dueDate: quiz.dueDate, createdAt: quiz.createdAt, status, attemptedAt: quiz.attempts[0]?.submittedAt ?? null, score: bestScore };
     });
     return paginate(
       rows.filter((r) => !query.subjectId || r.subjectId === query.subjectId).filter((r) => !query.status || r.status === query.status).map(({ subjectId: _, semesterId: __, ...rest }) => rest),
@@ -3894,7 +3947,19 @@ export const portalService = {
     await ensureStudentSubject(studentId, universityId, subjectId);
     const subject = await subjectById(subjectId);
     const { enrollment } = await getStudentEnrollment(studentId, universityId);
-    const pyqFiles = await prisma.pYQFile.findMany({ where: { subjectId }, orderBy: { createdAt: "desc" } });
+    const allPyqFiles = await prisma.pYQFile.findMany({
+      where: { subjectId },
+      include: { aiDocument: { include: { metadata: { select: { generatedSummary: true } } } } },
+      orderBy: { createdAt: "desc" },
+    });
+    const seenPapers = new Set<string>();
+    const pyqFiles = allPyqFiles.filter((file) => {
+      const originalName = file.fileKey.split("/").at(-1)?.replace(/^\d+-/, "") ?? file.id;
+      const paperKey = `${file.year}:${originalName}`;
+      if (seenPapers.has(paperKey)) return false;
+      seenPapers.add(paperKey);
+      return true;
+    });
     const analysis = await prisma.pYQAnalysis.findFirst({ where: { subjectId, semesterId: enrollment.semesterId } });
     const insights = await prisma.pYQInsight.findMany({
       where: { subjectId, semesterId: enrollment.semesterId },
@@ -3902,12 +3967,23 @@ export const portalService = {
       orderBy: { updatedAt: "desc" },
     });
     if (insights.length === 0 && pyqFiles.length > 0) {
-      await Promise.all(pyqFiles.slice(0, 3).map((pyqFile) => bestEffortStudentAi(() => studentAiBridge.triggerPyqProcessing(pyqFile.id))));
+      await Promise.all(pyqFiles.slice(0, 3).map((pyqFile) => bestEffortStudentAi(() => studentAiBridge.triggerPyqProcessing(
+        pyqFile.id,
+        storageEnabled ? presignGetUrl(pyqFile.fileKey, 60 * 60) : undefined,
+      ))));
     }
     const topicFrequency = analysis ? Object.entries((analysis.topicFrequencies as Record<string, number>) ?? {}) : [];
     const importantTopics = topicFrequency.length > 0
-      ? topicFrequency.sort((a, b) => b[1] - a[1]).slice(0, 6).map(([topic, frequency]) => ({ topic, frequency, priority: frequency >= 5 ? "HIGH" : frequency >= 3 ? "MEDIUM" : "LOW" }))
-      : uniq(insights.flatMap((insight) => [ ...((insight.topics as string[]) ?? []), ...((insight.keywords as string[]) ?? []) ])).slice(0, 6).map((topic) => ({ topic, frequency: 1, priority: "MEDIUM" }));
+      ? topicFrequency
+        .filter(([, occurrences]) => Number(occurrences) > 1)
+        .sort((a, b) => Number(b[1]) - Number(a[1]))
+        .slice(0, 6)
+        .map(([topic, occurrences]) => ({
+          topic,
+          frequency: Number(occurrences),
+          priority: Number(occurrences) >= 4 ? "HIGH" : Number(occurrences) >= 3 ? "MEDIUM" : "LOW",
+        }))
+      : [];
     const results = await prisma.result.findMany({
       where: { enrollmentId: enrollment.id, subjectId, isPublished: true },
       orderBy: { createdAt: "asc" },
@@ -3927,15 +4003,37 @@ export const portalService = {
       weakPoints: averagePct !== null && averagePct < 60
         ? importantTopics.slice(0, 4).map((item) => `${item.topic} needs practice because your current published average is ${averagePct}%.`)
         : importantTopics.slice(0, 3).map((item) => `${item.topic} is a high-value revision area.`),
-      files: insights.map((insight) => ({
-        pyqId: insight.pyqFile.id,
-        year: insight.pyqFile.year,
-        difficulty: insight.difficulty,
-        topics: insight.topics,
-        keywords: insight.keywords,
-        questionTypes: insight.questionTypes,
-        updatedAt: insight.updatedAt,
-      })),
+      files: pyqFiles.map((pyqFile) => {
+        const insight = insights.find((item) => item.pyqFile.id === pyqFile.id);
+        return {
+          pyqId: pyqFile.id,
+          year: pyqFile.year,
+          status: pyqFile.aiDocument?.processingStatus ?? (insight ? "completed" : "queued"),
+          summary: pyqFile.aiDocument?.metadata?.generatedSummary ?? null,
+          difficulty: insight?.difficulty ?? "",
+          topics: insight?.topics ?? [],
+          keywords: insight?.keywords ?? [],
+          questionTypes: insight?.questionTypes ?? [],
+          updatedAt: insight?.updatedAt ?? pyqFile.createdAt,
+        };
+      }),
+    };
+  },
+
+  async studentPyqSummary(studentId: string, universityId: string, pyqId: string) {
+    const pyq = await prisma.pYQFile.findUnique({
+      where: { id: pyqId },
+      include: { subject: true, aiDocument: { include: { metadata: true } } },
+    });
+    if (!pyq) throw new ApiError(404, "PYQ_NOT_FOUND", "PYQ not found.");
+    await ensureStudentSubject(studentId, universityId, pyq.subjectId);
+    return {
+      pyqId: pyq.id,
+      year: pyq.year,
+      subjectCode: pyq.subject.code,
+      status: pyq.aiDocument?.processingStatus ?? (pyq.isAnalyzed ? "completed" : "queued"),
+      summary: pyq.aiDocument?.metadata?.generatedSummary ?? null,
+      errorMessage: pyq.aiDocument?.errorMessage ?? null,
     };
   },
 
