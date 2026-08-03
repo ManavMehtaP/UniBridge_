@@ -38,7 +38,7 @@ export const facultyApi = {
   attendanceDay: (batchId: string, date: string) =>
     api.get<{
       date: string; dayOfWeek: number; isEditable: boolean; daysDelta: number;
-      dayStatus?: { isWorkingDay: boolean; status: string; reason: string | null };
+      dayStatus?: { isWorkingDay: boolean; isTeachingDay: boolean; status: string; reason: string | null };
       lectures: { slotId: string; subjectId: string; subjectCode: string; subjectName: string; slotStart: string; slotEnd: string; room?: string | null }[];
       students: { enrollmentId: string; rollNo: string; name: string; enrollmentNo: string }[];
       marks: Record<string, boolean>;
@@ -77,7 +77,7 @@ export const facultyApi = {
   coordinatorAttendanceDay: (batchId: string, date: string) =>
     api.get<{
       date: string; dayOfWeek: number; isEditable: boolean; daysDelta: number
-      dayStatus?: { isWorkingDay: boolean; status: string; reason: string | null }
+      dayStatus?: { isWorkingDay: boolean; isTeachingDay: boolean; status: string; reason: string | null }
       lectures: { slotId: string; subjectId: string; subjectCode: string; subjectName: string; slotStart: string; slotEnd: string; room?: string | null }[]
       students: { enrollmentId: string; rollNo: string; name: string; enrollmentNo: string }[]
       marks: Record<string, boolean>

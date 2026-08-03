@@ -159,6 +159,7 @@ export default function AttendancePage() {
                 <div className="min-w-[220px]">
                   <label className="mb-1 block text-xs font-medium text-text-muted">Add a faculty as coordinator</label>
                   <Select value={coordPick} onChange={(e) => setCoordPick(e.target.value)}
+                    searchable searchPlaceholder="Search faculty…"
                     options={[{ value: '', label: 'Select faculty…' }, ...(coordinators.data?.facultyOptions ?? [])
                       .filter((f) => !assignedIds.has(f.id))
                       .map((f) => ({ value: f.id, label: `${f.name} (${f.employeeId})` }))]} />

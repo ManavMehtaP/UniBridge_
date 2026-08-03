@@ -52,10 +52,10 @@ export default function StudentDashboardPage() {
             action={<Link to="/student/timetable" className="text-xs font-semibold text-primary hover:underline">Full week</Link>}
           />
           <CardBody className="pt-0">
-            {today.data?.dayStatus && !today.data.dayStatus.isWorkingDay ? (
+            {today.data?.dayStatus && !today.data.dayStatus.isTeachingDay ? (
               <div className="flex flex-col items-center justify-center rounded-sm border border-warning/30 bg-warning-light/30 px-4 py-8 text-center">
                 <div className="text-sm font-semibold text-warning">{today.data.dayStatus.reason ?? today.data.dayStatus.status}</div>
-                <div className="mt-1 text-xs text-text-muted">No lectures today — holiday per the academic calendar.</div>
+                <div className="mt-1 text-xs text-text-muted">No lectures today — no Regular Teaching entry in the academic calendar.</div>
               </div>
             ) : (today.data?.slots ?? []).length === 0 ? (
               <EmptyState title="No classes today" description="Take it easy 🌿" className="border-0" />

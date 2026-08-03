@@ -177,6 +177,12 @@ export const studentApi = {
   aiSuggest: (body: Record<string, unknown>) =>
     api.post('/student/study-planner/ai-suggest', body).then((r) => r.data),
 
-  leaderboard: (params?: Params) => api.get('/student/leaderboard', { params }).then((r) => r.data),
-  myRank: (phaseId?: string) => api.get('/student/leaderboard/my-rank', { params: { phaseId } }).then((r) => r.data),
+  leaderboard: (scope: 'year' | 'batch') => api.get<LeaderboardResponse>('/student/leaderboard', { params: { scope } }).then((r) => r.data),
+}
+
+export interface LeaderboardEntry { rank: number; name: string; enrollmentNo: string; batchCode: string; totalMarks: number; maxMarks: number; isMe: boolean }
+export interface LeaderboardResponse {
+  scope: 'year' | 'batch'; yearLevel: string | null; batchCode: string
+  myRank: number; myTotal: number; myMax: number; totalStudents: number
+  leaderboard: LeaderboardEntry[]
 }

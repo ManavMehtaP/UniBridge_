@@ -150,8 +150,14 @@ function FacultyStep({ onNext }: { onNext: () => void }) {
   const rosterQ = useQuery({ queryKey: ['hod', 'onboarding', 'faculty'], queryFn: hodApi.onboarding.faculty })
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [reclaim, setReclaim] = useState(false)
+  const [search, setSearch] = useState('')
   const roster = rosterQ.data?.data ?? []
   const year = rosterQ.data?.year
+  const filteredRoster = useMemo(() => {
+    const query = search.trim().toLowerCase()
+    if (!query) return roster
+    return roster.filter((f) => `${f.name} ${f.employeeId} ${f.mentorCode ?? ''}`.toLowerCase().includes(query))
+  }, [roster, search])
 
   const preselected = useMemo(() => roster.filter((f) => f.inPool).map((f) => f.id).join(','), [roster])
   useEffect(() => {
@@ -176,8 +182,10 @@ function FacultyStep({ onNext }: { onNext: () => void }) {
       ) : roster.length === 0 ? (
         <p className="rounded-sm bg-surface-2 p-3 text-xs text-text-muted">No {year ?? ''} faculty yet. Ask the Dean to add faculty at this year level.</p>
       ) : (
-        <div className="max-h-64 space-y-1.5 overflow-y-auto">
-          {roster.map((f) => (
+        <div>
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search faculty by name, employee ID or mentor code" className="mb-3" />
+          <div className="max-h-64 space-y-1.5 overflow-y-auto">
+          {filteredRoster.map((f) => (
             <label key={f.id} className={`flex items-center gap-2.5 rounded-sm border px-3 py-2 ${f.takenByHod && !reclaim ? 'cursor-not-allowed border-border bg-surface-2 opacity-60' : 'cursor-pointer border-border hover:border-primary'}`}>
               <input
                 type="checkbox"
@@ -192,6 +200,8 @@ function FacultyStep({ onNext }: { onNext: () => void }) {
               {f.takenByHod && <Badge tone="warning">In another HOD's pool</Badge>}
             </label>
           ))}
+          {filteredRoster.length === 0 && <p className="rounded-sm bg-surface-2 p-3 text-xs text-text-muted">No faculty match your search.</p>}
+          </div>
         </div>
       )}
       <label className="flex items-center gap-2 text-xs text-text-secondary">

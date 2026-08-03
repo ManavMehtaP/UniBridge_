@@ -93,14 +93,13 @@ hodRouter.delete("/faculty/:employeeId", asyncHandler(async (req, res) => {
 hodRouter.get("/exam/coordinators", asyncHandler(async (req, res) => res.json(await portalService.examCoordinators(scopeFrom(req)))));
 hodRouter.post("/exam/coordinators", asyncHandler(async (req, res) => res.json(await portalService.assignExamCoordinator(scopeFrom(req), Number(req.body.slot), String(req.body.facultyId)))));
 hodRouter.delete("/exam/coordinators/:slot", asyncHandler(async (req, res) => res.json(await portalService.removeExamCoordinator(scopeFrom(req), Number(req.params.slot)))));
-hodRouter.get("/exam/context", asyncHandler(async (req, res) => res.json(await portalService.examContext(req.user!.universityId))));
+// Exam tracking + result publishing moved to the unified Examination module
+// (examRouter): live paper-checking progress and POST /exams/:examId/publish-results.
 
 // ── Attendance coordinators (any number; get the coordinator PDF page) ──
 hodRouter.get("/attendance/coordinators", asyncHandler(async (req, res) => res.json(await portalService.attendanceCoordinators(scopeFrom(req)))));
 hodRouter.post("/attendance/coordinators", asyncHandler(async (req, res) => res.json(await portalService.assignAttendanceCoordinator(scopeFrom(req), String(req.body.facultyId)))));
 hodRouter.delete("/attendance/coordinators/:facultyId", asyncHandler(async (req, res) => res.json(await portalService.removeAttendanceCoordinator(scopeFrom(req), String(req.params.facultyId)))));
-hodRouter.get("/exam/assignments", asyncHandler(async (req, res) => res.json(await portalService.examAssignments(req.user!.universityId, { phaseId: req.query.phaseId as string | undefined }))));
-hodRouter.post("/exam/publish", asyncHandler(async (req, res) => res.json(await portalService.examPublish(req.user!.universityId, String(req.body.phaseId)))));
 
 hodRouter.get("/results/upload-context", asyncHandler(async (req, res) => res.json(await portalService.resultsUploadContext(scopeFrom(req), req.query.semesterId as string | undefined))));
 hodRouter.get("/results/students", asyncHandler(async (req, res) => res.json(await portalService.resultsStudents(scopeFrom(req), String(req.query.semesterId), String(req.query.batchId), String(req.query.subjectId)))));
@@ -193,6 +192,7 @@ hodRouter.get("/calendar/events/upcoming", asyncHandler(async (req, res) => res.
 // CSV/Excel bulk calendar management (must precede the /:eventId param route).
 hodRouter.get("/calendar/template", asyncHandler(async (_req, res) => sendCsv(res, "academic-calendar-template.csv", await portalService.calendarTemplate())));
 hodRouter.post("/calendar/import", upload.single("file"), asyncHandler(async (req, res) => res.json(await portalService.importCalendar(req.user!.universityId, req.user!.id, req.file, String(req.body.replace ?? "true") !== "false"))));
+hodRouter.post("/calendar/academic", upload.single("file"), asyncHandler(async (req, res) => { const b = req.body ?? {}; res.json(await portalService.importAcademicCalendar(scopeFrom(req), req.file, String(b.replace ?? "true") !== "false")); }));
 hodRouter.delete("/calendar/clear", asyncHandler(async (req, res) => res.json(await portalService.clearCalendar(req.user!.universityId))));
 hodRouter.get("/calendar/events/:eventId", asyncHandler(async (req, res) => res.json(await portalService.getEvent(str(req.params.eventId)))));
 hodRouter.post("/calendar/events", asyncHandler(async (req, res) => res.status(201).json(await portalService.createEvent(req.user!.universityId, req.user!.id, req.body))));

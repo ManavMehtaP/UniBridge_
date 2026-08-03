@@ -61,7 +61,7 @@ export interface CalendarEvent {
   id: string
   date: string
   title: string
-  type: 'HOLIDAY' | 'EXAM' | 'CULTURAL' | 'PHASE' | 'OTHER'
+  type: 'REGULAR_TEACHING' | 'HOLIDAY' | 'EXAM' | 'CULTURAL' | 'PHASE' | 'OTHER'
   description?: string
 }
 

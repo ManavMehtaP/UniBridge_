@@ -1,6 +1,6 @@
 import { Children, forwardRef, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown } from 'lucide-react'
+import { Check, ChevronDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface SelectOption {
@@ -18,6 +18,8 @@ export interface SelectProps {
   children?: ReactNode
   className?: string
   disabled?: boolean
+  searchable?: boolean
+  searchPlaceholder?: string
   name?: string
   id?: string
 }
@@ -31,7 +33,7 @@ interface Item { value: string; label: ReactNode; disabled?: boolean }
  * body portal (fixed position) so it never gets clipped by overflow containers.
  */
 export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select(
-  { className, options, placeholder, children, value, defaultValue, onChange, disabled, name, id },
+  { className, options, placeholder, children, value, defaultValue, onChange, disabled, searchable = false, searchPlaceholder = 'Search…', name, id },
   ref,
 ) {
   const items = useMemo<Item[]>(() => {
@@ -53,10 +55,18 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
   const selected = items.find((i) => i.value === current)
 
   const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
   const [active, setActive] = useState(0)
   const [pos, setPos] = useState<{ top: number; left: number; width: number; maxH: number; up: boolean } | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLUListElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  const visibleItems = useMemo(() => {
+    if (!searchable || !search.trim()) return items
+    const query = search.trim().toLowerCase()
+    return items.filter((item) => `${item.value} ${String(item.label)}`.toLowerCase().includes(query))
+  }, [items, searchable, search])
 
   const place = useCallback(() => {
     const el = triggerRef.current
@@ -89,6 +99,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
   // When opening, highlight the current selection.
   useEffect(() => {
     if (!open) return
+    setSearch('')
     const idx = items.findIndex((i) => i.value === current)
     setActive(idx >= 0 ? idx : 0)
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -103,11 +114,12 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
   }
 
   function moveActive(dir: 1 | -1) {
+    if (visibleItems.length === 0) return
     setActive((a) => {
       let n = a
-      for (let k = 0; k < items.length; k++) {
-        n = (n + dir + items.length) % items.length
-        if (!items[n].disabled) return n
+      for (let k = 0; k < visibleItems.length; k++) {
+        n = (n + dir + visibleItems.length) % visibleItems.length
+        if (!visibleItems[n].disabled) return n
       }
       return a
     })
@@ -121,9 +133,9 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
     }
     if (e.key === 'ArrowDown') { e.preventDefault(); moveActive(1) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); moveActive(-1) }
-    else if (e.key === 'Home') { e.preventDefault(); setActive(items.findIndex((i) => !i.disabled)) }
-    else if (e.key === 'End') { e.preventDefault(); for (let n = items.length - 1; n >= 0; n--) if (!items[n].disabled) { setActive(n); break } }
-    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const it = items[active]; if (it && !it.disabled) commit(it.value) }
+    else if (e.key === 'Home') { e.preventDefault(); setActive(visibleItems.findIndex((i) => !i.disabled)) }
+    else if (e.key === 'End') { e.preventDefault(); for (let n = visibleItems.length - 1; n >= 0; n--) if (!visibleItems[n].disabled) { setActive(n); break } }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const it = visibleItems[active]; if (it && !it.disabled) commit(it.value) }
     else if (e.key === 'Escape') { e.preventDefault(); setOpen(false) }
     else if (e.key === 'Tab') setOpen(false)
   }
@@ -162,8 +174,24 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
           style={{ position: 'fixed', left: pos.left, width: pos.width, maxHeight: pos.maxH, ...(pos.up ? { bottom: window.innerHeight - pos.top } : { top: pos.top }) }}
           className="z-[300] mt-1 mb-1 overflow-auto rounded-sm border border-border bg-surface py-1 text-sm shadow-lg scrollbar-thin"
         >
-          {items.length === 0 && <li className="px-3 py-2 text-text-muted">No options</li>}
-          {items.map((it, i) => {
+          {searchable && (
+            <li className="sticky top-0 z-10 border-b border-border bg-surface p-2">
+              <div className="relative flex items-center">
+                <Search size={14} className="pointer-events-none absolute left-2.5 text-text-muted" />
+                <input
+                  ref={searchRef}
+                  value={search}
+                  onChange={(e) => { setSearch(e.target.value); setActive(0) }}
+                  onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setOpen(false) } }}
+                  placeholder={searchPlaceholder}
+                  aria-label={searchPlaceholder}
+                  className="h-9 w-full rounded-xs border border-border bg-surface-2 pl-8 pr-2 text-sm text-text-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10"
+                />
+              </div>
+            </li>
+          )}
+          {visibleItems.length === 0 && <li className="px-3 py-2 text-text-muted">No options found</li>}
+          {visibleItems.map((it, i) => {
             const isSel = it.value === current
             return (
               <li

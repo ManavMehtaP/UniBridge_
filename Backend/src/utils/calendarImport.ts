@@ -2,7 +2,7 @@
 // CSV is parsed natively (no dependency); .xlsx/.xls uses the `xlsx` package,
 // loaded lazily so a CSV upload never needs it.
 
-export type EventTypeStr = "HOLIDAY" | "PUBLIC_HOLIDAY" | "READING_HOLIDAY" | "SEMESTER_BREAK" | "EXAM" | "CULTURAL" | "ACTIVITY" | "PHASE" | "OTHER";
+export type EventTypeStr = "REGULAR_TEACHING" | "HOLIDAY" | "PUBLIC_HOLIDAY" | "READING_HOLIDAY" | "SEMESTER_BREAK" | "EXAM" | "CULTURAL" | "ACTIVITY" | "PHASE" | "OTHER";
 export type VisibilityStr = "ALL" | "FACULTY_HOD" | "HOD_ONLY";
 
 export interface ParsedEvent {
@@ -16,6 +16,7 @@ export interface ParsedEvent {
 export interface ParseResult { rows: ParsedEvent[]; errors: string[] }
 
 const TYPE_MAP: Record<string, EventTypeStr> = {
+  "regular teaching": "REGULAR_TEACHING", regular_teaching: "REGULAR_TEACHING", teaching: "REGULAR_TEACHING", lecture: "REGULAR_TEACHING",
   holiday: "HOLIDAY",
   "public holiday": "PUBLIC_HOLIDAY", public_holiday: "PUBLIC_HOLIDAY", gazetted: "PUBLIC_HOLIDAY",
   "reading holiday": "READING_HOLIDAY", reading_holiday: "READING_HOLIDAY", reading: "READING_HOLIDAY", study: "READING_HOLIDAY",
@@ -136,6 +137,7 @@ export async function parseCalendarFile(buffer: Buffer, filename: string): Promi
 // A downloadable CSV template so HODs know the exact format.
 export const CALENDAR_TEMPLATE_CSV = [
   "Title,Start Date,End Date,Type,Description,Visibility",
+  "Regular Teaching,2026-08-03,2026-08-03,REGULAR_TEACHING,Teaching day,ALL",
   "Independence Day,2026-08-15,2026-08-15,PUBLIC_HOLIDAY,National holiday,ALL",
   "Mid-Sem Break,2026-10-19,2026-10-25,SEMESTER_BREAK,,ALL",
   "T-1 Internal Exams,2026-09-07,2026-09-12,EXAM,Phase 1 internals,ALL",

@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const eventTone: Record<string, 'success' | 'danger' | 'purple' | 'primary' | 'neutral'> = {
+  REGULAR_TEACHING: 'success',
   HOLIDAY: 'success', EXAM: 'danger', CULTURAL: 'purple', PHASE: 'primary', OTHER: 'neutral',
 }
 

@@ -49,11 +49,19 @@ examRouter.delete("/external/:externalId", asyncHandler(async (req, res) => res.
 
 // ── Availability + allocations (per schedule) ──
 examRouter.get("/schedules/:scheduleId/availability", asyncHandler(async (req, res) => res.json(await examService.availability(uid(req), uni(req), s(req.params.scheduleId)))));
-examRouter.post("/schedules/:scheduleId/supervision/generate", asyncHandler(async (req, res) => res.json(await examService.generateSupervision(uid(req), uni(req), s(req.params.scheduleId)))));
+examRouter.post("/schedules/:scheduleId/supervision/generate", asyncHandler(async (req, res) => res.json(await examService.generateSupervision(uid(req), uni(req), s(req.params.scheduleId), req.body?.facultyIds))));
 examRouter.get("/schedules/:scheduleId/supervision", asyncHandler(async (req, res) => res.json(await examService.listSupervision(uid(req), uni(req), s(req.params.scheduleId)))));
 examRouter.patch("/supervision/:allocationId", asyncHandler(async (req, res) => res.json(await examService.editSupervision(uid(req), uni(req), s(req.params.allocationId), req.body))));
-examRouter.post("/schedules/:scheduleId/paper-checking/generate", asyncHandler(async (req, res) => res.json(await examService.generatePaperChecking(uid(req), uni(req), s(req.params.scheduleId)))));
+examRouter.post("/schedules/:scheduleId/paper-checking/generate", asyncHandler(async (req, res) => res.json(await examService.generatePaperChecking(uid(req), uni(req), s(req.params.scheduleId), req.body?.facultyIds))));
 examRouter.get("/schedules/:scheduleId/paper-checking", asyncHandler(async (req, res) => res.json(await examService.listPaperChecking(uid(req), uni(req), s(req.params.scheduleId)))));
+examRouter.get("/schedules/:scheduleId/paper-checking/faculty", asyncHandler(async (req, res) => res.json(await examService.paperCheckingFaculty(uid(req), uni(req), s(req.params.scheduleId)))));
+
+// ── Paper-checking marks entry (checker / coordinator / year HOD) ──
+examRouter.get("/me/paper-checking", asyncHandler(async (req, res) => res.json(await examService.myPaperChecking(uid(req), uni(req)))));
+examRouter.get("/paper-checking/:allocationId/students", asyncHandler(async (req, res) => res.json(await examService.paperCheckingStudents(uid(req), uni(req), s(req.params.allocationId)))));
+examRouter.post("/paper-checking/:allocationId/marks", asyncHandler(async (req, res) => res.json(await examService.savePaperCheckingMarks(uid(req), uni(req), s(req.params.allocationId), req.body?.marks ?? []))));
+examRouter.post("/:examId/publish-results", asyncHandler(async (req, res) => res.json(await examService.publishResults(uid(req), uni(req), s(req.params.examId)))));
 examRouter.post("/schedules/:scheduleId/standby/generate", asyncHandler(async (req, res) => res.json(await examService.generateStandby(uid(req), uni(req), s(req.params.scheduleId)))));
+examRouter.post("/schedules/:scheduleId/standby/set", asyncHandler(async (req, res) => res.json(await examService.setStandbyList(uid(req), uni(req), s(req.params.scheduleId), req.body?.facultyIds ?? []))));
 examRouter.get("/schedules/:scheduleId/standby", asyncHandler(async (req, res) => res.json(await examService.listStandby(uid(req), uni(req), s(req.params.scheduleId)))));
 examRouter.patch("/schedules/:scheduleId/standby", asyncHandler(async (req, res) => res.json(await examService.setStandby(uid(req), uni(req), s(req.params.scheduleId), Number(req.body.slot), s(req.body.facultyId)))));

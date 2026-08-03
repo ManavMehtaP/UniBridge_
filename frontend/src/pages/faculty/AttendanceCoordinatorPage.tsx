@@ -210,8 +210,8 @@ export default function AttendanceCoordinatorPage() {
             <p className="text-sm text-text-muted">Pick a batch and date to edit its attendance.</p>
           ) : editDay.isLoading ? (
             <p className="text-sm text-text-muted">Loading matrix…</p>
-          ) : !ed?.dayStatus?.isWorkingDay ? (
-            <p className="text-sm text-warning">Not a working day{ed?.dayStatus?.reason ? ` — ${ed.dayStatus.reason}` : ''}. Attendance can't be edited.</p>
+          ) : !ed?.dayStatus?.isTeachingDay ? (
+            <p className="text-sm text-warning">No Regular Teaching entry{ed?.dayStatus?.reason ? ` — ${ed.dayStatus.reason}` : ''}. Attendance can't be edited.</p>
           ) : ed.lectures.length === 0 ? (
             <p className="text-sm text-text-muted">No lectures scheduled for this batch on this day.</p>
           ) : (

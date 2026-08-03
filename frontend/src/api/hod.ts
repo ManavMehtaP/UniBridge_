@@ -283,6 +283,13 @@ export const hodApi = {
       return api.post<{ imported: number; replaced: boolean; skipped: number; warnings: string[] }>('/hod/calendar/import', fd).then((r) => r.data)
     },
     clear: () => api.delete<{ cleared: number }>('/hod/calendar/clear').then((r) => r.data),
+    // Upload the LJ academic-calendar .xlsx: public events + T1–T4 phase dates + auto-created exams.
+    importAcademic: (file: File, replace: boolean) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('replace', String(replace))
+      return api.post<{ events: number; teachingDays: number; teachingStartDate: string; teachingEndDate: string; phasesSet: number; examsCreated: number; skipped: number; warnings: string[] }>('/hod/calendar/academic', fd).then((r) => r.data)
+    },
   },
 
   // ── Timetable ──
@@ -292,6 +299,14 @@ export const hodApi = {
     update: (slotId: string, body: Record<string, unknown>) => api.put(`/hod/timetable/${slotId}`, body).then((r) => r.data),
     remove: (slotId: string) => api.delete(`/hod/timetable/${slotId}`).then((r) => r.data),
     uploadExcel: (form: FormData) => api.post<T.CsvResult>('/hod/timetable/excel', form).then((r) => r.data),
+    downloadTemplate: () => {
+      const link = document.createElement('a')
+      link.href = '/templates/timetable-template.xlsx'
+      link.download = 'timetable-template.xlsx'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+    },
   },
 
   // ── Settings ──

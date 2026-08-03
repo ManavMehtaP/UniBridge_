@@ -352,7 +352,7 @@ studentRouter.get("/study-planner", asyncHandler(async (req, res) => {
 }));
 
 studentRouter.get("/leaderboard/my-rank", asyncHandler(async (req, res) => {
-  res.json(await portalService.studentLeaderboardMyRank(req.user!.id, req.user!.universityId, req.query.phaseId as string | undefined));
+  res.json(await portalService.studentLeaderboardMyRank(req.user!.id, req.user!.universityId, req.query.scope === "year" ? "year" : "batch"));
 }));
 
 studentRouter.get("/leaderboard/subject/:subjectId", asyncHandler(async (req, res) => {
@@ -367,14 +367,7 @@ studentRouter.get("/leaderboard/subject/:subjectId", asyncHandler(async (req, re
 }));
 
 studentRouter.get("/leaderboard", asyncHandler(async (req, res) => {
-  res.json(
-    await portalService.studentLeaderboard(
-      req.user!.id,
-      req.user!.universityId,
-      req.query.phaseId as string | undefined,
-      req.query.subjectId as string | undefined,
-    ),
-  );
+  res.json(await portalService.studentLeaderboard(req.user!.id, req.user!.universityId, req.query.scope === "year" ? "year" : "batch"));
 }));
 
 // ── Notifications ──

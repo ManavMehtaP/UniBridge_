@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { AlertTriangle, CheckCircle2, Lock, LockOpen, Plus, RefreshCw, Send, Trash2, Undo2, Wand2 } from 'lucide-react'
-import { examApi, type ExamSchedule } from '@/api/exam'
-import { errorMessage } from '@/api/client'
+import { AlertTriangle, CheckCircle2, Lock, LockOpen, Plus, RefreshCw, Rocket, Send, Trash2, Undo2, UserCheck, Users, Wand2, X } from 'lucide-react'
+import { examApi, type ExamRow, type ExamSchedule, type PaperCheckFacultyRow } from '@/api/exam'
+import { api, errorMessage } from '@/api/client'
+import { cn } from '@/lib/utils'
 import { PageShell } from '@/components/shared/PageShell'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -13,6 +14,7 @@ import { Select } from '@/components/ui/Select'
 import { Input } from '@/components/ui/Input'
 import { Tabs } from '@/components/ui/Tabs'
 import { Table, Td, Th, Tr } from '@/components/ui/Table'
+import { ProgressBar } from '@/components/ui/ProgressBar'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Modal } from '@/components/ui/Modal'
 
@@ -35,6 +37,7 @@ export default function ExamManagementPage() {
   const [tab, setTab] = useState('calendar')
   const [scheduleId, setScheduleId] = useState('')
   const [newExamOpen, setNewExamOpen] = useState(false)
+  const [deleteExamOpen, setDeleteExamOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [excludeHods, setExcludeHods] = useState(false)
 
@@ -47,8 +50,22 @@ export default function ExamManagementPage() {
 
   const create = useMutation({ mutationFn: examApi.create, onSuccess: () => { toast.success('Exam created'); setNewExamOpen(false); setNewName(''); invalidate() }, onError: (e) => toast.error(errorMessage(e)) })
   const genBlocks = useMutation({ mutationFn: () => examApi.generateBlocks(examId), onSuccess: (r: { blocks?: number; students?: number }) => { toast.success(`Generated ${r.blocks ?? 0} blocks (${r.students ?? 0} students)`); invalidate() }, onError: (e) => toast.error(errorMessage(e)) })
-  const publish = useMutation({ mutationFn: () => examApi.publish(examId), onSuccess: (r: { notified?: number }) => { toast.success(`Published · ${r.notified ?? 0} faculty notified`); invalidate() }, onError: (e) => toast.error(errorMessage(e)) })
+  const publish = useMutation({ mutationFn: () => examApi.publish(examId), onSuccess: (r: { notified?: number }) => { toast.success(`Duties published · ${r.notified ?? 0} faculty notified`); invalidate() }, onError: (e) => toast.error(errorMessage(e)) })
   const unpublish = useMutation({ mutationFn: () => examApi.unpublish(examId), onSuccess: () => { toast.success('Unpublished'); invalidate() }, onError: (e) => toast.error(errorMessage(e)) })
+  const publishResults = useMutation({ mutationFn: () => examApi.publishResults(examId), onSuccess: (r: { students?: number }) => { toast.success(`Results live · ${r.students ?? 0} students notified 🎉`); invalidate() }, onError: (e) => toast.error(errorMessage(e)) })
+  const remove = useMutation({
+    mutationFn: () => examApi.remove(examId),
+    onSuccess: () => {
+      const deletedId = examId
+      const nextExamId = (exams.data?.exams ?? []).find((exam) => exam.id !== deletedId)?.id ?? ''
+      qc.setQueryData<{ yearLevel: string; exams: ExamRow[] }>(['exam', 'list'], (current) => current ? { ...current, exams: current.exams.filter((exam) => exam.id !== deletedId) } : current)
+      toast.success('Exam and all related data deleted')
+      setDeleteExamOpen(false)
+      setExamId(nextExamId)
+      invalidate()
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
 
   const published = detail.data?.exam.status === 'PUBLISHED'
 
@@ -76,6 +93,8 @@ export default function ExamManagementPage() {
             </div>
           )}
 
+          <CoordinatorsSection />
+
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <span className="text-lg font-semibold">{detail.data?.exam.name}</span>
@@ -86,7 +105,9 @@ export default function ExamManagementPage() {
               <Button variant="outline" size="sm" leftIcon={<RefreshCw size={14} />} loading={genBlocks.isPending} disabled={published} onClick={() => genBlocks.mutate()}>Generate Blocks</Button>
               {published
                 ? <Button variant="outline" size="sm" leftIcon={<Undo2 size={14} />} loading={unpublish.isPending} onClick={() => unpublish.mutate()}>Unpublish</Button>
-                : <Button size="sm" leftIcon={<Send size={14} />} loading={publish.isPending} onClick={() => publish.mutate()}>Publish</Button>}
+                : <Button size="sm" leftIcon={<Send size={14} />} loading={publish.isPending} onClick={() => publish.mutate()}>Publish Duties</Button>}
+              <Button variant="outline" size="sm" leftIcon={<Rocket size={14} />} loading={publishResults.isPending} onClick={() => publishResults.mutate()} title="Push checked marks live to students">Publish Results</Button>
+              <Button variant="danger" size="sm" leftIcon={<Trash2 size={14} />} onClick={() => setDeleteExamOpen(true)}>Delete Exam</Button>
             </div>
           </div>
 
@@ -114,6 +135,17 @@ export default function ExamManagementPage() {
           <Button loading={create.isPending} onClick={() => newName.trim() && create.mutate({ name: newName, excludeHods })}>Create</Button></>}>
         <Input label="Exam name" placeholder="T-1 Internal Examination" value={newName} onChange={(e) => setNewName(e.target.value)} />
         <label className="mt-3 flex items-center gap-2 text-sm"><input type="checkbox" checked={excludeHods} onChange={(e) => setExcludeHods(e.target.checked)} className="h-4 w-4 accent-primary" /> Exclude HODs from supervision duty</label>
+      </Modal>
+      <Modal open={deleteExamOpen} onClose={() => !remove.isPending && setDeleteExamOpen(false)} title="Delete examination" size="sm"
+        footer={<><Button variant="outline" disabled={remove.isPending} onClick={() => setDeleteExamOpen(false)}>Cancel</Button>
+          <Button variant="danger" loading={remove.isPending} onClick={() => remove.mutate()}>Delete permanently</Button></>}>
+        <div className="space-y-3 text-sm text-text-secondary">
+          <div className="flex items-start gap-3 rounded-sm border border-danger/20 bg-danger/5 p-3 text-danger">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+            <p>This permanently deletes <strong>{detail.data?.exam.name}</strong> and all schedules, student blocks, allocations, external faculty, and audit data.</p>
+          </div>
+          <p>This action cannot be undone.</p>
+        </div>
       </Modal>
     </PageShell>
   )
@@ -201,19 +233,75 @@ function BlocksTab({ examId }: { examId: string }) {
   )
 }
 
+// ── Reusable faculty select/deselect dialog ──
+interface PickerFaculty { id: string; label: string; hint?: string; preselected: boolean }
+function FacultyPickerModal({ open, title, subtitle, faculty, loading, confirmLabel = 'Allocate', maxSelect, onClose, onConfirm }: {
+  open: boolean; title: string; subtitle?: string; faculty: PickerFaculty[]; loading?: boolean
+  confirmLabel?: string; maxSelect?: number
+  onClose: () => void; onConfirm: (ids: string[]) => void
+}) {
+  const [sel, setSel] = useState<Set<string>>(new Set())
+  const [q, setQ] = useState('')
+  useEffect(() => { if (open) { setSel(new Set(faculty.filter((f) => f.preselected).map((f) => f.id))); setQ('') } }, [open, faculty])
+  const toggle = (id: string) => setSel((s) => {
+    const n = new Set(s)
+    if (n.has(id)) n.delete(id)
+    else { if (maxSelect && n.size >= maxSelect) return s; n.add(id) }
+    return n
+  })
+  const needle = q.trim().toLowerCase()
+  const shown = needle ? faculty.filter((f) => f.label.toLowerCase().includes(needle)) : faculty
+  return (
+    <Modal open={open} onClose={onClose} title={title} size="md"
+      footer={<><span className="mr-auto text-xs text-text-muted">{sel.size} selected{maxSelect ? ` / ${maxSelect}` : ''}</span>
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button loading={loading} disabled={sel.size === 0} onClick={() => onConfirm([...sel])}>{confirmLabel} ({sel.size})</Button></>}>
+      {subtitle && <p className="mb-2 text-xs text-text-muted">{subtitle}</p>}
+      <Input placeholder="Search faculty by name or ID…" value={q} onChange={(e) => setQ(e.target.value)} className="mb-2" />
+      {!maxSelect && (
+        <div className="mb-2 flex gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setSel(new Set(faculty.map((f) => f.id)))}>Select all</Button>
+          <Button size="sm" variant="ghost" onClick={() => setSel(new Set())}>Clear</Button>
+        </div>
+      )}
+      <div className="max-h-80 space-y-1 overflow-y-auto">
+        {shown.length === 0 ? <p className="py-6 text-center text-sm text-text-muted">No faculty found.</p> : shown.map((f) => {
+          const checked = sel.has(f.id)
+          const blocked = !checked && !!maxSelect && sel.size >= maxSelect
+          return (
+            <label key={f.id} className={cn('flex items-center gap-2 rounded-sm border border-border px-3 py-2 text-sm', blocked ? 'cursor-not-allowed opacity-40' : 'cursor-pointer hover:bg-surface-2')}>
+              <input type="checkbox" checked={checked} disabled={blocked} onChange={() => toggle(f.id)} className="h-4 w-4 accent-primary" />
+              <span className="font-medium text-text-primary">{f.label}</span>
+              {f.hint && <span className="ml-auto text-[11px] text-text-muted">{f.hint}</span>}
+            </label>
+          )
+        })}
+      </div>
+    </Modal>
+  )
+}
+
 // ── Supervision ──
 function SupervisionTab({ scheduleId }: { scheduleId: string }) {
   const qc = useQueryClient()
+  const [pick, setPick] = useState(false)
   const list = useQuery({ queryKey: ['exam', 'supervision', scheduleId], queryFn: () => examApi.supervision(scheduleId) })
   const avail = useQuery({ queryKey: ['exam', 'availability', scheduleId], queryFn: () => examApi.availability(scheduleId) })
-  const gen = useMutation({ mutationFn: () => examApi.generateSupervision(scheduleId), onSuccess: (r: { unfilled?: number }) => { toast.success(r.unfilled ? `Allocated · ${r.unfilled} unfilled` : 'Supervision allocated'); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
+  const gen = useMutation({ mutationFn: (ids?: string[]) => examApi.generateSupervision(scheduleId, ids), onSuccess: (r: { unfilled?: number }) => { toast.success(r.unfilled ? `Allocated · ${r.unfilled} unfilled` : 'Supervision allocated'); setPick(false); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
   const edit = useMutation({ mutationFn: ({ id, facultyId }: { id: string; facultyId: string }) => examApi.editSupervision(id, { facultyId }), onSuccess: () => { toast.success('Updated'); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
   const freeFac = (avail.data?.faculties ?? []).filter((f) => f.free)
+  const pickerFaculty: PickerFaculty[] = (avail.data?.faculties ?? []).map((f) => ({
+    id: f.facultyId, label: `${f.name} (${f.employeeId})`,
+    hint: f.free ? (f.isOwnYear ? 'own year' : f.year ?? '') : `busy · ${f.reason ?? ''}`, preselected: f.free,
+  }))
   return (
     <Card className="overflow-hidden">
       <CardHeader title="Supervision Allocation" subtitle={avail.data ? `Window ${avail.data.window} · ${freeFac.length} free faculty` : undefined}
-        action={<Button size="sm" leftIcon={<Wand2 size={14} />} loading={gen.isPending} onClick={() => gen.mutate()}>Auto-allocate</Button>} />
-      {!list.data?.length ? <EmptyState title="Not allocated" description="Run auto-allocate to assign supervisors (own year first, then other years, then external)." className="border-0" /> : (
+        action={<div className="flex gap-2">
+          <Button size="sm" variant="outline" leftIcon={<Users size={14} />} onClick={() => setPick(true)}>Select Faculty</Button>
+          <Button size="sm" leftIcon={<Wand2 size={14} />} loading={gen.isPending && !pick} onClick={() => gen.mutate(undefined)}>Auto (all free)</Button>
+        </div>} />
+      {!list.data?.length ? <EmptyState title="Not allocated" description="“Select Faculty” to choose an invigilation pool, or “Auto” to use every free faculty (own year first, then nearby years, then external)." className="border-0" /> : (
         <Table>
           <thead><tr><Th>Block</Th><Th>Room</Th><Th>Supervisor</Th><Th>Source</Th><Th>Reassign (free only)</Th></tr></thead>
           <tbody>
@@ -232,6 +320,8 @@ function SupervisionTab({ scheduleId }: { scheduleId: string }) {
           </tbody>
         </Table>
       )}
+      <FacultyPickerModal open={pick} title="Select supervision faculty" subtitle="Only free faculty can invigilate; busy ones are shown for reference."
+        faculty={pickerFaculty} loading={gen.isPending} onClose={() => setPick(false)} onConfirm={(ids) => gen.mutate(ids)} />
     </Card>
   )
 }
@@ -239,45 +329,128 @@ function SupervisionTab({ scheduleId }: { scheduleId: string }) {
 // ── Paper checking ──
 function PaperTab({ scheduleId }: { scheduleId: string }) {
   const qc = useQueryClient()
-  const list = useQuery({ queryKey: ['exam', 'paper', scheduleId], queryFn: () => examApi.paperChecking(scheduleId) })
-  const gen = useMutation({ mutationFn: () => examApi.generatePaperChecking(scheduleId), onSuccess: () => { toast.success('Paper checking allocated'); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
+  const [pick, setPick] = useState(false)
+  const list = useQuery({ queryKey: ['exam', 'paper', scheduleId], queryFn: () => examApi.paperChecking(scheduleId), refetchInterval: 30_000 })
+  const faculty = useQuery({ queryKey: ['exam', 'paperFaculty', scheduleId], queryFn: () => examApi.paperCheckingFaculty(scheduleId), enabled: pick })
+  const gen = useMutation({ mutationFn: (ids?: string[]) => examApi.generatePaperChecking(scheduleId, ids), onSuccess: () => { toast.success('Paper checking allocated'); setPick(false); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
+  const pickerFaculty: PickerFaculty[] = (faculty.data?.faculties ?? []).map((f: PaperCheckFacultyRow) => ({
+    id: f.id, label: `${f.name} (${f.employeeId})`,
+    hint: f.isSubjectFaculty ? 'subject teacher' : f.isOwnYear ? 'own year' : f.year ?? '', preselected: f.isSubjectFaculty,
+  }))
   return (
     <Card className="overflow-hidden">
-      <CardHeader title="Paper Checking Allocation" subtitle="Continuous block ranges to subject faculty only"
-        action={<Button size="sm" leftIcon={<Wand2 size={14} />} loading={gen.isPending} onClick={() => gen.mutate()}>Auto-allocate</Button>} />
-      {!list.data?.length ? <EmptyState title="Not allocated" description="Run auto-allocate to distribute continuous block ranges equally among subject faculty." className="border-0" /> : (
+      <CardHeader title="Paper Checking Allocation" subtitle="Continuous block ranges → checkers · marks entered per block · live to HOD"
+        action={<div className="flex gap-2">
+          <Button size="sm" variant="outline" leftIcon={<Users size={14} />} onClick={() => setPick(true)}>Select Faculty</Button>
+          <Button size="sm" leftIcon={<Wand2 size={14} />} loading={gen.isPending && !pick} onClick={() => gen.mutate(undefined)}>Auto (subject faculty)</Button>
+        </div>} />
+      {!list.data?.length ? <EmptyState title="Not allocated" description="“Select Faculty” to choose checkers, or “Auto” to split continuous block ranges among the subject's teachers." className="border-0" /> : (
         <Table>
-          <thead><tr><Th>Faculty</Th><Th>Block range</Th><Th>Blocks</Th></tr></thead>
+          <thead><tr><Th>Checker</Th><Th>Block range</Th><Th>Blocks</Th><Th>Marking progress</Th><Th>Status</Th></tr></thead>
           <tbody>
             {list.data.map((p) => (
-              <Tr key={p.id}><Td className="font-medium">{p.faculty}</Td><Td>{p.range}</Td><Td className="tabular-nums">{p.blockCount}</Td></Tr>
+              <Tr key={p.id}>
+                <Td className="font-medium">{p.faculty}</Td>
+                <Td>{p.range}</Td>
+                <Td className="tabular-nums">{p.blockCount}</Td>
+                <Td className="min-w-[150px]">
+                  <div className="flex items-center gap-2">
+                    <ProgressBar value={p.totalStudents === 0 ? 0 : (p.markedCount / p.totalStudents) * 100} tone={p.markedCount === p.totalStudents ? 'success' : 'warning'} className="w-20" />
+                    <span className="text-xs text-text-muted">{p.markedCount}/{p.totalStudents}</span>
+                  </div>
+                </Td>
+                <Td><Badge tone={p.status === 'Published' ? 'purple' : p.status === 'Complete' ? 'success' : p.status === 'In Progress' ? 'warning' : 'neutral'}>{p.status}</Badge></Td>
+              </Tr>
             ))}
           </tbody>
         </Table>
       )}
+      <FacultyPickerModal open={pick} title="Select paper-checking faculty" subtitle="Subject teachers are pre-selected; add faculty from other years for support."
+        faculty={pickerFaculty} loading={gen.isPending} onClose={() => setPick(false)} onConfirm={(ids) => gen.mutate(ids)} />
     </Card>
+  )
+}
+
+// ── Exam coordinators (per active semester) ──
+interface Coordinator { slot: number; facultyId: string | null; name: string | null; employeeId: string | null }
+function CoordinatorsSection() {
+  const qc = useQueryClient()
+  const coords = useQuery({
+    queryKey: ['hod', 'exam', 'coordinators'],
+    queryFn: () => api.get<{ coordinators: Coordinator[]; facultyOptions: { id: string; name: string; employeeId: string }[] }>('/hod/exam/coordinators').then((r) => r.data),
+  })
+  const options = coords.data?.facultyOptions ?? []
+  const refresh = () => qc.invalidateQueries({ queryKey: ['hod', 'exam', 'coordinators'] })
+  const assign = useMutation({ mutationFn: ({ slot, facultyId }: { slot: number; facultyId: string }) => api.post('/hod/exam/coordinators', { slot, facultyId }), onSuccess: () => { toast.success('Coordinator assigned'); refresh() }, onError: (e) => toast.error(errorMessage(e)) })
+  const remove = useMutation({ mutationFn: (slot: number) => api.delete(`/hod/exam/coordinators/${slot}`), onSuccess: () => { toast.success('Coordinator removed'); refresh() }, onError: (e) => toast.error(errorMessage(e)) })
+  return (
+    <Card className="mb-4 p-4">
+      <div className="mb-3 flex items-center gap-2"><UserCheck size={16} className="text-purple" /><h3 className="text-sm font-semibold text-text-primary">Exam Coordinators</h3><span className="text-xs text-text-muted">— manage papers &amp; enter marks; never get supervision duty</span></div>
+      <div className="grid gap-3 md:grid-cols-2">
+        {(coords.data?.coordinators ?? []).map((c) => (
+          <CoordSlot key={c.slot} c={c} options={options} onAssign={(fid) => assign.mutate({ slot: c.slot, facultyId: fid })} onRemove={() => remove.mutate(c.slot)} />
+        ))}
+      </div>
+    </Card>
+  )
+}
+function CoordSlot({ c, options, onAssign, onRemove }: { c: Coordinator; options: { id: string; name: string; employeeId: string }[]; onAssign: (id: string) => void; onRemove: () => void }) {
+  const [picked, setPicked] = useState('')
+  return (
+    <div className="flex items-center gap-2 rounded-sm border border-border bg-surface-2 px-3 py-2">
+      <span className="text-xs font-medium text-text-muted">Coordinator {c.slot}</span>
+      {c.facultyId ? (
+        <><div className="ml-1"><div className="text-sm font-medium text-text-primary">{c.name}</div><div className="text-[11px] text-text-muted">{c.employeeId}</div></div>
+          <button onClick={onRemove} className="ml-auto text-text-muted hover:text-danger" title="Remove"><X size={15} /></button></>
+      ) : (
+        <><Select className="ml-1 flex-1" value={picked} onChange={(e) => setPicked(e.target.value)} placeholder="Select faculty" searchable searchPlaceholder="Search faculty…"
+            options={options.map((f) => ({ value: f.id, label: `${f.name} (${f.employeeId})` }))} />
+          <Button size="sm" disabled={!picked} onClick={() => { onAssign(picked); setPicked('') }}>Assign</Button></>
+      )}
+    </div>
   )
 }
 
 // ── Standby ──
 function StandbyTab({ scheduleId }: { scheduleId: string }) {
   const qc = useQueryClient()
+  const [pick, setPick] = useState(false)
   const list = useQuery({ queryKey: ['exam', 'standby', scheduleId], queryFn: () => examApi.standby(scheduleId) })
-  const gen = useMutation({ mutationFn: () => examApi.generateStandby(scheduleId), onSuccess: () => { toast.success('Standby selected'); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
+  const faculty = useQuery({ queryKey: ['exam', 'paperFaculty', scheduleId], queryFn: () => examApi.paperCheckingFaculty(scheduleId), enabled: pick })
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['exam'] })
+  const gen = useMutation({ mutationFn: () => examApi.generateStandby(scheduleId), onSuccess: () => { toast.success('Standby selected'); invalidate() }, onError: (e) => toast.error(errorMessage(e)) })
+  const setList = useMutation({ mutationFn: (ids: string[]) => examApi.setStandbyList(scheduleId, ids), onSuccess: () => { toast.success('Standby set'); setPick(false); invalidate() }, onError: (e) => toast.error(errorMessage(e)) })
+  const options = (faculty.data?.faculties ?? [])
+  const pickerFaculty: PickerFaculty[] = options.map((f: PaperCheckFacultyRow) => ({
+    id: f.id, label: `${f.name} (${f.employeeId})`,
+    hint: f.isSubjectFaculty ? 'subject teacher' : f.isOwnYear ? 'own year' : f.year ?? '', preselected: false,
+  }))
   return (
     <Card className="overflow-hidden">
-      <CardHeader title="Standby Faculty" subtitle="2 subject faculty on standby (not on active duty)"
-        action={<Button size="sm" leftIcon={<Wand2 size={14} />} loading={gen.isPending} onClick={() => gen.mutate()}>Auto-select</Button>} />
-      {!list.data?.length ? <EmptyState title="No standby" description="Run auto-select to pick 2 free subject faculty." className="border-0" /> : (
+      <CardHeader title="Standby Faculty" subtitle="Up to 2 subject faculty on standby (not on active duty)"
+        action={<div className="flex gap-2">
+          <Button size="sm" variant="outline" leftIcon={<Users size={14} />} onClick={() => setPick(true)}>Select / Change</Button>
+          <Button size="sm" leftIcon={<Wand2 size={14} />} loading={gen.isPending} onClick={() => gen.mutate()}>Auto-select</Button>
+        </div>} />
+      {!list.data?.length ? <EmptyState title="No standby" description="“Select / Change” to hand-pick up to 2, or “Auto-select” to pick 2 free subject faculty." className="border-0" /> : (
         <Table>
-          <thead><tr><Th>Slot</Th><Th>Faculty</Th><Th>Status</Th></tr></thead>
+          <thead><tr><Th>Slot</Th><Th>Faculty</Th><Th>Status</Th><Th>Change</Th></tr></thead>
           <tbody>
             {list.data.map((s) => (
-              <Tr key={s.slot}><Td>Standby {s.slot}</Td><Td>{s.faculty}</Td><Td><Badge tone={s.isActive ? 'success' : 'neutral'}>{s.isActive ? 'Active' : 'Standby'}</Badge></Td></Tr>
+              <Tr key={s.slot}>
+                <Td>Standby {s.slot}</Td>
+                <Td>{s.faculty}</Td>
+                <Td><Badge tone={s.isActive ? 'success' : 'neutral'}>{s.isActive ? 'Active' : 'Standby'}</Badge></Td>
+                <Td>
+                  <Button size="sm" variant="ghost" onClick={() => setPick(true)}>Change…</Button>
+                </Td>
+              </Tr>
             ))}
           </tbody>
         </Table>
       )}
+      <FacultyPickerModal open={pick} title="Select standby faculty" subtitle="Subject teachers first. Pick up to 2 — they cover if a supervisor is absent." maxSelect={2}
+        confirmLabel="Set standby" faculty={pickerFaculty} loading={setList.isPending} onClose={() => setPick(false)} onConfirm={(ids) => setList.mutate(ids)} />
     </Card>
   )
 }

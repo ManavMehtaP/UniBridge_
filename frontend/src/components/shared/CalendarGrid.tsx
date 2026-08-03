@@ -1,18 +1,30 @@
+import { BookOpen, Circle, Flag, Plane, PartyPopper, PenLine, Sparkles, Sun, Zap } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { HodCalendarEvent } from '@/types/hod'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
+// One place that decides how every event type looks: a soft tinted chip, a colour dot,
+// an icon and a human label — reused by the grid, the legend and the side panels.
+export const EVENT_META: Record<HodCalendarEvent['type'], { label: string; icon: LucideIcon; chip: string; dot: string }> = {
+  REGULAR_TEACHING: { label: 'Regular Teaching', icon: BookOpen, chip: 'bg-success-light text-success', dot: 'bg-success' },
+  EXAM: { label: 'Exam', icon: PenLine, chip: 'bg-warning-light text-warning', dot: 'bg-warning' },
+  PUBLIC_HOLIDAY: { label: 'Public Holiday', icon: PartyPopper, chip: 'bg-danger-light text-danger', dot: 'bg-danger' },
+  HOLIDAY: { label: 'Holiday', icon: Sun, chip: 'bg-success-light text-success', dot: 'bg-success' },
+  READING_HOLIDAY: { label: 'Reading Day', icon: BookOpen, chip: 'bg-teal-light text-teal', dot: 'bg-teal' },
+  SEMESTER_BREAK: { label: 'Break', icon: Plane, chip: 'bg-purple-light text-purple', dot: 'bg-purple' },
+  CULTURAL: { label: 'Cultural', icon: Sparkles, chip: 'bg-purple-light text-purple', dot: 'bg-purple' },
+  ACTIVITY: { label: 'Activity', icon: Zap, chip: 'bg-primary-light text-primary', dot: 'bg-primary' },
+  PHASE: { label: 'Phase', icon: Flag, chip: 'bg-primary-light text-primary', dot: 'bg-primary' },
+  OTHER: { label: 'Other', icon: Circle, chip: 'bg-surface-2 text-text-secondary', dot: 'bg-text-muted' },
+}
+
+// Back-compat: some callers still reference a solid tone class per type.
 export const EVENT_TONE: Record<HodCalendarEvent['type'], string> = {
-  HOLIDAY: 'bg-success',
-  PUBLIC_HOLIDAY: 'bg-danger',
-  READING_HOLIDAY: 'bg-teal',
-  SEMESTER_BREAK: 'bg-purple',
-  EXAM: 'bg-warning',
-  CULTURAL: 'bg-purple',
-  ACTIVITY: 'bg-primary',
-  PHASE: 'bg-primary',
-  OTHER: 'bg-text-muted',
+  REGULAR_TEACHING: 'bg-success',
+  EXAM: 'bg-warning', PUBLIC_HOLIDAY: 'bg-danger', HOLIDAY: 'bg-success', READING_HOLIDAY: 'bg-teal',
+  SEMESTER_BREAK: 'bg-purple', CULTURAL: 'bg-purple', ACTIVITY: 'bg-primary', PHASE: 'bg-primary', OTHER: 'bg-text-muted',
 }
 
 export function CalendarGrid({
@@ -22,7 +34,6 @@ export function CalendarGrid({
   onDayClick,
   onEventClick,
   readonly,
-  lectureDows,
 }: {
   events: HodCalendarEvent[]
   year: number
@@ -30,8 +41,6 @@ export function CalendarGrid({
   onDayClick?: (date: string) => void
   onEventClick?: (e: HodCalendarEvent) => void
   readonly?: boolean
-  /** JS getDay() (0=Sun..6=Sat) weekdays that have regular lectures (same for all batches). */
-  lectureDows?: number[]
 }) {
   const firstDay = new Date(year, month, 1).getDay()
   const daysInMonth = new Date(year, month + 1, 0).getDate()
@@ -55,48 +64,59 @@ export function CalendarGrid({
   ]
 
   return (
-    <div>
-      <div className="grid grid-cols-7 border-b border-border">
-        {WEEKDAYS.map((d) => (
-          <div key={d} className="py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-text-muted">{d}</div>
+    <div className="overflow-hidden rounded-md border border-border">
+      <div className="grid grid-cols-7 bg-surface-2/60">
+        {WEEKDAYS.map((d, i) => (
+          <div key={d} className={cn('py-2.5 text-center text-[11px] font-semibold uppercase tracking-wider text-text-muted', (i === 0 || i === 6) && 'text-danger/70')}>{d}</div>
         ))}
       </div>
       <div className="grid grid-cols-7">
         {cells.map((day, i) => {
-          if (day == null) return <div key={i} className="min-h-[92px] border-b border-r border-border-light bg-surface-2/40" />
+          const col = i % 7
+          const isWeekend = col === 0 || col === 6
+          if (day == null) return <div key={i} className="min-h-[74px] border-t border-r border-border-light bg-surface-2/30 last:border-r-0" />
           const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-          const dayEvents = byDate.get(dateStr) ?? []
+          const allDayEvents = byDate.get(dateStr) ?? []
+          // A teaching day is a plain working day — show it as a subtle tint + tiny label,
+          // never as a chip that competes with real events (exams, holidays).
+          const isTeaching = allDayEvents.some((e) => e.type === 'REGULAR_TEACHING')
+          const dayEvents = allDayEvents.filter((e) => e.type !== 'REGULAR_TEACHING')
           const isToday = dateStr === todayStr
-          const dow = new Date(year, month, day).getDay()
-          const isHoliday = dayEvents.some((e) => e.type === 'HOLIDAY' || e.type === 'READING_HOLIDAY')
-          const hasLecture = !isHoliday && (lectureDows?.includes(dow) ?? false)
           return (
             <div
               key={i}
               onClick={() => !readonly && onDayClick?.(dateStr)}
               className={cn(
-                'min-h-[92px] border-b border-r border-border-light p-1.5',
-                !readonly && 'cursor-pointer hover:bg-primary-light/30',
+                'group relative min-h-[74px] border-t border-r border-border-light p-1 transition-colors',
+                col === 6 && 'border-r-0',
+                isWeekend && !isToday && 'bg-surface-2/25',
+                isTeaching && !isToday && 'bg-success-light/40',
+                isToday && 'bg-primary-light/25',
+                !readonly && 'cursor-pointer hover:bg-primary-light/40',
               )}
             >
-              <div className={cn('mb-1 flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold',
-                isToday ? 'bg-primary text-white' : 'text-text-secondary')}>{day}</div>
+              <div className="mb-0.5 flex items-center justify-between">
+                <span className={cn('flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-xs font-semibold',
+                  isToday ? 'bg-primary text-white shadow-sm' : isWeekend ? 'text-danger/60' : 'text-text-secondary')}>{day}</span>
+                {isTeaching && <span className="flex items-center gap-0.5 text-[9px] font-medium text-success"><BookOpen size={9} />Lectures</span>}
+              </div>
               <div className="space-y-0.5">
-                {hasLecture && (
-                  <div className="flex items-center gap-1 truncate rounded bg-primary-light px-1 py-0.5 text-[10px] font-medium text-primary">
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" /> Regular Lectures
-                  </div>
-                )}
-                {dayEvents.slice(0, 3).map((e) => (
-                  <button
-                    key={e.id}
-                    onClick={(ev) => { ev.stopPropagation(); onEventClick?.(e) }}
-                    className={cn('flex w-full items-center gap-1 truncate rounded px-1 py-0.5 text-left text-[10px] font-medium text-white', EVENT_TONE[e.type])}
-                  >
-                    {e.title}
-                  </button>
-                ))}
-                {dayEvents.length > 3 && <div className="px-1 text-[10px] text-text-muted">+{dayEvents.length - 3} more</div>}
+                {dayEvents.slice(0, 2).map((e, k) => {
+                  const meta = EVENT_META[e.type] ?? EVENT_META.OTHER
+                  const Icon = meta.icon
+                  return (
+                    <button
+                      key={`${e.id}-${k}`}
+                      onClick={(ev) => { ev.stopPropagation(); onEventClick?.(e) }}
+                      title={e.title}
+                      className={cn('flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-[10px] font-medium leading-tight', meta.chip)}
+                    >
+                      <Icon size={10} className="shrink-0" />
+                      <span className="truncate">{e.title}</span>
+                    </button>
+                  )
+                })}
+                {dayEvents.length > 2 && <div className="px-1 text-[9px] font-medium text-text-muted">+{dayEvents.length - 2} more</div>}
               </div>
             </div>
           )

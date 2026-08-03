@@ -22,7 +22,6 @@ const HodSettings = lazy(() => import('@/pages/hod/SettingsPage'))
 const HodArchive = lazy(() => import('@/pages/hod/ArchivePage'))
 const HodTimetable = lazy(() => import('@/pages/hod/TimetablePage'))
 const HodAnnouncements = lazy(() => import('@/pages/hod/AnnouncementsPage'))
-const HodExamPanel = lazy(() => import('@/pages/hod/ExamPanelPage'))
 const NotificationsPage = lazy(() => import('@/pages/NotificationsPage'))
 
 // Faculty portal pages
@@ -92,7 +91,6 @@ export const router = createBrowserRouter([
           { path: '/hod/subjects', element: <HodSubjects /> },
           { path: '/hod/timetable', element: <HodTimetable /> },
           { path: '/hod/announcements', element: <HodAnnouncements /> },
-          { path: '/hod/exams', element: <HodExamPanel /> },
           { path: '/hod/exam-management', element: <HodExamManagement /> },
           { path: '/hod/notifications', element: <NotificationsPage /> },
           { path: '/faculty/notifications', element: <NotificationsPage /> },

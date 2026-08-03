@@ -9,7 +9,11 @@
 // ─────────────────────────────────────────────────────────────
 import prisma from "../config/prisma.js";
 import { ApiError } from "../utils/http.js";
+import { splitBlockSizes } from "../utils/examBlocks.js";
 import type { YearLevel } from "../types/domain.js";
+
+// Marks are always stored out of 25 (T1–T3 entered /25, T4 entered /50 → ÷2).
+const gradeFromPct = (pct: number) => (pct >= 90 ? "A+" : pct >= 80 ? "A" : pct >= 70 ? "B" : pct >= 60 ? "C" : pct >= 50 ? "D" : "F");
 
 const YEAR_ORDER: YearLevel[] = ["FY", "SY", "TY", "FINAL"];
 
@@ -101,6 +105,51 @@ async function busyReason(
   return null;
 }
 
+// ── paper-checking marks helpers ──
+// Marks write into the shared Result table, keyed by the exam's phase + the
+// schedule's subject, so students/analytics/results all reuse the same store.
+async function phaseEntryMax(phaseId: string | null): Promise<{ phaseId: string; number: number; entryMax: number }> {
+  if (!phaseId) throw new ApiError(400, "NO_PHASE", "Link this exam to a phase (T1–T4) before entering marks.");
+  const p = await prisma.phase.findUnique({ where: { id: phaseId }, select: { id: true, number: true } });
+  if (!p) throw new ApiError(404, "PHASE_NOT_FOUND", "Exam phase not found.");
+  return { phaseId: p.id, number: p.number, entryMax: p.number === 4 ? 50 : 25 };
+}
+
+// Ordered students of a paper-checking allocation (across its blocks), mapped to
+// the current-semester StudentEnrollment that Result rows reference.
+async function allocationStudents(blockIds: string[], semesterId: string) {
+  if (!blockIds.length) return [] as { enrollmentId: string; enrollmentNo: string; rollNo: string; name: string; blockNumber: number }[];
+  const bs = await prisma.blockStudent.findMany({
+    where: { blockId: { in: blockIds } },
+    include: { block: { select: { blockNumber: true } } },
+    orderBy: [{ block: { blockNumber: "asc" } }, { seatOrder: "asc" }],
+  });
+  const enrs = await prisma.studentEnrollment.findMany({
+    where: { studentId: { in: bs.map((b) => b.studentId) }, semesterId, isCurrent: true },
+    include: { student: { select: { name: true } } },
+  });
+  const enrByStudent = new Map(enrs.map((e) => [e.studentId, e]));
+  return bs.flatMap((b) => {
+    const e = enrByStudent.get(b.studentId);
+    if (!e) return [];
+    return [{ enrollmentId: e.id, enrollmentNo: b.enrollmentNo, rollNo: e.rollNo, name: e.student.name, blockNumber: b.block.blockNumber }];
+  });
+}
+
+// Access to a paper-checking allocation: the assigned checker, a semester exam
+// coordinator, or a HOD of the exam's year.
+async function assertPaperCheckAccess(alloc: { facultyId: string; examId: string }, facultyId: string, universityId: string) {
+  const exam = await prisma.exam.findFirst({ where: { id: alloc.examId, deletedAt: null } });
+  if (!exam || exam.universityId !== universityId) throw new ApiError(404, "EXAM_NOT_FOUND", "Exam not found.");
+  if (alloc.facultyId !== facultyId) {
+    const coord = await isExamCoordinator(facultyId, exam.semesterId);
+    const fac = await prisma.faculty.findFirst({ where: { id: facultyId, universityId, deletedAt: null }, select: { isHod: true, year: true } });
+    const isYearHod = Boolean(fac?.isHod && fac.year === exam.yearLevel);
+    if (!coord && !isYearHod) throw new ApiError(403, "FORBIDDEN", "This paper set is not assigned to you.");
+  }
+  return exam;
+}
+
 export const examService = {
   // ── Exam CRUD ──
   async createExam(actorId: string, universityId: string, body: { name?: string; phaseId?: string; blockSize?: number; bufferMinutes?: number; excludeHods?: boolean }) {
@@ -153,9 +202,18 @@ export const examService = {
   async deleteExam(actorId: string, universityId: string, examId: string) {
     const ctx = await assertManager(actorId, universityId);
     const exam = await getExamOrThrow(examId, ctx);
-    if (exam.status === "PUBLISHED") throw new ApiError(409, "PUBLISHED", "Unpublish before deleting.");
-    await prisma.exam.update({ where: { id: examId }, data: { deletedAt: new Date() } });
-    await audit(examId, actorId, "DELETE_EXAM");
+    // Delete the complete exam workspace atomically. Some dependent models
+    // cascade through schedules/blocks, while audit logs have no relation.
+    await prisma.$transaction(async (tx) => {
+      await tx.supervisorAllocation.deleteMany({ where: { examId } });
+      await tx.paperCheckingAllocation.deleteMany({ where: { examId } });
+      await tx.standbyFaculty.deleteMany({ where: { examId } });
+      await tx.examSchedule.deleteMany({ where: { examId } });
+      await tx.examBlock.deleteMany({ where: { examId } });
+      await tx.externalFaculty.deleteMany({ where: { examId } });
+      await tx.examAuditLog.deleteMany({ where: { examId } });
+      await tx.exam.delete({ where: { id: examId } });
+    });
     return { deleted: true };
   },
 
@@ -234,12 +292,15 @@ export const examService = {
         include: { student: { select: { id: true, enrollmentNo: true } } },
       });
       enrollments.sort((a, b) => a.student.enrollmentNo.localeCompare(b.student.enrollmentNo));
-      for (let i = 0; i < enrollments.length; i += exam.blockSize) {
-        const chunk = enrollments.slice(i, i + exam.blockSize);
-        const blockNumber = Math.floor(i / exam.blockSize) + 1;
+      // Balanced split: no block below 15; remainder grows blocks toward blockSize+4.
+      const sizes = splitBlockSizes(enrollments.length, exam.blockSize);
+      let cursor = 0;
+      for (let b = 0; b < sizes.length; b++) {
+        const chunk = enrollments.slice(cursor, cursor + sizes[b]);
+        cursor += sizes[b];
         await prisma.examBlock.create({
           data: {
-            examId, ownerHodId: hodId, blockNumber,
+            examId, ownerHodId: hodId, blockNumber: b + 1,
             students: { create: chunk.map((e, idx) => ({ studentId: e.student.id, enrollmentNo: e.student.enrollmentNo, seatOrder: idx + 1 })) },
           },
         });
@@ -365,25 +426,37 @@ export const examService = {
     const exam = await getExamOrThrow(sched.examId, ctx);
     const coords = await coordinatorIds(exam.semesterId);
     const startMin = toMin(sched.startTime), endMin = toMin(sched.endTime);
-    const faculties = await prisma.faculty.findMany({
-      where: { universityId, isDean: false, isActive: true, deletedAt: null },
+    // Supervisors are never HODs or exam coordinators — exclude them from the pool.
+    const faculties = (await prisma.faculty.findMany({
+      where: { universityId, isDean: false, isHod: false, isActive: true, deletedAt: null },
       select: { id: true, name: true, employeeId: true, year: true, isHod: true },
-      orderBy: [{ year: "asc" }, { name: "asc" }],
+    })).filter((f) => !coords.has(f.id));
+    // Bulk-fetch the two things busyReason checks (timetable + existing duties) in
+    // 2 queries, then compute per-faculty in memory — avoids a per-faculty query storm.
+    const facIds = faculties.map((f) => f.id);
+    const buffer = exam.bufferMinutes, winStart = startMin - buffer, winEnd = endMin + buffer;
+    const dow = sched.date.getUTCDay();
+    const [slots, duties] = await Promise.all([
+      prisma.timetableSlot.findMany({ where: { facultyId: { in: facIds }, dayOfWeek: dow, semester: { universityId, status: "ACTIVE" } }, include: { subject: { select: { code: true } }, batch: { select: { code: true } } } }),
+      prisma.supervisorAllocation.findMany({ where: { facultyId: { in: facIds }, schedule: { date: sched.date } }, include: { schedule: { select: { startTime: true, endTime: true } } } }),
+    ]);
+    const busy = new Map<string, string>();
+    for (const s of slots) if (s.facultyId && !busy.has(s.facultyId) && overlaps(winStart, winEnd, toMin(s.slotStart), toMin(s.slotEnd))) busy.set(s.facultyId, `Lecture ${s.subject.code} (${s.batch.code}) ${s.slotStart}-${s.slotEnd}`);
+    for (const d of duties) if (d.facultyId && !busy.has(d.facultyId) && overlaps(winStart, winEnd, toMin(d.schedule.startTime), toMin(d.schedule.endTime))) busy.set(d.facultyId, `Exam duty ${d.schedule.startTime}-${d.schedule.endTime}`);
+    const rows = faculties.map((f) => {
+      const reason = busy.get(f.id) ?? null;
+      return { facultyId: f.id, name: f.name, employeeId: f.employeeId, year: f.year, isHod: f.isHod, isOwnYear: f.year === exam.yearLevel, free: !reason, reason };
     });
-    const rows = await Promise.all(faculties.map(async (f) => {
-      const reason = coords.has(f.id)
-        ? "Exam coordinator"
-        : await busyReason(f.id, universityId, sched.date, startMin, endMin, exam.bufferMinutes);
-      return {
-        facultyId: f.id, name: f.name, employeeId: f.employeeId, year: f.year, isHod: f.isHod,
-        isOwnYear: f.year === exam.yearLevel, free: !reason, reason: reason ?? null,
-      };
-    }));
+    // Own year first, then year by year (FY→SY→TY→FINAL), then name.
+    rows.sort((a, b) =>
+      Number(b.isOwnYear) - Number(a.isOwnYear)
+      || YEAR_ORDER.indexOf(a.year as YearLevel) - YEAR_ORDER.indexOf(b.year as YearLevel)
+      || a.name.localeCompare(b.name));
     return { scheduleId, examYear: exam.yearLevel, buffer: exam.bufferMinutes, window: `${sched.startTime}-${sched.endTime} (±${exam.bufferMinutes}m)`, faculties: rows };
   },
 
   // ── Supervision allocation for one schedule ──
-  async generateSupervision(actorId: string, universityId: string, scheduleId: string) {
+  async generateSupervision(actorId: string, universityId: string, scheduleId: string, facultyIds?: string[]) {
     const ctx = await assertManager(actorId, universityId);
     const sched = await prisma.examSchedule.findUnique({ where: { id: scheduleId } });
     if (!sched) throw new ApiError(404, "NOT_FOUND", "Schedule not found.");
@@ -397,10 +470,13 @@ export const examService = {
     const startMin = toMin(sched.startTime), endMin = toMin(sched.endTime);
 
     // Candidate faculty in priority tiers, free only, never coordinators.
-    const all = await prisma.faculty.findMany({
-      where: { universityId, isDean: false, isActive: true, deletedAt: null },
+    // If the HOD hand-picked a pool (select/deselect dialog), restrict to it.
+    const picked = facultyIds && facultyIds.length ? new Set(facultyIds) : null;
+    // Supervisors are never HODs (they run the exam, not invigilate).
+    const all = (await prisma.faculty.findMany({
+      where: { universityId, isDean: false, isHod: false, isActive: true, deletedAt: null },
       select: { id: true, year: true, isHod: true },
-    });
+    })).filter((f) => !picked || picked.has(f.id));
     const examYearIdx = YEAR_ORDER.indexOf(exam.yearLevel);
     const tierOf = (year: string | null) => {
       if (year === exam.yearLevel) return 0; // own year
@@ -493,7 +569,7 @@ export const examService = {
   },
 
   // ── Paper checking (continuous block ranges to subject faculty) ──
-  async generatePaperChecking(actorId: string, universityId: string, scheduleId: string) {
+  async generatePaperChecking(actorId: string, universityId: string, scheduleId: string, facultyIds?: string[]) {
     const ctx = await assertManager(actorId, universityId);
     const sched = await prisma.examSchedule.findUnique({ where: { id: scheduleId } });
     if (!sched) throw new ApiError(404, "NOT_FOUND", "Schedule not found.");
@@ -501,10 +577,16 @@ export const examService = {
     if (exam.status === "PUBLISHED") throw new ApiError(409, "PUBLISHED", "Unpublish before regenerating.");
 
     const coords = await coordinatorIds(exam.semesterId);
-    // Only subject-specific faculty (assigned to this subject in the semester), never coordinators.
-    const fbas = await prisma.facultyBatchAssignment.findMany({ where: { subjectId: sched.subjectId, semesterId: exam.semesterId }, select: { facultyId: true } });
-    const facIds = [...new Set(fbas.map((f) => f.facultyId).filter((id) => !coords.has(id)))];
-    if (facIds.length === 0) throw new ApiError(400, "NO_SUBJECT_FACULTY", "No subject faculty available for paper checking.");
+    // Pool = hand-picked faculty (select/deselect dialog) or, by default, the
+    // subject's own teachers. Coordinators are always excluded.
+    let facIds: string[];
+    if (facultyIds && facultyIds.length) {
+      facIds = [...new Set(facultyIds.filter((id) => !coords.has(id)))];
+    } else {
+      const fbas = await prisma.facultyBatchAssignment.findMany({ where: { subjectId: sched.subjectId, semesterId: exam.semesterId }, select: { facultyId: true } });
+      facIds = [...new Set(fbas.map((f) => f.facultyId).filter((id) => !coords.has(id)))];
+    }
+    if (facIds.length === 0) throw new ApiError(400, "NO_SUBJECT_FACULTY", "No faculty selected for paper checking.");
     const facs = await prisma.faculty.findMany({ where: { id: { in: facIds }, deletedAt: null }, select: { id: true } });
     const eligible = facs.map((f) => f.id);
 
@@ -538,15 +620,163 @@ export const examService = {
     const ctx = await assertManager(actorId, universityId);
     const sched = await prisma.examSchedule.findUnique({ where: { id: scheduleId } });
     if (!sched) throw new ApiError(404, "NOT_FOUND", "Schedule not found.");
-    await getExamOrThrow(sched.examId, ctx);
+    const exam = await getExamOrThrow(sched.examId, ctx);
     // Created in block order; order by that (fromLabel is a string → "Block 11" < "Block 2").
     const allocs = await prisma.paperCheckingAllocation.findMany({ where: { scheduleId }, orderBy: { createdAt: "asc" } });
     const facs = allocs.length ? await prisma.faculty.findMany({ where: { id: { in: allocs.map((a) => a.facultyId) } }, select: { id: true, name: true, employeeId: true } }) : [];
     const facById = new Map(facs.map((f) => [f.id, f]));
-    return allocs.map((a) => ({
-      id: a.id, facultyId: a.facultyId, faculty: `${facById.get(a.facultyId)?.name ?? "?"} (${facById.get(a.facultyId)?.employeeId ?? ""})`,
-      range: `${a.fromLabel} – ${a.toLabel}`, blockCount: a.blockIds.length,
-    }));
+    // Live marking progress per allocation (checker saves are visible immediately).
+    // Sequential — the Supabase pooler caps concurrent clients at 15.
+    const out = [];
+    for (const a of allocs) {
+      const students = await allocationStudents(a.blockIds, exam.semesterId);
+      const enrIds = students.map((s) => s.enrollmentId);
+      const results = exam.phaseId && enrIds.length ? await prisma.result.findMany({ where: { enrollmentId: { in: enrIds }, phaseId: exam.phaseId, subjectId: sched.subjectId }, select: { isPublished: true } }) : [];
+      const marked = results.length;
+      const published = results.length > 0 && results.every((r) => r.isPublished);
+      out.push({
+        id: a.id, facultyId: a.facultyId, faculty: `${facById.get(a.facultyId)?.name ?? "?"} (${facById.get(a.facultyId)?.employeeId ?? ""})`,
+        range: `${a.fromLabel} – ${a.toLabel}`, blockCount: a.blockIds.length,
+        totalStudents: students.length, markedCount: marked,
+        status: published ? "Published" : marked === 0 ? "Pending" : marked < students.length ? "In Progress" : "Complete",
+      });
+    }
+    return out;
+  },
+
+  // Candidate faculty for the paper-checking select/deselect dialog: subject
+  // teachers flagged, plus every active faculty for support from other years.
+  async paperCheckingFaculty(actorId: string, universityId: string, scheduleId: string) {
+    const ctx = await assertManager(actorId, universityId);
+    const sched = await prisma.examSchedule.findUnique({ where: { id: scheduleId } });
+    if (!sched) throw new ApiError(404, "NOT_FOUND", "Schedule not found.");
+    const exam = await getExamOrThrow(sched.examId, ctx);
+    const coords = await coordinatorIds(exam.semesterId);
+    const fbas = await prisma.facultyBatchAssignment.findMany({ where: { subjectId: sched.subjectId, semesterId: exam.semesterId }, select: { facultyId: true } });
+    const subjectSet = new Set(fbas.map((f) => f.facultyId));
+    const faculties = await prisma.faculty.findMany({
+      where: { universityId, isDean: false, isActive: true, deletedAt: null },
+      select: { id: true, name: true, employeeId: true, year: true },
+    });
+    // Subject teachers first, then all other faculty (own year, then year by year).
+    const rows = faculties.filter((f) => !coords.has(f.id)).map((f) => ({ ...f, isSubjectFaculty: subjectSet.has(f.id), isOwnYear: f.year === exam.yearLevel }));
+    rows.sort((a, b) =>
+      Number(b.isSubjectFaculty) - Number(a.isSubjectFaculty)
+      || Number(b.isOwnYear) - Number(a.isOwnYear)
+      || YEAR_ORDER.indexOf(a.year as YearLevel) - YEAR_ORDER.indexOf(b.year as YearLevel)
+      || a.name.localeCompare(b.name));
+    return {
+      examYear: exam.yearLevel,
+      subjectFacultyIds: [...subjectSet].filter((id) => !coords.has(id)),
+      faculties: rows,
+    };
+  },
+
+  // Checker (or coordinator/HOD) opens an allocation → the enrollment numbers of
+  // its blocks, with any marks already entered.
+  async paperCheckingStudents(facultyId: string, universityId: string, allocationId: string) {
+    const alloc = await prisma.paperCheckingAllocation.findUnique({ where: { id: allocationId } });
+    if (!alloc) throw new ApiError(404, "NOT_FOUND", "Allocation not found.");
+    const exam = await assertPaperCheckAccess(alloc, facultyId, universityId);
+    const { phaseId, number, entryMax } = await phaseEntryMax(exam.phaseId);
+    const subject = await prisma.subject.findUnique({ where: { id: alloc.subjectId }, select: { code: true, name: true } });
+    const students = await allocationStudents(alloc.blockIds, exam.semesterId);
+    const results = students.length ? await prisma.result.findMany({ where: { enrollmentId: { in: students.map((s) => s.enrollmentId) }, phaseId, subjectId: alloc.subjectId } }) : [];
+    const rById = new Map(results.map((r) => [r.enrollmentId, r]));
+    return {
+      allocation: {
+        id: alloc.id, examName: (await prisma.exam.findUnique({ where: { id: exam.id }, select: { name: true } }))?.name ?? "",
+        subjectCode: subject?.code ?? "?", subjectName: subject?.name ?? "", range: `${alloc.fromLabel} – ${alloc.toLabel}`,
+        entryMax, phaseNumber: number, isPublished: results.length > 0 && results.every((r) => r.isPublished),
+      },
+      students: students.map((s) => {
+        const r = rById.get(s.enrollmentId);
+        return { enrollmentId: s.enrollmentId, enrollmentNo: s.enrollmentNo, rollNo: s.rollNo, name: s.name, blockNumber: s.blockNumber,
+          enteredMarks: r ? r.marksObtained * (entryMax === 50 ? 2 : 1) : null, grade: r?.grade ?? null, isPublished: r?.isPublished ?? false };
+      }),
+    };
+  },
+
+  async savePaperCheckingMarks(facultyId: string, universityId: string, allocationId: string, marks: { enrollmentId: string; marks: number | null }[]) {
+    const alloc = await prisma.paperCheckingAllocation.findUnique({ where: { id: allocationId } });
+    if (!alloc) throw new ApiError(404, "NOT_FOUND", "Allocation not found.");
+    const exam = await assertPaperCheckAccess(alloc, facultyId, universityId);
+    const { phaseId, entryMax } = await phaseEntryMax(exam.phaseId);
+    const allowed = new Set((await allocationStudents(alloc.blockIds, exam.semesterId)).map((s) => s.enrollmentId));
+    let saved = 0;
+    for (const m of marks) {
+      if (m.marks == null) continue;
+      if (!allowed.has(m.enrollmentId)) throw new ApiError(400, "OUT_OF_RANGE", "Student is outside your assigned blocks.");
+      if (!Number.isFinite(m.marks) || m.marks < 0 || m.marks > entryMax) throw new ApiError(400, "VALIDATION_ERROR", `Marks must be between 0 and ${entryMax}.`);
+      const stored = entryMax === 50 ? m.marks / 2 : m.marks; // T4: /50 entry → /25 stored
+      const existing = await prisma.result.findUnique({ where: { enrollmentId_phaseId_subjectId: { enrollmentId: m.enrollmentId, phaseId, subjectId: alloc.subjectId } } });
+      if (existing?.isPublished) throw new ApiError(409, "ALREADY_PUBLISHED", "Marks are live — they can no longer be edited.");
+      const grade = gradeFromPct((stored / 25) * 100);
+      if (existing) await prisma.result.update({ where: { id: existing.id }, data: { marksObtained: stored, maxMarks: 25, grade, uploadedById: facultyId } });
+      else await prisma.result.create({ data: { enrollmentId: m.enrollmentId, phaseId, subjectId: alloc.subjectId, marksObtained: stored, maxMarks: 25, grade, uploadedById: facultyId } });
+      saved++;
+    }
+    await audit(exam.id, facultyId, "SAVE_MARKS", `alloc ${allocationId}: ${saved}`);
+    return { saved };
+  },
+
+  // A checker's own paper-checking duties (published exams), with live progress.
+  async myPaperChecking(facultyId: string, universityId: string) {
+    // Visible as soon as allocated — marks stay draft until the HOD publishes
+    // results, independent of supervision-duty publishing.
+    const allocs = await prisma.paperCheckingAllocation.findMany({
+      where: { facultyId, schedule: { exam: { universityId, deletedAt: null } } },
+      include: { schedule: { select: { date: true, exam: { select: { name: true, phaseId: true, semesterId: true } } } } },
+      orderBy: { createdAt: "asc" },
+    });
+    const subjIds = [...new Set(allocs.map((a) => a.subjectId))];
+    const subs = subjIds.length ? await prisma.subject.findMany({ where: { id: { in: subjIds } }, select: { id: true, code: true } }) : [];
+    const subCode = new Map(subs.map((s) => [s.id, s.code]));
+    const out = [];
+    for (const a of allocs) {
+      const students = await allocationStudents(a.blockIds, a.schedule.exam.semesterId);
+      const enrIds = students.map((s) => s.enrollmentId);
+      const phaseId = a.schedule.exam.phaseId;
+      const results = phaseId && enrIds.length ? await prisma.result.findMany({ where: { enrollmentId: { in: enrIds }, phaseId, subjectId: a.subjectId }, select: { isPublished: true } }) : [];
+      const marked = results.length;
+      const published = results.length > 0 && results.every((r) => r.isPublished);
+      out.push({
+        id: a.id, exam: a.schedule.exam.name, subjectCode: subCode.get(a.subjectId) ?? "?", date: dateStr(a.schedule.date),
+        range: `${a.fromLabel} – ${a.toLabel}`, totalStudents: students.length, markedCount: marked,
+        status: published ? "Published" : marked === 0 ? "Pending" : marked < students.length ? "In Progress" : "Complete",
+      });
+    }
+    return out;
+  },
+
+  // HOD pushes the phase's marks live: draft Results → published, students notified.
+  async publishResults(actorId: string, universityId: string, examId: string) {
+    const ctx = await assertManager(actorId, universityId);
+    const exam = await getExamOrThrow(examId, ctx);
+    const { phaseId } = await phaseEntryMax(exam.phaseId);
+    const allocs = await prisma.paperCheckingAllocation.findMany({ where: { examId } });
+    if (allocs.length === 0) throw new ApiError(400, "NO_PAPER_CHECKING", "Allocate paper checking and enter marks first.");
+    const enrollmentIds = new Set<string>();
+    let unmarked = 0;
+    for (const a of allocs) {
+      const students = await allocationStudents(a.blockIds, exam.semesterId);
+      const enrIds = students.map((s) => s.enrollmentId);
+      enrIds.forEach((id) => enrollmentIds.add(id));
+      const marked = enrIds.length ? await prisma.result.count({ where: { enrollmentId: { in: enrIds }, phaseId, subjectId: a.subjectId } }) : 0;
+      unmarked += Math.max(0, students.length - marked);
+    }
+    if (unmarked > 0) throw new ApiError(400, "INCOMPLETE_RESULTS", `${unmarked} paper(s) still have no marks. Complete marking before publishing.`);
+    const publishedAt = new Date();
+    await prisma.result.updateMany({ where: { phaseId, enrollmentId: { in: [...enrollmentIds] }, isPublished: false }, data: { isPublished: true, publishedAt } });
+    const enrs = await prisma.studentEnrollment.findMany({ where: { id: { in: [...enrollmentIds] } }, select: { studentId: true } });
+    const studentIds = [...new Set(enrs.map((e) => e.studentId))];
+    if (studentIds.length) {
+      await prisma.notification.createMany({
+        data: studentIds.map((studentId) => ({ universityId, studentId, type: "RESULT_UPLOADED", title: `${exam.name} results are live`, body: `Your ${exam.name} results have been published. Tap to view.`, linkPath: "/student/results" })),
+      });
+    }
+    await audit(examId, actorId, "PUBLISH_RESULTS", `${studentIds.length} students`);
+    return { published: true, students: studentIds.length };
   },
 
   // ── Standby (2 subject faculty per schedule) ──
@@ -587,6 +817,20 @@ export const examService = {
       create: { examId: exam.id, scheduleId, facultyId, slot },
     });
     return { scheduleId, slot, facultyId };
+  },
+
+  // Hand-pick the standby faculty (select/deselect dialog) — up to 2, coordinators excluded.
+  async setStandbyList(actorId: string, universityId: string, scheduleId: string, facultyIds: string[]) {
+    const ctx = await assertManager(actorId, universityId);
+    const sched = await prisma.examSchedule.findUnique({ where: { id: scheduleId } });
+    if (!sched) throw new ApiError(404, "NOT_FOUND", "Schedule not found.");
+    const exam = await getExamOrThrow(sched.examId, ctx);
+    const coords = await coordinatorIds(exam.semesterId);
+    const ids = [...new Set(facultyIds.filter((id) => !coords.has(id)))].slice(0, 2);
+    await prisma.standbyFaculty.deleteMany({ where: { scheduleId } });
+    for (let i = 0; i < ids.length; i++) await prisma.standbyFaculty.create({ data: { examId: exam.id, scheduleId, facultyId: ids[i], slot: i + 1 } });
+    await audit(exam.id, actorId, "SET_STANDBY", `sched ${scheduleId}: ${ids.length}`);
+    return { standby: ids.length };
   },
 
   async listStandby(actorId: string, universityId: string, scheduleId: string) {

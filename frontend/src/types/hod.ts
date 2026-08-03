@@ -214,7 +214,7 @@ export interface HodCalendarEvent {
   startDate?: string
   endDate?: string
   title: string
-  type: 'HOLIDAY' | 'PUBLIC_HOLIDAY' | 'READING_HOLIDAY' | 'SEMESTER_BREAK' | 'EXAM' | 'CULTURAL' | 'ACTIVITY' | 'PHASE' | 'OTHER'
+  type: 'REGULAR_TEACHING' | 'HOLIDAY' | 'PUBLIC_HOLIDAY' | 'READING_HOLIDAY' | 'SEMESTER_BREAK' | 'EXAM' | 'CULTURAL' | 'ACTIVITY' | 'PHASE' | 'OTHER'
   description?: string
 }
 export interface PhaseTimelineItem {

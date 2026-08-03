@@ -52,6 +52,7 @@ enum AnnouncementScope {
 }
 
 enum EventType {
+  REGULAR_TEACHING // timetable lectures are allowed on this academic-calendar date
   HOLIDAY
   PUBLIC_HOLIDAY // gazetted holiday (Republic Day, etc.) — overrides the timetable
   READING_HOLIDAY // study/reading day before exams
@@ -1098,26 +1099,6 @@ model ProxyLecture {
   @@index([proxyFacultyId, lectureDate])
   @@index([originalFacultyId, lectureDate])
   @@map("proxy_lectures")
-}
-
-// Paper-checking duty: coordinator assigns an enrollment-no range of one
-// batch+subject+phase to a faculty. Marks land in Result keyed the same way.
-model PaperCheckAssignment {
-  id               String   @id @default(uuid()) @db.Uuid
-  universityId     String   @db.Uuid
-  semesterId       String   @db.Uuid
-  phaseId          String   @db.Uuid
-  subjectId        String   @db.Uuid
-  batchId          String?  @db.Uuid // optional — checker students are derived from the subject's batches
-  facultyId        String   @db.Uuid // the checker
-  fromEnrollmentNo String
-  toEnrollmentNo   String
-  assignedById     String   @db.Uuid // coordinator faculty id
-  createdAt        DateTime @default(now())
-
-  @@index([facultyId, phaseId])
-  @@index([semesterId, phaseId])
-  @@map("paper_check_assignments")
 }
 
 // ─────────────────────────────────────────────────────────────

@@ -99,6 +99,19 @@ function parseSheet(xml: string, shared: string[]): Cell[][] {
   return grid;
 }
 
+export type XlsxCell = Cell;
+
+// Read the first worksheet of an .xlsx into a 0-indexed [row][col] grid. Dependency-free
+// (Node zlib only). Shared by the timetable and academic-calendar Excel parsers.
+export function readXlsxGrid(buffer: Buffer): Cell[][] {
+  const files = readZip(buffer);
+  const sheetKey = [...files.keys()].find((k) => /^xl\/worksheets\/sheet1\.xml$/i.test(k)) ?? [...files.keys()].find((k) => /^xl\/worksheets\/.*\.xml$/i.test(k));
+  if (!sheetKey) throw new Error("no worksheet");
+  const sharedBuf = [...files.entries()].find(([k]) => /sharedStrings\.xml$/i.test(k))?.[1];
+  const shared = sharedBuf ? parseSharedStrings(sharedBuf.toString("utf8")) : [];
+  return parseSheet(files.get(sheetKey)!.toString("utf8"), shared);
+}
+
 const str = (v: Cell): string => (v == null ? "" : String(v)).trim();
 const DAY_SET = new Set(["MON", "TUE", "WED", "THU", "FRI", "SAT"]);
 
@@ -114,14 +127,8 @@ function to24(raw: string): string | null {
 
 export function parseTimetableExcel(buffer: Buffer): TimetableParseResult {
   const errors: string[] = [];
-  let files: Map<string, Buffer>;
-  try { files = readZip(buffer); } catch { return { records: [], errors: ["Could not read the file — please upload a valid .xlsx timetable."] }; }
-
-  const sheetKey = [...files.keys()].find((k) => /^xl\/worksheets\/sheet1\.xml$/i.test(k)) ?? [...files.keys()].find((k) => /^xl\/worksheets\/.*\.xml$/i.test(k));
-  if (!sheetKey) return { records: [], errors: ["The Excel file has no worksheet."] };
-  const sharedBuf = [...files.entries()].find(([k]) => /sharedStrings\.xml$/i.test(k))?.[1];
-  const shared = sharedBuf ? parseSharedStrings(sharedBuf.toString("utf8")) : [];
-  const grid = parseSheet(files.get(sheetKey)!.toString("utf8"), shared);
+  let grid: Cell[][];
+  try { grid = readXlsxGrid(buffer); } catch { return { records: [], errors: ["Could not read the file — please upload a valid .xlsx timetable."] }; }
 
   // Locate the DIVISION header row and its batch columns.
   const divRow = grid.findIndex((row) => row && str(row[0]).toUpperCase() === "DIVISION");

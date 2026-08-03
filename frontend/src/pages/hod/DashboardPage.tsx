@@ -66,8 +66,8 @@ export default function DashboardPage() {
           )}
         </div>
         <div className="flex flex-wrap gap-2.5">
-          <Link to="/hod/exams" className="inline-flex items-center gap-2 rounded-sm bg-brand px-5 py-3 text-sm font-semibold text-white shadow-md transition hover:brightness-[1.06]">
-            <ShieldCheck size={16} /> Exam Panel
+          <Link to="/hod/exam-management" className="inline-flex items-center gap-2 rounded-sm bg-brand px-5 py-3 text-sm font-semibold text-white shadow-md transition hover:brightness-[1.06]">
+            <ShieldCheck size={16} /> Examination
           </Link>
           <Link to="/hod/results" className="inline-flex items-center gap-2 rounded-sm border border-border bg-surface px-5 py-3 text-sm font-semibold text-text-primary transition hover:bg-surface-2">
             <ClipboardList size={16} /> Results

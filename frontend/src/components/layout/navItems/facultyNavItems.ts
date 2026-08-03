@@ -37,7 +37,7 @@ export const facultyNavItems: NavSection[] = [
   {
     section: 'Data',
     items: [
-      { id: 'exams', label: 'Exams', path: '/faculty/exams', icon: PenLine },
+      { id: 'exams', label: 'Paper Checking', path: '/faculty/exams', icon: PenLine },
       { id: 'exam-duties', label: 'Exam Duties', path: '/faculty/exam-duties', icon: CalendarCheck },
       { id: 'results', label: 'Results', path: '/faculty/results', icon: ClipboardList },
       { id: 'analytics', label: 'Analytics', path: '/faculty/analytics', icon: Activity },

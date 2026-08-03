@@ -93,8 +93,8 @@ export default function ResultsPage() {
       title="Results"
       subtitle="Marks are entered by exam checkers and pushed live by your coordinators — browse and correct here"
       action={
-        <Link to="/hod/exams">
-          <Button variant="outline" leftIcon={<ShieldCheck size={15} />}>Exam Panel</Button>
+        <Link to="/hod/exam-management">
+          <Button variant="outline" leftIcon={<ShieldCheck size={15} />}>Examination</Button>
         </Link>
       }
     >

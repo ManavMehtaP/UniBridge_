@@ -43,6 +43,7 @@ export interface DayStatus {
   date?: string
   dayLabel?: string
   isWorkingDay: boolean
+  isTeachingDay: boolean
   status: string
   reason: string | null
 }
@@ -170,7 +171,7 @@ export interface TodayLecture {
 }
 export interface TodayLectures {
   date: string; dayOfWeek: number; isEditable: boolean
-  dayStatus: { isWorkingDay: boolean; status: string; reason?: string | null }
+  dayStatus: { isWorkingDay: boolean; isTeachingDay: boolean; status: string; reason?: string | null }
   lectures: TodayLecture[]
 }
 

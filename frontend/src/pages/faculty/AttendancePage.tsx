@@ -115,15 +115,15 @@ export default function FacultyAttendancePage() {
 
       <div className="mb-3 flex items-center gap-2 text-sm">
         <span className="font-semibold text-text-primary">{dateLabel}</span>
-        {today.data?.dayStatus.isWorkingDay && <Badge tone="primary" dot>Today</Badge>}
-        {today.data && !today.data.dayStatus.isWorkingDay && <Badge tone="warning" dot>{today.data.dayStatus.reason ?? today.data.dayStatus.status}</Badge>}
+        {today.data?.dayStatus.isTeachingDay && <Badge tone="primary" dot>Today</Badge>}
+        {today.data && !today.data.dayStatus.isTeachingDay && <Badge tone="warning" dot>{today.data.dayStatus.reason ?? 'No Regular Teaching'}</Badge>}
       </div>
 
       {today.isLoading ? (
         <CardSkeleton height={300} />
-      ) : today.data && !today.data.dayStatus.isWorkingDay ? (
-        <EmptyState icon={<AlertTriangle size={22} />} title={`No attendance — ${today.data.dayStatus.reason ?? today.data.dayStatus.status}`}
-          description="The academic calendar marks today as a non-working day, so attendance is disabled." />
+      ) : today.data && !today.data.dayStatus.isTeachingDay ? (
+        <EmptyState icon={<AlertTriangle size={22} />} title={`No lectures — ${today.data.dayStatus.reason ?? 'No Regular Teaching'}`}
+          description="The academic calendar has no Regular Teaching entry for today, so attendance is blank." />
       ) : groups.length === 0 ? (
         <EmptyState icon={<AlertTriangle size={22} />} title="No lectures today"
           description="You have no timetabled lectures today. If a coordinator assigns you a proxy lecture, it will appear here." />

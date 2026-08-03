@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { CalendarDays, CalendarRange, LayoutList, MapPin, Plus, Trash2, Upload } from 'lucide-react'
+import { CalendarDays, CalendarRange, Download, LayoutList, MapPin, Plus, Trash2, Upload } from 'lucide-react'
 import { addDays, format, startOfWeek } from 'date-fns'
 import { hodApi } from '@/api/hod'
 import { errorMessage } from '@/api/client'
@@ -119,6 +119,7 @@ export default function HodTimetablePage() {
         readOnly ? undefined : (
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" leftIcon={<Trash2 size={15} />} onClick={() => setConfirmClear(true)} disabled={!batchId || slots.length === 0}>Delete Timetable</Button>
+          <Button variant="outline" leftIcon={<Download size={15} />} onClick={hodApi.timetable.downloadTemplate}>Download Template</Button>
           <Button variant="outline" leftIcon={<Upload size={15} />} onClick={() => setShowUpload(true)}>Upload Timetable</Button>
           <Button leftIcon={<Plus size={15} />} onClick={() => setEditing({ dayOfWeek: 1 })} disabled={!batchId}>Add Lecture</Button>
         </div>
@@ -230,6 +231,7 @@ export default function HodTimetablePage() {
         title="Upload Timetable (Excel)"
         accept=".xlsx"
         onUpload={hodApi.timetable.uploadExcel}
+        onDownloadTemplate={hodApi.timetable.downloadTemplate}
         buildForm={(form) => {
           if (scope.data?.activeSemester.id) form.append('semesterId', scope.data.activeSemester.id)
           if (replaceExisting) form.append('replaceExisting', '1')
