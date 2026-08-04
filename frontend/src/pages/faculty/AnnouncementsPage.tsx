@@ -83,22 +83,24 @@ function CreateAnnouncementModal({ open, onClose, onSuccess }: { open: boolean; 
   const scope = useFacultyScope()
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
-  const [scopeType, setScopeType] = useState<'ALL' | 'BATCH'>('ALL')
-  const [batchId, setBatchId] = useState('')
+  const [scopeType, setScopeType] = useState<'BATCH' | 'YEAR_LEVEL'>('BATCH')
+  const [scopeValue, setScopeValue] = useState('')
 
   const batchOpts = Array.from(new Map(scope.data?.assignments.map((a) => [a.batch.id, a.batch.code]) ?? []).entries())
     .map(([id, code]) => ({ value: id, label: `Batch ${code}` }))
+  const yearLevelOpts = Array.from(new Set(scope.data?.assignments.map((a) => a.batch.yearLevel) ?? []))
+    .map((yearLevel) => ({ value: yearLevel, label: yearLevel }))
 
   const create = useMutation({
     mutationFn: () => facultyApi.createAnnouncement({
       title, body, scope: scopeType,
-      batchId: scopeType === 'BATCH' ? batchId : undefined,
+      scopeValue,
     }),
     onSuccess: () => { toast.success('Posted'); onSuccess(); close() },
     onError: (e) => toast.error(errorMessage(e)),
   })
 
-  function close() { setTitle(''); setBody(''); setScopeType('ALL'); setBatchId(''); onClose() }
+  function close() { setTitle(''); setBody(''); setScopeType('BATCH'); setScopeValue(''); onClose() }
 
   return (
     <Modal
@@ -106,7 +108,7 @@ function CreateAnnouncementModal({ open, onClose, onSuccess }: { open: boolean; 
       footer={
         <>
           <Button variant="outline" onClick={close}>Cancel</Button>
-          <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!title || !body || (scopeType === 'BATCH' && !batchId)}>Post</Button>
+          <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!title || !body || !scopeValue}>Post</Button>
         </>
       }
     >
@@ -122,17 +124,15 @@ function CreateAnnouncementModal({ open, onClose, onSuccess }: { open: boolean; 
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Audience</label>
-            <Select value={scopeType} onChange={(e) => setScopeType(e.target.value as 'ALL' | 'BATCH')}>
-              <option value="ALL">All my batches</option>
+            <Select value={scopeType} onChange={(e) => { setScopeType(e.target.value as 'BATCH' | 'YEAR_LEVEL'); setScopeValue('') }}>
               <option value="BATCH">Specific batch</option>
+              <option value="YEAR_LEVEL">Year level</option>
             </Select>
           </div>
-          {scopeType === 'BATCH' && (
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Batch *</label>
-              <Select value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Select" options={batchOpts} />
-            </div>
-          )}
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">{scopeType === 'BATCH' ? 'Batch *' : 'Year level *'}</label>
+            <Select value={scopeValue} onChange={(e) => setScopeValue(e.target.value)} placeholder="Select" options={scopeType === 'BATCH' ? batchOpts : yearLevelOpts} />
+          </div>
         </div>
       </div>
     </Modal>

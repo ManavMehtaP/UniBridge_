@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { FileText, Sparkles } from 'lucide-react'
+import { Download, FileText, Sparkles } from 'lucide-react'
 import { studentApi } from '@/api/student'
 import { errorMessage } from '@/api/client'
 import { PageShell } from '@/components/shared/PageShell'
@@ -32,10 +32,19 @@ type SummaryPayload = {
 export default function StudentNotesPage() {
   const [search, setSearch] = useState('')
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
+  const [previewOf, setPreviewOf] = useState<{ id: string; title: string; mimeType?: string; objectUrl?: string | null } | null>(null)
   const subjects = useQuery({ queryKey: ['student', 'subjects'], queryFn: studentApi.subjects })
   const [subjectId, setSubjectId] = useState('')
   const [parentId, setParentId] = useState<string | null>(null)
   const drive = useQuery({ queryKey: ['student', 'note-drive', subjectId, parentId, search], queryFn: () => studentApi.noteDrive({ subjectId, parentId: parentId ?? undefined, search: search || undefined }), enabled: !!subjectId })
+  const preview = useQuery({
+    queryKey: ['student', 'note-file', previewOf?.id],
+    queryFn: async () => {
+      const blob = await studentApi.noteFile(previewOf!.id, 'inline')
+      return URL.createObjectURL(blob)
+    },
+    enabled: !!previewOf?.id,
+  })
   const summary = useQuery({
     queryKey: ['student', 'note-summary', activeNoteId],
     queryFn: () => studentApi.smartNoteSummary(activeNoteId!),
@@ -48,6 +57,47 @@ export default function StudentNotesPage() {
   })
   const subjectOptions = (subjects.data?.subjects ?? []) as Array<{ id: string; code: string; name: string }>
   useEffect(() => { if (!subjectId && subjectOptions[0]) setSubjectId(subjectOptions[0].id) }, [subjectId, subjectOptions])
+  useEffect(() => {
+    if (!previewOf || !preview.data) return
+    if (previewOf.objectUrl === preview.data) return
+    setPreviewOf((current) => current ? { ...current, objectUrl: preview.data } : current)
+  }, [preview.data, previewOf])
+  useEffect(() => () => {
+    if (previewOf?.objectUrl) URL.revokeObjectURL(previewOf.objectUrl)
+  }, [previewOf?.objectUrl])
+
+  async function openPreview(file: { id: string; title: string; mimeType?: string }) {
+    if (previewOf?.objectUrl) URL.revokeObjectURL(previewOf.objectUrl)
+    setPreviewOf({ id: file.id, title: file.title, mimeType: file.mimeType, objectUrl: null })
+  }
+
+  async function downloadPreviewFile() {
+    if (!previewOf) return
+    try {
+      const blob = await studentApi.noteFile(previewOf.id, 'download')
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = previewOf.title
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Could not download file')
+    }
+  }
+
+  function closePreview() {
+    if (previewOf?.objectUrl) URL.revokeObjectURL(previewOf.objectUrl)
+    setPreviewOf(null)
+  }
+
+  const canInlinePreview = !!previewOf?.mimeType && (
+    previewOf.mimeType.startsWith('image/')
+    || previewOf.mimeType.startsWith('text/')
+    || previewOf.mimeType === 'application/pdf'
+  )
 
   return (
     <PageShell title="Notes" subtitle="Study materials organised like a shared drive">
@@ -61,10 +111,32 @@ export default function StudentNotesPage() {
       {drive.isLoading || subjects.isLoading ? (
         <CardSkeleton height={200} />
       ) : drive.data ? (
-        <NoteDrive breadcrumbs={drive.data.breadcrumbs} folders={drive.data.folders} files={drive.data.files} onOpenFolder={(id) => setParentId(id)} onBreadcrumb={setParentId} onDownload={async (file) => { try { const { downloadUrl } = await studentApi.noteDownload(file.id); if (downloadUrl) window.open(downloadUrl, '_blank', 'noreferrer') } catch { toast.error('Could not open file') } }} onSummary={(file) => setActiveNoteId(file.id)} />
+        <NoteDrive breadcrumbs={drive.data.breadcrumbs} folders={drive.data.folders} files={drive.data.files} downloadLabel="Preview" onOpenFolder={(id) => setParentId(id)} onBreadcrumb={setParentId} onDownload={openPreview} onSummary={(file) => setActiveNoteId(file.id)} />
       ) : (
         <EmptyState icon={<FileText size={22} />} title="Select a subject" description="Choose a subject to browse its folders." />
       )}
+
+      <Modal
+        open={!!previewOf}
+        onClose={closePreview}
+        size="xl"
+        title={previewOf?.title ?? 'File preview'}
+        footer={<><Button variant="outline" onClick={closePreview}>Cancel</Button><Button leftIcon={<Download size={15} />} onClick={downloadPreviewFile}>Download</Button></>}
+      >
+        <div className="space-y-4">
+          {preview.isLoading ? (
+            <CardSkeleton height={420} />
+          ) : !previewOf?.objectUrl ? (
+            <EmptyState icon={<FileText size={22} />} title="Preview unavailable" description="The file could not be loaded right now." className="border-0" />
+          ) : canInlinePreview ? (
+            previewOf.mimeType?.startsWith('image/')
+              ? <img src={previewOf.objectUrl} alt={previewOf.title} className="max-h-[70vh] w-full rounded-card object-contain" />
+              : <iframe src={previewOf.objectUrl} title={previewOf.title} className="h-[70vh] w-full rounded-card border border-border" />
+          ) : (
+            <EmptyState icon={<FileText size={22} />} title="Preview not supported" description="Use the Download button above to save and open this file." className="border-0" />
+          )}
+        </div>
+      </Modal>
 
       <Modal
         open={!!activeNoteId}
