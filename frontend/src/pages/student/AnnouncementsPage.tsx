@@ -48,7 +48,7 @@ export default function StudentAnnouncementsPage() {
                   </div>
                   <p className="mt-1.5 whitespace-pre-wrap text-sm text-text-secondary">{a.body}</p>
                   <div className="mt-2 text-[11px] text-text-muted">
-                    {a.senderName} · {formatDistanceToNow(new Date(a.createdAt), { addSuffix: true })}
+                    {a.senderName} · {new Date(a.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · {formatDistanceToNow(new Date(a.createdAt), { addSuffix: true })}
                   </div>
                 </div>
                 {!a.isRead && (

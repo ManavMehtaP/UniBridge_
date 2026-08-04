@@ -290,9 +290,11 @@ function SupervisionTab({ scheduleId }: { scheduleId: string }) {
   const gen = useMutation({ mutationFn: (ids?: string[]) => examApi.generateSupervision(scheduleId, ids), onSuccess: (r: { unfilled?: number }) => { toast.success(r.unfilled ? `Allocated · ${r.unfilled} unfilled` : 'Supervision allocated'); setPick(false); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
   const edit = useMutation({ mutationFn: ({ id, facultyId }: { id: string; facultyId: string }) => examApi.editSupervision(id, { facultyId }), onSuccess: () => { toast.success('Updated'); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
   const freeFac = (avail.data?.faculties ?? []).filter((f) => f.free)
-  const pickerFaculty: PickerFaculty[] = (avail.data?.faculties ?? []).map((f) => ({
+  // Only free faculty can invigilate — busy ones are hidden. Availability is already
+  // sorted own-year first, then year by year.
+  const pickerFaculty: PickerFaculty[] = freeFac.map((f) => ({
     id: f.facultyId, label: `${f.name} (${f.employeeId})`,
-    hint: f.free ? (f.isOwnYear ? 'own year' : f.year ?? '') : `busy · ${f.reason ?? ''}`, preselected: f.free,
+    hint: f.isOwnYear ? 'own year' : f.year ?? '', preselected: true,
   }))
   return (
     <Card className="overflow-hidden">
@@ -320,7 +322,7 @@ function SupervisionTab({ scheduleId }: { scheduleId: string }) {
           </tbody>
         </Table>
       )}
-      <FacultyPickerModal open={pick} title="Select supervision faculty" subtitle="Only free faculty can invigilate; busy ones are shown for reference."
+      <FacultyPickerModal open={pick} title="Select supervision faculty" subtitle="Free faculty only, own year first. Busy faculty are hidden."
         faculty={pickerFaculty} loading={gen.isPending} onClose={() => setPick(false)} onConfirm={(ids) => gen.mutate(ids)} />
     </Card>
   )

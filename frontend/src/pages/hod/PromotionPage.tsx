@@ -35,7 +35,10 @@ interface PromoContext {
   branchesInScope: string[]
   hods: { id: string; name: string; employeeId: string }[]
   branches: { code: string; name: string }[]
+  usedBatchInitials?: string[]
 }
+const ALPHA = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+const firstFreeInitial = (used: string[] = []) => ALPHA.split('').find((c) => !used.includes(c)) ?? 'E'
 interface LeaderRow {
   rank: number; enrollmentId: string; enrollmentNo: string; name: string
   branch: string; batchCode: string; rollNo: string; aggregatePct: number | null; status: 'Pass' | 'Fail' | 'Pending'
@@ -148,7 +151,7 @@ function YearFlow({ ctx }: { ctx: PromoContext }) {
   const [step, setStep] = useState(0)
   const [hodId, setHodId] = useState('')
   const [branch, setBranch] = useState('')
-  const [batchInitial, setBatchInitial] = useState('C')
+  const [batchInitial, setBatchInitial] = useState(() => firstFreeInitial(ctx.usedBatchInitials))
   const [batchCount, setBatchCount] = useState(5)
   const [capacity, setCapacity] = useState(60)
   const [confirm, setConfirm] = useState(false)

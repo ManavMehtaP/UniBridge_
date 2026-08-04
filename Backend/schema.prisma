@@ -861,6 +861,7 @@ model Quiz {
   description   String?
   isAiGenerated Boolean   @default(false)
   isPublished   Boolean   @default(false)
+  startDate     DateTime? // quiz opens on this date; before it students cannot attempt
   dueDate       DateTime?
   timeLimitMins Int? // null = untimed
   maxAttempts   Int       @default(1)

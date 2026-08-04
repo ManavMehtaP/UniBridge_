@@ -118,21 +118,24 @@ function CreateQuizModal({ open, onClose, subjectOpts, assignments, semesterId, 
   const [description, setDescription] = useState('')
   const [subjectId, setSubjectId] = useState('')
   const [timeLimitMins, setTimeLimitMins] = useState('')
+  const [startDate, setStartDate] = useState('')
   const [dueDate, setDueDate] = useState('')
   const [batchIds, setBatchIds] = useState<string[]>([])
   const batches = useMemo(() => assignments.filter((assignment) => assignment.subject.id === subjectId).map((assignment) => assignment.batch), [assignments, subjectId])
+  const dateError = startDate && dueDate && startDate > dueDate ? 'Start date must be on or before the due date.' : ''
 
   const create = useMutation({
     mutationFn: () => facultyApi.createQuiz({
       title, description, subjectId, semesterId, batchIds,
       timeLimitMins: timeLimitMins ? Number(timeLimitMins) : null,
+      startDate: startDate || null,
       dueDate: dueDate || null,
     }),
     onSuccess: () => { toast.success('Quiz created'); onSuccess(); close() },
     onError: (e) => toast.error(errorMessage(e)),
   })
 
-  function close() { setTitle(''); setDescription(''); setSubjectId(''); setTimeLimitMins(''); setDueDate(''); setBatchIds([]); onClose() }
+  function close() { setTitle(''); setDescription(''); setSubjectId(''); setTimeLimitMins(''); setStartDate(''); setDueDate(''); setBatchIds([]); onClose() }
 
   return (
     <Modal
@@ -140,7 +143,7 @@ function CreateQuizModal({ open, onClose, subjectOpts, assignments, semesterId, 
       footer={
         <>
           <Button variant="outline" onClick={close}>Cancel</Button>
-          <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!title || !subjectId || !semesterId || batchIds.length === 0}>Create</Button>
+          <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!title || !subjectId || !semesterId || batchIds.length === 0 || !!dateError}>Create</Button>
         </>
       }
     >
@@ -158,16 +161,21 @@ function CreateQuizModal({ open, onClose, subjectOpts, assignments, semesterId, 
           <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Description</label>
           <Textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Brief instructions" />
         </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Time Limit (min)</label>
+          <Input type="number" value={timeLimitMins} onChange={(e) => setTimeLimitMins(e.target.value)} placeholder="30" />
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Time Limit (min)</label>
-            <Input type="number" value={timeLimitMins} onChange={(e) => setTimeLimitMins(e.target.value)} placeholder="30" />
+            <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Start Date</label>
+            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-10 w-full rounded-sm border border-border bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10" />
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase text-text-secondary">Due Date</label>
-            <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="h-10 w-full rounded-sm border border-border bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10" />
+            <input type="date" value={dueDate} min={startDate || undefined} onChange={(e) => setDueDate(e.target.value)} className="h-10 w-full rounded-sm border border-border bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10" />
           </div>
         </div>
+        {dateError && <p className="text-xs text-danger">{dateError}</p>}
       </div>
     </Modal>
   )

@@ -145,12 +145,14 @@ export const studentApi = {
   aiSuggest: (body: Record<string, unknown>) =>
     api.post('/student/study-planner/ai-suggest', body).then((r) => r.data),
 
-  leaderboard: (scope: 'year' | 'batch') => api.get<LeaderboardResponse>('/student/leaderboard', { params: { scope } }).then((r) => r.data),
+  leaderboard: (params: { scope: 'year' | 'batch'; phases?: string[]; subjectId?: string }) =>
+    api.get<LeaderboardResponse>('/student/leaderboard', { params: { scope: params.scope, phases: params.phases?.length ? params.phases.join(',') : undefined, subjectId: params.subjectId || undefined } }).then((r) => r.data),
 }
 
 export interface LeaderboardEntry { rank: number; name: string; enrollmentNo: string; batchCode: string; totalMarks: number; maxMarks: number; isMe: boolean }
 export interface LeaderboardResponse {
   scope: 'year' | 'batch'; yearLevel: string | null; batchCode: string
+  phases: string[]; subjectId: string | null
   myRank: number; myTotal: number; myMax: number; totalStudents: number
   leaderboard: LeaderboardEntry[]
 }

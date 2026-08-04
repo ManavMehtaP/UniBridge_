@@ -77,6 +77,7 @@ export interface StudentQuiz {
   description?: string
   subject: { code: string; name: string }
   timeLimitMins?: number | null
+  startDate?: string | null
   dueDate?: string | null
   createdAt?: string
   attemptedAt?: string | null
@@ -88,7 +89,7 @@ export interface StudentQuiz {
   chapters?: string[]
   maxAttempts?: number
   attemptsTaken?: number
-  status?: 'PENDING' | 'RETRY' | 'ATTEMPTED' | 'EXPIRED'
+  status?: 'PENDING' | 'RETRY' | 'ATTEMPTED' | 'EXPIRED' | 'UPCOMING'
 }
 
 export interface StudentAnnouncement {

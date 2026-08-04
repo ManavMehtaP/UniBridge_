@@ -355,8 +355,9 @@ studentRouter.get("/study-planner", asyncHandler(async (req, res) => {
   res.json(await portalService.studentStudyPlanner(req.user!.id, req.user!.universityId));
 }));
 
+const phaseKeysFrom = (q: unknown) => String(q ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 studentRouter.get("/leaderboard/my-rank", asyncHandler(async (req, res) => {
-  res.json(await portalService.studentLeaderboardMyRank(req.user!.id, req.user!.universityId, req.query.scope === "year" ? "year" : "batch"));
+  res.json(await portalService.studentLeaderboardMyRank(req.user!.id, req.user!.universityId, req.query.scope === "year" ? "year" : "batch", phaseKeysFrom(req.query.phases), req.query.subjectId as string | undefined));
 }));
 
 studentRouter.get("/leaderboard/subject/:subjectId", asyncHandler(async (req, res) => {
@@ -371,7 +372,7 @@ studentRouter.get("/leaderboard/subject/:subjectId", asyncHandler(async (req, re
 }));
 
 studentRouter.get("/leaderboard", asyncHandler(async (req, res) => {
-  res.json(await portalService.studentLeaderboard(req.user!.id, req.user!.universityId, req.query.scope === "year" ? "year" : "batch"));
+  res.json(await portalService.studentLeaderboard(req.user!.id, req.user!.universityId, req.query.scope === "year" ? "year" : "batch", phaseKeysFrom(req.query.phases), req.query.subjectId as string | undefined));
 }));
 
 // ── Notifications ──

@@ -53,7 +53,7 @@ export default function AnnouncementsPage() {
                     <Badge tone={a.scope === 'ALL' ? 'primary' : a.scope === 'BATCH' ? 'teal' : 'purple'}>{a.scopeLabel ?? a.scope}</Badge>
                   </div>
                   <p className="mt-1.5 whitespace-pre-wrap text-sm text-text-secondary">{a.body}</p>
-                  <div className="mt-2 text-[11px] text-text-muted">{formatDistanceToNow(new Date(a.createdAt), { addSuffix: true })}</div>
+                  <div className="mt-2 text-[11px] text-text-muted">{new Date(a.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} · {formatDistanceToNow(new Date(a.createdAt), { addSuffix: true })}</div>
                 </div>
                 <button onClick={() => setDeleteOf(a)} className="text-text-muted hover:text-danger" title="Delete">
                   <Trash2 size={15} />

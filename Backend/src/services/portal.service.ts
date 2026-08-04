@@ -201,6 +201,17 @@ async function resolveDayStatus(universityId: string, dateStr?: string): Promise
   return { date: day.toISOString().slice(0, 10), dayOfWeek, dayLabel: DAY_NAMES[dayOfWeek], isWorkingDay, isTeachingDay, status, reason, isExamDay, events };
 }
 
+// Weekdays (0=Sun..6=Sat) that the academic calendar marks as Regular Teaching. The weekly
+// timetable shows lectures only for these — so a weekly view reflects the calendar, and an
+// un-uploaded calendar (no teaching days) shows no lectures at all.
+async function teachingWeekdays(universityId: string): Promise<Set<number>> {
+  const events = await prisma.calendarEvent.findMany({
+    where: { universityId, deletedAt: null, OR: [{ eventType: "REGULAR_TEACHING" }, { title: { contains: "Regular Teaching", mode: "insensitive" } }] },
+    select: { startDate: true },
+  });
+  return new Set(events.map((e) => e.startDate.getUTCDay()));
+}
+
 function parseCsvRecords(fileBuffer: Buffer, requiredHeaders: string[]) {
   const raw = fileBuffer.toString("utf8").trim();
   if (!raw) throw new ApiError(422, "UNPROCESSABLE_CSV", "CSV file is empty.");
@@ -283,6 +294,14 @@ function isQuizExpired(dueDate: Date | null): boolean {
   const today = new Date();
   return dueDate.getFullYear() < today.getFullYear()
     || (dueDate.getFullYear() === today.getFullYear() && (dueDate.getMonth() < today.getMonth() || (dueDate.getMonth() === today.getMonth() && dueDate.getDate() < today.getDate())));
+}
+
+// A quiz with a future start date is not yet attemptable (compared date-only).
+function isQuizNotStarted(startDate: Date | null): boolean {
+  if (!startDate) return false;
+  const today = new Date();
+  return startDate.getFullYear() > today.getFullYear()
+    || (startDate.getFullYear() === today.getFullYear() && (startDate.getMonth() > today.getMonth() || (startDate.getMonth() === today.getMonth() && startDate.getDate() > today.getDate())));
 }
 
 function normalizeQuizOptions(value: unknown): Array<{ id: string; text: string }> {
@@ -2572,16 +2591,20 @@ export const portalService = {
       else failed++;
     }
     const nextYearLevel = sem.yearLevel === "FY" ? "SY" : sem.yearLevel === "SY" ? "TY" : "FINAL";
-    const nextSemester = mode === "SEMESTER"
-      ? await prisma.semester.findFirst({ where: { academicYearId: sem.academicYearId, number: sem.number + 1 }, select: { id: true, label: true, number: true } })
-      : null;
-    const nextYear = mode === "YEAR"
-      ? await prisma.academicYear.findFirst({ where: { universityId: scope.universityId, label: { gt: (await getAcademicYear(sem.academicYearId)).label } }, orderBy: { label: "asc" }, select: { id: true, label: true } })
-      : null;
-    const [hods, branches] = await Promise.all([
+    // A cohort lives in ONE academicYear across all 8 semesters, so the next step — whether a
+    // within-year semester or a year change — is always semester number+1 in the SAME cohort.
+    const nextSemester = await prisma.semester.findFirst({ where: { academicYearId: sem.academicYearId, number: sem.number + 1 }, select: { id: true, label: true, number: true } });
+    const currentAY = await getAcademicYear(sem.academicYearId);
+    // In YEAR mode the wizard runs in-cohort; expose the cohort year so the frontend proceeds.
+    const nextYear = mode === "YEAR" ? { id: currentAY.id, label: currentAY.label } : null;
+    const [hods, branches, cohortBatches] = await Promise.all([
       prisma.faculty.findMany({ where: { universityId: scope.universityId, isHod: true, deletedAt: null }, select: { id: true, name: true, employeeId: true }, orderBy: { name: "asc" } }),
       prisma.universityBranch.findMany({ where: { universityId: scope.universityId }, orderBy: { code: "asc" }, select: { code: true, name: true } }),
+      prisma.batch.findMany({ where: { academicYearId: sem.academicYearId }, select: { code: true } }),
     ]);
+    // Batch-code initials already used in this cohort — the year wizard defaults to a free one so
+    // new-year batches never collide with a vacated year's codes.
+    const usedBatchInitials = [...new Set(cohortBatches.map((b) => b.code[0]?.toUpperCase()).filter(Boolean))].sort();
     return {
       mode,
       activeSemester: { id: sem.id, label: sem.label, number: sem.number, yearLevel: sem.yearLevel },
@@ -2589,7 +2612,7 @@ export const portalService = {
       currentStudentCount: enrs.length,
       passedCount: passed, failedCount: failed, pendingCount: pending,
       branchesInScope: [...new Set(enrs.map((e) => e.student.branch))].sort(),
-      hods, branches,
+      hods, branches, usedBatchInitials,
     };
   },
 
@@ -2663,23 +2686,26 @@ export const portalService = {
     // ponytail: atomic — enrollments carried forward, HOD batch scopes moved to the new semester,
     // and the active semester advanced, all together. Prevents the "students vanish after promotion"
     // state where enrollments moved but scope/active semester lagged behind.
+    const keep = enrs.filter((e) => !detain.has(e.id));
+    // Bulk updateMany + createMany (2 queries) instead of 2 queries PER student — a 300+ student
+    // cohort would otherwise blow Prisma's interactive-transaction timeout and roll everything back.
     const promoted = await prisma.$transaction(async (tx) => {
-      let n = 0;
-      for (const e of enrs) {
-        if (detain.has(e.id)) continue;
-        await tx.studentEnrollment.update({ where: { id: e.id }, data: { isCurrent: false } });
-        await tx.studentEnrollment.create({
-          data: { studentId: e.studentId, semesterId: nextId, batchId: e.batchId, rollNo: e.rollNo, yearLevel: next!.yearLevel, isCurrent: true, promotedFromId: e.id },
+      if (keep.length) {
+        await tx.studentEnrollment.updateMany({ where: { id: { in: keep.map((e) => e.id) } }, data: { isCurrent: false } });
+        await tx.studentEnrollment.createMany({
+          data: keep.map((e) => ({ studentId: e.studentId, semesterId: nextId, batchId: e.batchId, rollNo: e.rollNo, yearLevel: next!.yearLevel, isCurrent: true, promotedFromId: e.id })),
         });
-        n++;
       }
-      // move HOD batch ownership to the new semester (batchId is @unique on the scope)
+      // move THIS HOD's batch ownership to the new semester (batchId is @unique on the scope)
       await tx.hodBatchScope.updateMany({ where: { batchId: { in: scope.hodBatchIds } }, data: { semesterId: nextId } });
-      // advance the active semester within this batch/year
-      await tx.semester.update({ where: { id: sem.id }, data: { status: "COMPLETE" } });
+      // The next semester becomes active. The old one is completed ONLY once every co-year HOD
+      // has promoted out of it (no current enrollments left) — so multiple HODs sharing the
+      // semester can promote independently without stranding each other.
       await tx.semester.update({ where: { id: nextId }, data: { status: "ACTIVE" } });
-      return n;
-    });
+      const remaining = await tx.studentEnrollment.count({ where: { semesterId: sem.id, isCurrent: true } });
+      if (remaining === 0) await tx.semester.update({ where: { id: sem.id }, data: { status: "COMPLETE" } });
+      return keep.length;
+    }, { timeout: 30000, maxWait: 15000 });
     await this.logActivity(scope.universityId, scope.userId, "PROMOTION_EXECUTED", `Promoted to ${next.label}`, `${promoted} students promoted from ${sem.label} to ${next.label}. Detained: ${detain.size}.`);
     return { mode: "SEMESTER", promoted, detained: detain.size, fromSemester: sem.label, toSemester: next.label };
   },
@@ -2689,11 +2715,21 @@ export const portalService = {
     if (!sem.id) throw new ApiError(400, "NO_ACTIVE_SEMESTER", "No active semester.");
     if (sem.number % 2 !== 0) throw new ApiError(400, "NOT_YEAR_POINT", "This is a mid-year semester — use semester promotion.");
     const curYear = await getAcademicYear(sem.academicYearId);
-    const nextYear = await prisma.academicYear.findFirst({ where: { universityId: scope.universityId, label: { gt: curYear.label } }, orderBy: { label: "asc" } });
-    if (!nextYear) throw new ApiError(400, "NO_NEXT_YEAR", "Create the next academic year first (University portal).");
     const nextYL = sem.yearLevel === "FY" ? "SY" : sem.yearLevel === "SY" ? "TY" : "FINAL";
-    const nextSem = await prisma.semester.findFirst({ where: { academicYearId: nextYear.id, yearLevel: nextYL as any }, orderBy: { number: "asc" } });
-    if (!nextSem) throw new ApiError(400, "NO_NEXT_SEMESTER", `Create the first ${nextYL} semester in ${nextYear.label} first.`);
+    // Year change stays IN the same cohort (academicYear) — the whole 8-semester journey lives
+    // there. The next year level's first semester is simply semester number+1; create it if the
+    // cohort doesn't have it yet (mirrors semester promotion).
+    let nextSem = await prisma.semester.findFirst({ where: { academicYearId: sem.academicYearId, number: sem.number + 1 } });
+    if (!nextSem) {
+      const start = new Date(sem.endDate);
+      const end = new Date(start.getTime() + 1000 * 60 * 60 * 24 * 120);
+      nextSem = await prisma.semester.create({
+        data: { universityId: scope.universityId, academicYearId: sem.academicYearId, number: sem.number + 1, label: `Semester ${sem.number + 1}`, yearLevel: nextYL as any, status: "UPCOMING", startDate: start, endDate: end },
+      });
+      const span = (end.getTime() - start.getTime()) / 4;
+      await prisma.phase.createMany({ data: [1, 2, 3, 4].map((i) => ({ semesterId: nextSem!.id, label: `T${i}`, number: i, startDate: new Date(start.getTime() + span * (i - 1)), endDate: new Date(start.getTime() + span * i) })) });
+    }
+    const nextYear = curYear; // same cohort
     const hod = await prisma.faculty.findFirst({ where: { id: body.destinationHodId, universityId: scope.universityId, isHod: true, deletedAt: null } });
     if (!hod) throw new ApiError(404, "HOD_NOT_FOUND", "Destination HOD not found.");
 
@@ -2704,14 +2740,26 @@ export const portalService = {
       throw new ApiError(400, "INSUFFICIENT_CAPACITY", `${promotable.length} students but only ${body.batchCount * body.capacity} seats. Add batches or capacity.`);
     }
     const initial = (body.batchInitial || "C").toUpperCase().slice(0, 1);
+    // Pre-fetch studentIds for the whole promotable set (one query) so the transaction does no
+    // per-student lookups.
+    const stuByEnr = new Map((await prisma.studentEnrollment.findMany({
+      where: { id: { in: promotable.map((r) => r.enrollmentId) } }, select: { id: true, studentId: true },
+    })).map((e) => [e.id, e.studentId]));
     // ponytail: ALL year-promotion writes (batches, scopes, enrollment carry-forward) in ONE
     // transaction — a partial failure must never leave orphan batches or half-promoted students.
+    // Enrollment carry-forward is batched (updateMany + createMany) to stay within the tx timeout.
     const { promoted, createdBatches } = await prisma.$transaction(async (tx) => {
-      let promoted = 0;
       const createdBatches: { code: string; count: number }[] = [];
+      const oldIds: string[] = [];
+      const newRows: { studentId: string; semesterId: string; batchId: string; rollNo: string; yearLevel: any; isCurrent: boolean; promotedFromId: string }[] = [];
       for (let i = 0; i < body.batchCount; i++) {
         const code = `${initial}${i + 1}`;
         const existing = await tx.batch.findFirst({ where: { academicYearId: nextYear.id, code } });
+        // Reusing a code that belongs to a DIFFERENT year level (e.g. the vacated SY batch) would
+        // corrupt that year's history — reject and ask for a free initial instead.
+        if (existing && existing.yearLevel !== nextYL) {
+          throw new ApiError(409, "BATCH_CODE_TAKEN", `Batch code ${code} is already used by ${existing.yearLevel} in this cohort. Choose a different batch initial (e.g. one not in ${initial}).`);
+        }
         const batch = existing ?? await tx.batch.create({ data: { universityId: scope.universityId, academicYearId: nextYear.id, code, yearLevel: nextYL as any } });
         await tx.hodBatchScope.upsert({
           where: { batchId: batch.id },
@@ -2721,18 +2769,25 @@ export const portalService = {
         const slice = promotable.slice(i * body.capacity, i * body.capacity + body.capacity);
         let seq = 1;
         for (const r of slice) {
-          const from = await tx.studentEnrollment.findUnique({ where: { id: r.enrollmentId }, select: { studentId: true } });
-          if (!from) continue;
-          await tx.studentEnrollment.update({ where: { id: r.enrollmentId }, data: { isCurrent: false } });
-          await tx.studentEnrollment.create({
-            data: { studentId: from.studentId, semesterId: nextSem.id, batchId: batch.id, rollNo: `${code}-${String(seq).padStart(3, "0")}`, yearLevel: nextYL as any, isCurrent: true, promotedFromId: r.enrollmentId },
-          });
-          seq++; promoted++;
+          const studentId = stuByEnr.get(r.enrollmentId);
+          if (!studentId) continue;
+          oldIds.push(r.enrollmentId);
+          newRows.push({ studentId, semesterId: nextSem.id, batchId: batch.id, rollNo: `${code}-${String(seq).padStart(3, "0")}`, yearLevel: nextYL as any, isCurrent: true, promotedFromId: r.enrollmentId });
+          seq++;
         }
         createdBatches.push({ code, count: slice.length });
       }
-      return { promoted, createdBatches };
-    });
+      if (oldIds.length) {
+        await tx.studentEnrollment.updateMany({ where: { id: { in: oldIds } }, data: { isCurrent: false } });
+        await tx.studentEnrollment.createMany({ data: newRows });
+      }
+      // Activate the destination year's semester; complete the source once every branch/HOD
+      // has promoted out of it (no current enrollments left).
+      await tx.semester.update({ where: { id: nextSem.id }, data: { status: "ACTIVE" } });
+      const remaining = await tx.studentEnrollment.count({ where: { semesterId: sem.id, isCurrent: true } });
+      if (remaining === 0) await tx.semester.update({ where: { id: sem.id }, data: { status: "COMPLETE" } });
+      return { promoted: oldIds.length, createdBatches };
+    }, { timeout: 30000, maxWait: 15000 });
     await this.logActivity(scope.universityId, scope.userId, "PROMOTION_EXECUTED",
       `Year promotion → ${hod.name}`,
       `${promoted} ${body.branch} students promoted from ${curYear.label} (${sem.yearLevel}) to ${nextYear.label} (${nextYL}) under ${hod.name}. Detained/failed: ${data.length - promoted}.`);
@@ -3217,7 +3272,9 @@ export const portalService = {
 
   async studentTimetable(studentId: string, universityId: string, semesterId?: string) {
     const { semester, enrollment } = await getStudentEnrollment(studentId, universityId, semesterId);
-    const slots = await prisma.timetableSlot.findMany({ where: { batchId: enrollment.batchId, semesterId: semester.id }, orderBy: [{ dayOfWeek: "asc" }, { slotStart: "asc" }] });
+    const teachDows = await teachingWeekdays(universityId);
+    const slots = (await prisma.timetableSlot.findMany({ where: { batchId: enrollment.batchId, semesterId: semester.id }, orderBy: [{ dayOfWeek: "asc" }, { slotStart: "asc" }] }))
+      .filter((s) => teachDows.has(s.dayOfWeek)); // weekly view mirrors the calendar's teaching weekdays
     const batch = await batchById(enrollment.batchId);
     const mappedSlots = await Promise.all(
       slots.map(async (slot) => {
@@ -3473,9 +3530,10 @@ export const portalService = {
     const rows = quizzes.map((quiz) => {
       const bestScore = quiz.attempts.length ? Math.max(...quiz.attempts.map((attempt) => attempt.score)) : null;
       const expired = isQuizExpired(quiz.dueDate);
+      const notStarted = isQuizNotStarted(quiz.startDate);
       const attemptsTaken = quiz.attempts.length;
-      const status = attemptsTaken >= quiz.maxAttempts ? "ATTEMPTED" : expired ? "EXPIRED" : attemptsTaken ? "RETRY" : "PENDING";
-      return { id: quiz.id, title: quiz.title, description: quiz.description, subject: quiz.subject, subjectId: quiz.subjectId, semesterId: quiz.semesterId, questionCount: quiz._count.questions, timeLimitMins: quiz.timeLimitMins, isAiGenerated: quiz.isAiGenerated, isStudentGenerated: quiz.studentId === studentId, chapters: quiz.chapterNames, maxAttempts: quiz.maxAttempts, attemptsTaken, dueDate: quiz.dueDate, createdAt: quiz.createdAt, status, attemptedAt: quiz.attempts[0]?.submittedAt ?? null, score: bestScore };
+      const status = attemptsTaken >= quiz.maxAttempts ? "ATTEMPTED" : notStarted ? "UPCOMING" : expired ? "EXPIRED" : attemptsTaken ? "RETRY" : "PENDING";
+      return { id: quiz.id, title: quiz.title, description: quiz.description, subject: quiz.subject, subjectId: quiz.subjectId, semesterId: quiz.semesterId, questionCount: quiz._count.questions, timeLimitMins: quiz.timeLimitMins, isAiGenerated: quiz.isAiGenerated, isStudentGenerated: quiz.studentId === studentId, chapters: quiz.chapterNames, maxAttempts: quiz.maxAttempts, attemptsTaken, startDate: quiz.startDate, dueDate: quiz.dueDate, createdAt: quiz.createdAt, status, attemptedAt: quiz.attempts[0]?.submittedAt ?? null, score: bestScore };
     });
     return paginate(
       rows.filter((r) => !query.subjectId || r.subjectId === query.subjectId).filter((r) => !query.status || r.status === query.status).map(({ subjectId: _, semesterId: __, ...rest }) => rest),
@@ -3500,6 +3558,7 @@ export const portalService = {
     await ensureStudentSubject(studentId, universityId, quiz.subjectId, quiz.semesterId);
     const attemptsTaken = await prisma.quizAttempt.count({ where: { studentId, quizId } });
     if (attemptsTaken >= quiz.maxAttempts) throw new ApiError(409, "ATTEMPT_LIMIT_REACHED", "No quiz attempts remain.");
+    if (isQuizNotStarted(quiz.startDate)) throw new ApiError(409, "QUIZ_NOT_STARTED", `Quiz opens on ${quiz.startDate?.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}.`);
     if (isQuizExpired(quiz.dueDate)) throw new ApiError(410, "QUIZ_EXPIRED", "Quiz due date has passed.");
     const rawQuestions = await prisma.question.findMany({ where: { quizId }, orderBy: { order: "asc" }, select: { id: true, order: true, text: true, options: true } });
     const seed = `${studentId}:${quizId}:${attemptsTaken + 1}`;
@@ -3891,17 +3950,21 @@ export const portalService = {
   // across every published result so far (all subjects, all exams conducted to date).
   //  scope 'batch' → own section only (e.g. SY-3); 'year' → whole year level (all SY sections).
   // The active semester is per year level, so its enrollments already ARE the year cohort.
-  async studentLeaderboard(studentId: string, universityId: string, scope: "year" | "batch" = "batch") {
+  async studentLeaderboard(studentId: string, universityId: string, scope: "year" | "batch" = "batch", phaseKeys: string[] = [], subjectId?: string) {
     const { enrollment, semester } = await getStudentEnrollment(studentId, universityId);
     const enrollments = await prisma.studentEnrollment.findMany({
       where: { semesterId: semester.id, isCurrent: true, ...(scope === "batch" ? { batchId: enrollment.batchId } : {}) },
       include: { student: { select: { name: true, enrollmentNo: true } }, batch: { select: { code: true } } },
     });
     const ids = enrollments.map((e) => e.id);
+    // Configurable filters: rank on the chosen T1–T4 phases (default all) and, optionally, one
+    // subject. Empty phaseNumbers → every phase in the semester.
+    const phaseNumbers = [...new Set(phaseKeys.map((k) => Number(String(k).replace(/\D/g, ""))).filter((n) => n >= 1 && n <= 4))];
+    const phaseWhere = { semesterId: semester.id, ...(phaseNumbers.length ? { number: { in: phaseNumbers } } : {}) };
     const sums = ids.length
       ? await prisma.result.groupBy({
           by: ["enrollmentId"],
-          where: { enrollmentId: { in: ids }, isPublished: true, phase: { semesterId: semester.id } },
+          where: { enrollmentId: { in: ids }, isPublished: true, phase: phaseWhere, ...(subjectId ? { subjectId } : {}) },
           _sum: { marksObtained: true, maxMarks: true },
         })
       : [];
@@ -3915,14 +3978,15 @@ export const portalService = {
     const batch = await batchById(enrollment.batchId);
     return {
       scope, yearLevel: semester.yearLevel ?? null, batchCode: batch.code,
+      phases: phaseNumbers.length ? phaseNumbers.map((n) => `T${n}`) : ["T1", "T2", "T3", "T4"], subjectId: subjectId ?? null,
       myRank: me?.rank ?? enrollments.length, myTotal: me?.totalMarks ?? 0, myMax: me?.maxMarks ?? 0,
       totalStudents: enrollments.length,
       leaderboard: withRank.slice(0, 50).map((r) => ({ rank: r.rank, name: r.name, enrollmentNo: r.enrollmentNo, batchCode: r.batchCode, totalMarks: r.totalMarks, maxMarks: r.maxMarks, isMe: r.isMe })),
     };
   },
 
-  async studentLeaderboardMyRank(studentId: string, universityId: string, scope: "year" | "batch" = "batch") {
-    const lb = await this.studentLeaderboard(studentId, universityId, scope);
+  async studentLeaderboardMyRank(studentId: string, universityId: string, scope: "year" | "batch" = "batch", phaseKeys: string[] = [], subjectId?: string) {
+    const lb = await this.studentLeaderboard(studentId, universityId, scope, phaseKeys, subjectId);
     return { scope, yearLevel: lb.yearLevel, batchCode: lb.batchCode, myRank: lb.myRank, totalStudents: lb.totalStudents, myTotal: lb.myTotal, myMax: lb.myMax, percentile: lb.totalStudents === 0 ? 0 : Number((((lb.totalStudents - lb.myRank + 1) / lb.totalStudents) * 100).toFixed(1)) };
   },
 
@@ -4275,7 +4339,9 @@ export const portalService = {
 
   async facultyTimetable(facultyId: string, universityId: string, semesterId?: string) {
     const scope = await getFacultyScopeData(facultyId, universityId, semesterId);
-    const slots = await prisma.timetableSlot.findMany({ where: { facultyId, semesterId: scope.semester.id }, orderBy: [{ dayOfWeek: "asc" }, { slotStart: "asc" }] });
+    const teachDows = await teachingWeekdays(universityId);
+    const slots = (await prisma.timetableSlot.findMany({ where: { facultyId, semesterId: scope.semester.id }, orderBy: [{ dayOfWeek: "asc" }, { slotStart: "asc" }] }))
+      .filter((s) => teachDows.has(s.dayOfWeek)); // weekly view mirrors the calendar's teaching weekdays
     const mappedSlots = await Promise.all(slots.map(async (slot) => {
       const subject = await subjectById(slot.subjectId);
       const batch = await batchById(slot.batchId);
@@ -4767,10 +4833,10 @@ export const portalService = {
     return { id: quiz.id, title: quiz.title, description: quiz.description, subjectCode: quiz.subject.code, semesterLabel: quiz.semester.label, isAiGenerated: quiz.isAiGenerated, isPublished: quiz.isPublished, timeLimitMins: quiz.timeLimitMins, dueDate: quiz.dueDate, questions: quiz.questions, stats: { attemptCount: scores.length, avgScore: average(scores), highScore: scores.length === 0 ? 0 : Math.max(...scores), lowScore: scores.length === 0 ? 0 : Math.min(...scores) } };
   },
 
-  async createFacultyQuiz(facultyId: string, universityId: string, body: { subjectId: string; semesterId: string; batchIds?: string[]; title: string; description?: string; timeLimitMins?: number; dueDate?: string; questions?: Array<{ text: string; options: any; correctOption: string; explanation?: string; order: number }> }) {
+  async createFacultyQuiz(facultyId: string, universityId: string, body: { subjectId: string; semesterId: string; batchIds?: string[]; title: string; description?: string; timeLimitMins?: number; startDate?: string; dueDate?: string; questions?: Array<{ text: string; options: any; correctOption: string; explanation?: string; order: number }> }) {
     await ensureFacultyAssignedSubject(facultyId, universityId, body.subjectId, body.semesterId);
     const batchIds = await validateFacultyContentTargets(facultyId, universityId, body.subjectId, body.semesterId, parseBatchIds(body.batchIds));
-    const quiz = await prisma.quiz.create({ data: { facultyId, subjectId: body.subjectId, semesterId: body.semesterId, title: body.title, description: body.description ?? null, timeLimitMins: body.timeLimitMins ?? null, dueDate: parseQuizDueDate(body.dueDate), isAiGenerated: false, isPublished: false, targets: { create: batchIds.map((batchId) => ({ batchId })) } } });
+    const quiz = await prisma.quiz.create({ data: { facultyId, subjectId: body.subjectId, semesterId: body.semesterId, title: body.title, description: body.description ?? null, timeLimitMins: body.timeLimitMins ?? null, startDate: parseQuizDueDate(body.startDate), dueDate: parseQuizDueDate(body.dueDate), isAiGenerated: false, isPublished: false, targets: { create: batchIds.map((batchId) => ({ batchId })) } } });
     for (const q of body.questions ?? []) {
       await prisma.question.create({ data: { quizId: quiz.id, text: q.text, options: q.options, correctOption: q.correctOption, explanation: q.explanation ?? null, order: q.order } });
     }
@@ -4790,7 +4856,7 @@ export const portalService = {
   async updateFacultyQuiz(facultyId: string, quizId: string, body: Record<string, string | number>) {
     const quiz = await prisma.quiz.findFirst({ where: { id: quizId, facultyId, deletedAt: null } });
     if (!quiz) throw new ApiError(404, "NOT_FOUND", "Quiz not found.");
-    const updated = await prisma.quiz.update({ where: { id: quizId }, data: { title: body.title ? String(body.title) : quiz.title, timeLimitMins: body.timeLimitMins ? Number(body.timeLimitMins) : quiz.timeLimitMins, dueDate: body.dueDate ? parseQuizDueDate(String(body.dueDate)) : quiz.dueDate } });
+    const updated = await prisma.quiz.update({ where: { id: quizId }, data: { title: body.title ? String(body.title) : quiz.title, timeLimitMins: body.timeLimitMins ? Number(body.timeLimitMins) : quiz.timeLimitMins, startDate: body.startDate ? parseQuizDueDate(String(body.startDate)) : quiz.startDate, dueDate: body.dueDate ? parseQuizDueDate(String(body.dueDate)) : quiz.dueDate } });
     const subject = await subjectById(updated.subjectId);
     return { id: updated.id, title: updated.title, description: updated.description, subjectCode: subject.code, isPublished: updated.isPublished, timeLimitMins: updated.timeLimitMins, dueDate: updated.dueDate };
   },
@@ -5757,10 +5823,11 @@ export const portalService = {
     const facIds = rows.map((r) => r.facultyId);
     const facs = facIds.length ? await prisma.faculty.findMany({ where: { id: { in: facIds } }, select: { id: true, name: true, employeeId: true } }) : [];
     const byId = new Map(facs.map((f) => [f.id, f]));
-    const options = await prisma.faculty.findMany({
-      where: { universityId: scope.universityId, isHod: false, isDean: false, isActive: true, deletedAt: null },
-      select: { id: true, name: true, employeeId: true }, orderBy: { name: "asc" },
-    });
+    // Coordinators are picked from THIS HOD's own faculty pool only.
+    const options = (await getScopedFaculty(scope))
+      .filter((f) => !f.isHod && f.isActive)
+      .map((f) => ({ id: f.id, name: f.name, employeeId: f.employeeId }))
+      .sort((a, b) => a.name.localeCompare(b.name));
     return {
       semesterId: sem.id,
       coordinators: [1, 2].map((slot) => {
@@ -5802,10 +5869,11 @@ export const portalService = {
     const rows = sem.id ? await prisma.attendanceCoordinator.findMany({ where: { semesterId: sem.id }, orderBy: { createdAt: "asc" } }) : [];
     const facs = rows.length ? await prisma.faculty.findMany({ where: { id: { in: rows.map((r) => r.facultyId) } }, select: { id: true, name: true, employeeId: true } }) : [];
     const byId = new Map(facs.map((f) => [f.id, f]));
-    const options = await prisma.faculty.findMany({
-      where: { universityId: scope.universityId, isHod: false, isDean: false, isActive: true, deletedAt: null },
-      select: { id: true, name: true, employeeId: true }, orderBy: { name: "asc" },
-    });
+    // Coordinators are picked from THIS HOD's own faculty pool only.
+    const options = (await getScopedFaculty(scope))
+      .filter((f) => !f.isHod && f.isActive)
+      .map((f) => ({ id: f.id, name: f.name, employeeId: f.employeeId }))
+      .sort((a, b) => a.name.localeCompare(b.name));
     return {
       semesterId: sem.id,
       coordinators: rows.map((r) => ({ facultyId: r.facultyId, name: byId.get(r.facultyId)?.name ?? null, employeeId: byId.get(r.facultyId)?.employeeId ?? null })),
