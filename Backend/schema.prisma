@@ -790,6 +790,11 @@ model SelfNote {
   subjectId String?   @db.Uuid // optional — can be a general note
   title     String
   content   String // rich text (TipTap JSON or HTML)
+  fileUrl   String?
+  fileKey   String?
+  originalFileName String?
+  mimeType  String?
+  fileSize  Int?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   deletedAt DateTime?

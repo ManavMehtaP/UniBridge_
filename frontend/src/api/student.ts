@@ -75,6 +75,7 @@ export const studentApi = {
   updateSelfNote: (id: string, body: Record<string, unknown>) =>
     api.put(`/student/self-notes/${id}`, body).then((r) => r.data),
   deleteSelfNote: (id: string) => api.delete(`/student/self-notes/${id}`).then((r) => r.data),
+  selfNoteFileAccess: (id: string) => api.get<{ fileName: string; downloadUrl: string }>(`/student/self-notes/${id}/file`).then((r) => r.data),
 
   quizzes: (params?: Params) => api.get<T.PaginatedQuizzes>('/student/quizzes', { params }).then((r) => r.data),
   quiz: (id: string) => api.get(`/student/quizzes/${id}`).then((r) => r.data),

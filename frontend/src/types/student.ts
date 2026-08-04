@@ -67,6 +67,9 @@ export interface SelfNote {
   content: string
   subjectCode?: string
   color?: string
+  fileName?: string | null
+  mimeType?: string | null
+  hasFile?: boolean
   updatedAt: string
   createdAt: string
 }

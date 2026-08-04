@@ -3500,7 +3500,7 @@ export const portalService = {
       : selfNotes;
     const rows = await Promise.all(filtered.map(async (n) => {
       const subject = n.subjectId ? await prisma.subject.findUnique({ where: { id: n.subjectId }, select: { code: true } }) : null;
-      return { id: n.id, title: n.title, subjectCode: subject?.code ?? null, contentPreview: n.content.slice(0, 120), createdAt: n.createdAt, updatedAt: n.updatedAt };
+      return { id: n.id, title: n.title, subjectCode: subject?.code ?? null, content: n.content, contentPreview: n.content.slice(0, 120), fileName: n.originalFileName, mimeType: n.mimeType, hasFile: !!n.fileKey, createdAt: n.createdAt, updatedAt: n.updatedAt };
     }));
     return paginate(rows, Number(query.page ?? 1), Number(query.limit ?? 20));
   },
@@ -3510,7 +3510,7 @@ export const portalService = {
     if (!note) throw new ApiError(404, "NOT_FOUND", "Self note not found.");
     if (note.studentId !== studentId) throw new ApiError(403, "STUDENT_NOT_OWNER", "Self note does not belong to this student.");
     const subject = note.subjectId ? await prisma.subject.findUnique({ where: { id: note.subjectId }, select: { code: true } }) : null;
-    return { id: note.id, title: note.title, subjectId: note.subjectId, subjectCode: subject?.code ?? null, content: note.content, createdAt: note.createdAt, updatedAt: note.updatedAt };
+    return { id: note.id, title: note.title, subjectId: note.subjectId, subjectCode: subject?.code ?? null, content: note.content, fileName: note.originalFileName, mimeType: note.mimeType, hasFile: !!note.fileKey, createdAt: note.createdAt, updatedAt: note.updatedAt };
   },
 
   async createStudentSelfNote(studentId: string, universityId: string, body: { title: string; subjectId?: string; content: string }) {
@@ -3533,6 +3533,12 @@ export const portalService = {
     if (!note) throw new ApiError(404, "NOT_FOUND", "Self note not found.");
     if (note.studentId !== studentId) throw new ApiError(403, "STUDENT_NOT_OWNER", "Self note does not belong to this student.");
     await prisma.selfNote.update({ where: { id: selfNoteId }, data: { deletedAt: new Date() } });
+  },
+
+  async studentSelfNoteFileAccess(studentId: string, selfNoteId: string) {
+    const note = await prisma.selfNote.findFirst({ where: { id: selfNoteId, studentId, deletedAt: null }, select: { fileKey: true, fileUrl: true, originalFileName: true } });
+    if (!note?.fileKey && !note?.fileUrl) throw new ApiError(404, "FILE_NOT_FOUND", "No file is attached to this note.");
+    return { fileName: note.originalFileName ?? "note-file", downloadUrl: storageEnabled && note.fileKey ? presignGetUrl(note.fileKey, 60 * 60) : note.fileUrl };
   },
 
   // ── Student — Quizzes ─────────────────────────────────────

@@ -320,6 +320,10 @@ studentRouter.get("/ai/pyq/:pyqId/summary", asyncHandler(async (req, res) => {
   res.json(await portalService.studentPyqSummary(req.user!.id, req.user!.universityId, str(req.params.pyqId)));
 }));
 
+studentRouter.get("/self-notes/:selfNoteId/file", asyncHandler(async (req, res) => {
+  res.json(await portalService.studentSelfNoteFileAccess(req.user!.id, str(req.params.selfNoteId)));
+}));
+
 studentRouter.get("/ai/pyq/:pyqId/file", asyncHandler(async (req, res) => {
   res.json(await portalService.studentPyqFileAccess(req.user!.id, req.user!.universityId, str(req.params.pyqId)));
 }));
