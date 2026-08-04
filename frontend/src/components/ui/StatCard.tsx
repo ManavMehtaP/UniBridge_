@@ -28,7 +28,7 @@ export function StatCard({ value, label, icon, iconBg, delta, trend = 'neutral',
     <Card className={cn('p-4 transition-shadow hover:shadow-md', className)}>
       <div className="flex items-start justify-between">
         <div>
-          <div className="font-serif text-[30px] font-semibold leading-none tracking-tight text-text-primary">{value}</div>
+          <div className="text-[30px] font-semibold leading-none tracking-tight text-text-primary">{value}</div>
           <div className="mt-2 text-xs font-medium text-text-secondary">{label}</div>
         </div>
         {icon && (
