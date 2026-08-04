@@ -152,12 +152,12 @@ studentRouter.get("/self-notes", asyncHandler(async (req, res) => {
   res.json(await portalService.studentSelfNotes(req.user!.id, req.user!.universityId, req.query as Record<string, string | number | undefined>));
 }));
 
-studentRouter.post("/self-notes", asyncHandler(async (req, res) => {
-  res.status(201).json(await portalService.createStudentSelfNote(req.user!.id, req.user!.universityId, req.body));
+studentRouter.post("/self-notes", upload.single("file"), asyncHandler(async (req, res) => {
+  res.status(201).json(await portalService.createStudentSelfNote(req.user!.id, req.user!.universityId, req.body, req.file?.buffer, { originalname: req.file?.originalname, mimetype: req.file?.mimetype, size: req.file?.size }));
 }));
 
-studentRouter.put("/self-notes/:selfNoteId", asyncHandler(async (req, res) => {
-  res.json(await portalService.updateStudentSelfNote(req.user!.id, str(req.params.selfNoteId), req.body));
+studentRouter.put("/self-notes/:selfNoteId", upload.single("file"), asyncHandler(async (req, res) => {
+  res.json(await portalService.updateStudentSelfNote(req.user!.id, str(req.params.selfNoteId), req.body, req.file?.buffer, { originalname: req.file?.originalname, mimetype: req.file?.mimetype, size: req.file?.size }));
 }));
 
 studentRouter.delete("/self-notes/:selfNoteId", asyncHandler(async (req, res) => {

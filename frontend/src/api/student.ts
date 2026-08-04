@@ -71,8 +71,8 @@ export const studentApi = {
     api.get(`/student/notes/${id}/file`, { params: { mode }, responseType: 'blob' }).then((r) => r.data as Blob),
 
   selfNotes: () => api.get<{ data: T.SelfNote[] }>('/student/self-notes').then((r) => r.data),
-  createSelfNote: (body: Record<string, unknown>) => api.post('/student/self-notes', body).then((r) => r.data),
-  updateSelfNote: (id: string, body: Record<string, unknown>) =>
+  createSelfNote: (body: Record<string, unknown> | FormData) => api.post('/student/self-notes', body).then((r) => r.data),
+  updateSelfNote: (id: string, body: Record<string, unknown> | FormData) =>
     api.put(`/student/self-notes/${id}`, body).then((r) => r.data),
   deleteSelfNote: (id: string) => api.delete(`/student/self-notes/${id}`).then((r) => r.data),
   selfNoteFileAccess: (id: string) => api.get<{ fileName: string; downloadUrl: string }>(`/student/self-notes/${id}/file`).then((r) => r.data),
