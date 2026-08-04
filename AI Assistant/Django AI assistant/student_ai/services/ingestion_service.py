@@ -128,7 +128,19 @@ def _extract_note_structure(note: Note, extracted: str) -> dict:
     except AIServiceError:
         # Keep faculty material accessible when the optional LLM router is offline.
         parsed = _extractive_note_structure(extracted)
-    return {**fallback, **parsed}
+    structured = {**fallback, **parsed}
+    if _summary_needs_rewrite(note, str(structured.get("short_summary") or "")):
+        extracted_summary = _extractive_note_structure(extracted)
+        structured = {**structured, **extracted_summary}
+    return structured
+
+
+def _summary_needs_rewrite(note: Note, summary: str) -> bool:
+    normalized = " ".join(summary.split())
+    if len(normalized) > 900:
+        return True
+    calendar = "academic calendar" in note.title.lower() or "academic calendar" in normalized.lower()
+    return calendar and ("regular teaching" in normalized.lower() or len(normalized) > 450)
 
 
 def _extractive_note_structure(extracted: str) -> dict:
@@ -148,10 +160,16 @@ def _extractive_note_structure(extracted: str) -> dict:
     if not flashcards:
         for index, sentence in enumerate(sentences[:6], start=1):
             flashcards.append({"question": f"State the key point {index} from the note.", "answer": sentence})
+    is_calendar = "academic calendar" in extracted.lower() and "regular teaching" in extracted.lower()
+    calendar_summary = (
+        "Academic calendar covering the listed semester period. It includes regular teaching days, "
+        "holidays and breaks, reading holidays, and scheduled CCE/tests. Use the calendar view or original "
+        "document for exact dates and subject-specific exam details."
+    )
     return {
-        "short_summary": " ".join(sentences[:3])[:1200] or extracted[:1200],
+        "short_summary": calendar_summary if is_calendar else " ".join(sentences[:3])[:1200] or extracted[:1200],
         "detailed_notes": "\n\n".join(paragraphs)[:10000],
-        "bullet_notes": sentences[:8],
+        "bullet_notes": (["Regular teaching days are listed by date.", "The document includes holidays, breaks, reading holidays, and CCE/tests.", "Refer to the original calendar for exact dates."] if is_calendar else sentences[:8]),
         "important_definitions": definitions[:12],
         "key_formulae": [],
         "flashcards": flashcards,

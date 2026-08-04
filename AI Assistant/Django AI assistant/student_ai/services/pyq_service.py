@@ -38,10 +38,16 @@ def process_pyq_document(pyq_file: PYQFile, *, source_url: str | None = None) ->
             raise ValueError("PYQ document has no extractable text.")
         parsed = _extract_questions(pyq_file, extracted)
         questions = _store_questions(pyq_file, document, parsed.get("questions", []))
+        if questions == 0:
+            parsed = {
+                "questions": [],
+                "keywords": [],
+                "summary": "No readable exam questions could be extracted from this paper. The original uploaded file remains available for preview and download.",
+            }
         _store_pyq_chunks(pyq_file, document, extracted, parsed)
         semester = _matching_semester(pyq_file)
         analysis = _update_analysis(pyq_file, semester)
-        _store_legacy_insight(pyq_file, semester, extracted, analysis, parsed)
+        _store_legacy_insight(pyq_file, semester, extracted, analysis, parsed, questions)
         pyq_file.is_analyzed = True
         pyq_file.save(update_fields=["is_analyzed"])
         document.processing_status = "completed"
@@ -250,19 +256,19 @@ def _update_analysis(pyq_file: PYQFile, semester: Semester) -> dict:
     return stats
 
 
-def _store_legacy_insight(pyq_file: PYQFile, semester: Semester, extracted: str, analysis: dict, parsed: dict) -> None:
+def _store_legacy_insight(pyq_file: PYQFile, semester: Semester, extracted: str, analysis: dict, parsed: dict, question_count: int) -> None:
     PYQInsight.objects.update_or_create(
         pyq_file=pyq_file,
         defaults={
             "subject_id": pyq_file.subject_id,
             "semester_id": semester.id,
             "extracted_text": extracted[:50000],
-            "topics": analysis.get("important_topics", []),
-            "keywords": normalize_list(parsed.get("keywords"), limit=30) or analysis.get("frequently_asked_topics", []),
+            "topics": analysis.get("important_topics", []) if question_count else [],
+            "keywords": normalize_list(parsed.get("keywords"), limit=30) if question_count else [],
             "difficulty": "",
             "marks_weightage": [{"topic": item["topic"], "weight": item["probability"]} for item in analysis.get("topic_ranking", [])],
             "question_types": [],
-            "status": "completed",
+            "status": "completed" if question_count else "failed",
         },
     )
 
