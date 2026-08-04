@@ -19,7 +19,14 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
   universityId()
     .then(async (uniId) => {
       if (role === "HOD" || role === "FACULTY") {
-        req.user = { id: userId, role: "FACULTY", isHod: role === "HOD", universityId: uniId };
+        const faculty = await prisma.faculty.findUnique({
+          where: { id: userId },
+          select: { isHod: true, isDean: true, isActive: true, universityId: true },
+        });
+        if (!faculty || faculty.isDean) return next(new ApiError(401, "AUTH_INVALID", "Invalid faculty token."));
+        if (!faculty.isActive) return next(new ApiError(403, "ACCOUNT_INACTIVE", "Account is inactive."));
+        if (faculty.universityId !== uniId) return next(new ApiError(409, "UNIVERSITY_CONTEXT_STALE", "Your session belongs to an old university record. Sign in again."));
+        req.user = { id: userId, role: "FACULTY", isHod: faculty.isHod, universityId: uniId };
         return next();
       }
 

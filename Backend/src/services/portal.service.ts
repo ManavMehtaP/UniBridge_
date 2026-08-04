@@ -212,16 +212,47 @@ async function teachingWeekdays(universityId: string): Promise<Set<number>> {
   return new Set(events.map((e) => e.startDate.getUTCDay()));
 }
 
+// Splits one CSV line into fields, honoring double-quoted fields (which may contain
+// commas and escaped "" quotes) per RFC4180. A plain `line.split(",")` silently
+// mis-aligns every column after a quoted field that contains a comma (e.g. a name
+// exported from Excel as `"Doe, John"`), corrupting the rest of that row instead of
+// erroring — this parses the same way spreadsheet tools write CSVs.
+function splitCsvLine(line: string): string[] {
+  const values: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { current += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      values.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  values.push(current.trim());
+  return values;
+}
+
 function parseCsvRecords(fileBuffer: Buffer, requiredHeaders: string[]) {
   const raw = fileBuffer.toString("utf8").trim();
   if (!raw) throw new ApiError(422, "UNPROCESSABLE_CSV", "CSV file is empty.");
   const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length < 2) throw new ApiError(422, "UNPROCESSABLE_CSV", "CSV must include a header and at least one data row.");
-  const headers = lines[0].split(",").map((h) => h.trim().toLowerCase());
+  const headers = splitCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
   const missing = requiredHeaders.filter((h) => !headers.includes(h));
   if (missing.length > 0) throw new ApiError(422, "UNPROCESSABLE_CSV", `CSV is missing required columns: ${missing.join(", ")}.`);
   return lines.slice(1).map((line, i) => {
-    const values = line.split(",").map((v) => v.trim());
+    const values = splitCsvLine(line)
     return { row: i + 2, record: Object.fromEntries(headers.map((h, hi) => [h, values[hi] ?? ""])) };
   });
 }
