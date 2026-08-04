@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import logging
 import os
 from pathlib import Path
 import re
@@ -19,6 +20,7 @@ from student_ai.services.embedding_service import EmbeddingService
 from student_ai.services.gemini_service import GeminiDocumentService, normalize_list
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+logger = logging.getLogger(__name__)
 
 
 def resolve_local_path(file_url: str, file_key: str) -> str | Path:
@@ -167,29 +169,17 @@ def extract_document_text(path: str | Path, mime_type: str | None = None) -> str
     suffix = Path(str(path)).suffix.lower()
     if (mime_type or "").lower().startswith("image/") or suffix in IMAGE_EXTENSIONS:
         return GeminiDocumentService().extract_image_text(path, mime_type=mime_type)
-    extracted = extract_text(path)
-    if suffix != ".pdf" or _has_usable_pdf_text(extracted):
-        return extracted
-    return _extract_scanned_pdf_text(path)
+    if suffix != ".pdf":
+        return extract_text(path)
+    return _extract_pdf_pages(path)
 
 
-def _has_usable_pdf_text(extracted: str) -> bool:
-    """Reject PDFs whose text layer is only a repeated scan watermark/header."""
-    tokens = re.findall(r"[A-Za-z0-9]{2,}", extracted.lower())
-    if len(tokens) < 20:
-        return False
-    unique_ratio = len(set(tokens)) / len(tokens)
-    lines = [" ".join(line.split()).lower() for line in extracted.splitlines() if line.strip()]
-    repeated_line_ratio = len(set(lines)) / len(lines) if lines else 0
-    return len(extracted.strip()) >= 80 and unique_ratio >= 0.12 and repeated_line_ratio >= 0.2
-
-
-def _extract_scanned_pdf_text(path: str | Path) -> str:
-    """Use Gemini vision only when a PDF has no usable embedded text layer."""
+def _extract_pdf_pages(path: str | Path) -> str:
+    """Extract each PDF page with PyMuPDF, using OCR only for scanned pages."""
     try:
         import fitz
     except ImportError as exc:
-        raise RuntimeError("PyMuPDF is required to process scanned PDFs. Install requirements.txt and retry.") from exc
+        raise RuntimeError("PyMuPDF is required to process PDFs. Install requirements.txt and retry.") from exc
 
     local_path, cleanup_path = _local_pdf_path(path)
     try:
@@ -197,27 +187,104 @@ def _extract_scanned_pdf_text(path: str | Path) -> str:
         try:
             if not pdf.page_count:
                 return ""
-            service = GeminiDocumentService()
             pages: list[str] = []
-            # Keep uploads bounded while still processing normal academic handouts end to end.
-            for page_index in range(min(pdf.page_count, 30)):
-                page = pdf.load_page(page_index)
-                image = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
-                    image_path = Path(handle.name)
-                image.save(str(image_path))
-                try:
-                    text = service.extract_image_text(image_path, mime_type="image/png")
-                    if text:
-                        pages.append(f"[Page {page_index + 1}]\n{text}")
-                finally:
-                    image_path.unlink(missing_ok=True)
+            for page_index, page in enumerate(pdf, start=1):
+                text = page.get_text("text").strip()
+                if len(text) >= 100:
+                    logger.info("Page %s -> Embedded text detected (PyMuPDF)", page_index)
+                    pages.append(f"[Page {page_index}]\n{text}")
+                    continue
+
+                logger.info("Page %s -> No embedded text detected. Running OCR.", page_index)
+                ocr_text = _ocr_pdf_page(page, page_index)
+                if ocr_text:
+                    logger.info("Page %s -> OCR completed successfully.", page_index)
+                    pages.append(f"[Page {page_index}]\n{ocr_text}")
+                else:
+                    logger.warning("Page %s -> OCR produced no text; continuing with remaining pages.", page_index)
+            logger.info("Document extraction completed.")
             return "\n\n".join(pages)
         finally:
             pdf.close()
     finally:
         if cleanup_path:
             os.unlink(cleanup_path)
+
+
+def _ocr_pdf_page(page: object, page_number: int) -> str:
+    """Render, improve, and OCR one scanned page without interrupting the document."""
+    try:
+        import cv2
+        import numpy as np
+        import pytesseract
+
+        pix = page.get_pixmap(matrix=__import__("fitz").Matrix(3, 3), alpha=False)
+        image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+        if pix.n == 1:
+            gray = image
+        else:
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        prepared = _preprocess_ocr_image(gray, cv2, np)
+        return pytesseract.image_to_string(prepared, config="--oem 3 --psm 6").strip()
+    except Exception as exc:
+        logger.warning("Page %s -> Local OCR failed: %s", page_number, exc)
+        return _ocr_with_ai_fallback(page, page_number)
+
+
+def _preprocess_ocr_image(gray: object, cv2: object, np: object) -> object:
+    """Normalize scans before OCR: denoise, contrast, threshold, deskew, then crop if needed."""
+    denoised = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
+    contrast = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8)).apply(denoised)
+    thresholded = cv2.adaptiveThreshold(contrast, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11)
+    corrected = _deskew_image(thresholded, cv2, np)
+    return _perspective_correct(corrected, cv2, np)
+
+
+def _deskew_image(image: object, cv2: object, np: object) -> object:
+    points = np.column_stack(np.where(image < 255))
+    if len(points) < 100:
+        return image
+    angle = cv2.minAreaRect(points[:, ::-1])[1]
+    angle = -(90 + angle) if angle < -45 else -angle
+    if abs(angle) < 0.3:
+        return image
+    height, width = image.shape[:2]
+    matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1.0)
+    return cv2.warpAffine(image, matrix, (width, height), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+
+def _perspective_correct(image: object, cv2: object, np: object) -> object:
+    """Correct only a clear page-shaped contour; normal flat scans pass through unchanged."""
+    height, width = image.shape[:2]
+    contours, _ = cv2.findContours(cv2.Canny(image, 50, 150), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+        if cv2.contourArea(contour) < height * width * 0.55:
+            break
+        polygon = cv2.approxPolyDP(contour, 0.02 * cv2.arcLength(contour, True), True)
+        if len(polygon) != 4:
+            continue
+        points = polygon.reshape(4, 2).astype("float32")
+        sums, differences = points.sum(axis=1), np.diff(points, axis=1).ravel()
+        ordered = np.array([points[np.argmin(sums)], points[np.argmin(differences)], points[np.argmax(sums)], points[np.argmax(differences)]], dtype="float32")
+        target = np.array([[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype="float32")
+        return cv2.warpPerspective(image, cv2.getPerspectiveTransform(ordered, target), (width, height))
+    return image
+
+
+def _ocr_with_ai_fallback(page: object, page_number: int) -> str:
+    """Use the document model, then router `auto`, when local OCR is unavailable."""
+    try:
+        pix = page.get_pixmap(matrix=__import__("fitz").Matrix(3, 3), alpha=False)
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+            image_path = Path(handle.name)
+        pix.save(str(image_path))
+        try:
+            return GeminiDocumentService().extract_image_text(image_path, mime_type="image/png")
+        finally:
+            image_path.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("Page %s -> AI OCR fallback failed: %s", page_number, exc)
+        return ""
 
 
 def _local_pdf_path(path: str | Path) -> tuple[Path, str | None]:

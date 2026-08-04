@@ -37,26 +37,30 @@ class GeminiDocumentService:
 
     def extract_image_text(self, source: str | Path, *, mime_type: str | None = None) -> str:
         image_url = _image_url(source, mime_type)
-        reply = self.ai.chat(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are Gemini document understanding for academic material. "
-                        "Extract all readable text from the image, preserving headings, tables, formulas, "
-                        "question numbers, marks, units, and layout hints. Return plain text only."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Extract this academic document image for downstream chunking and analysis."},
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                    ],
-                },
-            ],
-            temperature=0.0,
-        )["reply"]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are document OCR for academic material. Extract all readable text from the image, "
+                    "preserving headings, tables, formulas, question numbers, marks, units, and layout hints. "
+                    "Return plain text only."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Extract this academic document image for downstream chunking and analysis."},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            },
+        ]
+        try:
+            reply = self.ai.chat(messages, temperature=0.0)["reply"]
+        except AIServiceError:
+            if self.ai.model == self.fallback_ai.model:
+                raise
+            logger.warning("Configured document model failed; retrying image OCR through the available auto model.")
+            reply = self.fallback_ai.chat(messages, temperature=0.0)["reply"]
         return reply.strip()
 
 
