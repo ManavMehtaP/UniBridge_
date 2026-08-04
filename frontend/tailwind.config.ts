@@ -26,6 +26,7 @@ export default {
       backgroundImage: { brand: 'linear-gradient(135deg,#3B82F6 0%,#2563EB 100%)' },
       fontFamily: {
         sans: ['Instrument Sans', 'Inter', '-apple-system', 'sans-serif'],
+        serif: ['Newsreader', 'Georgia', 'serif'],
       },
       width: { sidebar: '220px' },
       height: { topbar: '64px' },

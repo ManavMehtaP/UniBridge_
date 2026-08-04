@@ -59,7 +59,7 @@ export function ArchiveBrowser({
             {isOpen(y.academicYearId) ? <ChevronDown size={16} className="text-text-muted" /> : <ChevronRight size={16} className="text-text-muted" />}
             <GraduationCap size={18} className="text-primary" />
             <div className="flex-1">
-              <div className="text-[17px] font-semibold text-text-primary">{y.academicYear}</div>
+              <div className="font-serif text-[17px] font-semibold text-text-primary">{y.academicYear}</div>
               <div className="text-xs text-text-muted">{y.semesters.length} semester{y.semesters.length === 1 ? '' : 's'} preserved</div>
             </div>
             <Badge tone="neutral">{y.totalStudents} students</Badge>

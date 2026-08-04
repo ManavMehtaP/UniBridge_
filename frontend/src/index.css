@@ -41,6 +41,7 @@
   --shadow-md: 0 6px 16px rgba(37, 99, 235, 0.1);
   --shadow-lg: 0 30px 70px rgba(21, 34, 50, 0.2);
 
+  --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
 }
 
 @layer base {
@@ -60,6 +61,12 @@
   }
   /* Section & card titles render in Newsreader serif — the redesign's display face.
      Applies app-wide via the shared PageShell/CardHeader/StatCard headings. */
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-serif);
+    letter-spacing: -0.01em;
+  }
 }
 
 /* Mobile navigation drawer slide-over. */
