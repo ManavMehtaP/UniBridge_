@@ -4087,6 +4087,7 @@ export const portalService = {
         return {
           pyqId: pyqFile.id,
           year: pyqFile.year,
+          fileName: pyqFile.fileKey.split("/").at(-1)?.replace(/^\d+-/, "") ?? "PYQ document",
           status: pyqFile.aiDocument?.processingStatus ?? (insight ? "completed" : "queued"),
           summary: pyqFile.aiDocument?.metadata?.generatedSummary ?? null,
           difficulty: insight?.difficulty ?? "",
@@ -4113,6 +4114,17 @@ export const portalService = {
       status: pyq.aiDocument?.processingStatus ?? (pyq.isAnalyzed ? "completed" : "queued"),
       summary: pyq.aiDocument?.metadata?.generatedSummary ?? null,
       errorMessage: pyq.aiDocument?.errorMessage ?? null,
+    };
+  },
+
+  async studentPyqFileAccess(studentId: string, universityId: string, pyqId: string) {
+    const pyq = await prisma.pYQFile.findUnique({ where: { id: pyqId }, select: { id: true, subjectId: true, fileKey: true, fileUrl: true } });
+    if (!pyq) throw new ApiError(404, "PYQ_NOT_FOUND", "PYQ not found.");
+    await ensureStudentSubject(studentId, universityId, pyq.subjectId);
+    return {
+      pyqId: pyq.id,
+      fileName: pyq.fileKey.split("/").at(-1)?.replace(/^\d+-/, "") ?? "PYQ document",
+      downloadUrl: storageEnabled ? presignGetUrl(pyq.fileKey, 60 * 60) : pyq.fileUrl,
     };
   },
 

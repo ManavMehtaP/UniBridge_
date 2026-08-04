@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { BarChart3, Sparkles, Target } from 'lucide-react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { BarChart3, Download, Eye, Sparkles, Target } from 'lucide-react'
 import { studentApi } from '@/api/student'
 import { errorMessage } from '@/api/client'
 import { PageShell } from '@/components/shared/PageShell'
@@ -14,22 +14,48 @@ import { Select } from '@/components/ui/Select'
 
 type Subject = { id: string; code: string; name: string }
 type Topic = { topic: string; frequency: number; priority: 'HIGH' | 'MEDIUM' | 'LOW' }
-type PyqFile = { pyqId: string; year: string; status: string; summary: string | null; topics: string[]; questionTypes: string[] }
+type PyqFile = { pyqId: string; year: string; fileName: string; status: string; summary: string | null; topics: string[]; questionTypes: string[] }
 type PyqData = { subjectCode: string; subjectName: string; status: string; totalPYQsAnalyzed: number; averagePct: number | null; importantTopics: Topic[]; weakPoints: string[]; files: PyqFile[] }
 type MarksData = { predicted_percentage?: number; prediction_confidence?: string; predictions?: Array<{ subject_code: string; subject_name: string; predicted_marks: number; predicted_percentage: number; trend: string; confidence_note: string }> }
 
 export default function StudyInsightsPage() {
   const [subjectId, setSubjectId] = useState('')
   const [summaryOf, setSummaryOf] = useState<PyqFile | null>(null)
+  const [preview, setPreview] = useState<{ title: string; url: string } | null>(null)
   const subjects = useQuery({ queryKey: ['student', 'subjects'], queryFn: studentApi.subjects })
   const pyq = useQuery({ queryKey: ['student', 'pyq-analysis', subjectId], queryFn: () => studentApi.pyqAnalysis(subjectId), enabled: !!subjectId, retry: false })
   const marks = useQuery({ queryKey: ['student', 'marks-prediction'], queryFn: studentApi.marksPrediction, retry: false })
   const summary = useQuery({ queryKey: ['student', 'pyq-summary', summaryOf?.pyqId], queryFn: () => studentApi.pyqSummary(summaryOf!.pyqId), enabled: !!summaryOf, retry: false })
+  const fileAccess = useMutation({ mutationFn: studentApi.pyqFileAccess })
   const subjectOptions = ((subjects.data as { subjects?: Subject[] } | undefined)?.subjects ?? [])
   const pyqData = pyq.data as PyqData | undefined
   const marksData = marks.data as MarksData | undefined
 
   useEffect(() => { if (!subjectId && subjectOptions[0]) setSubjectId(subjectOptions[0].id) }, [subjectId, subjectOptions])
+
+  const openFile = (file: PyqFile, mode: 'preview' | 'download') => {
+    fileAccess.mutate(file.pyqId, {
+      onSuccess: async ({ downloadUrl, fileName }) => {
+        if (mode === 'preview') {
+          setPreview({ title: fileName, url: downloadUrl })
+          return
+        }
+        try {
+          const response = await fetch(downloadUrl)
+          if (!response.ok) throw new Error(`Download failed (${response.status})`)
+          const blobUrl = URL.createObjectURL(await response.blob())
+          const anchor = document.createElement('a')
+          anchor.href = blobUrl
+          anchor.download = fileName
+          anchor.click()
+          URL.revokeObjectURL(blobUrl)
+        } catch (error) {
+          window.alert(error instanceof Error ? error.message : 'Could not download this PYQ.')
+        }
+      },
+      onError: (error) => window.alert(errorMessage(error, 'Could not access this PYQ.')),
+    })
+  }
 
   return <PageShell title="Exam Insights" subtitle="PYQ topic occurrence analysis and T4 prediction based on your published marks.">
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(340px,.65fr)]">
@@ -39,13 +65,14 @@ export default function StudyInsightsPage() {
           {!subjectId ? <EmptyState icon={<Target size={22} />} title="Select a subject" description="Choose a subject to load PYQ analysis." className="border-0" /> : pyq.isLoading ? <CardSkeleton height={280} /> : pyq.isError ? <EmptyState icon={<Target size={22} />} title="PYQ analysis unavailable" description={errorMessage(pyq.error)} className="border-0" /> : <>
             <div className="rounded-card bg-surface-2 p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold text-text-primary">{pyqData?.subjectCode}</p><p className="text-xs text-text-muted">{pyqData?.subjectName}</p></div><Badge tone={pyqData?.status === 'ready' ? 'success' : 'warning'}>{pyqData?.status ?? 'unknown'}</Badge></div><div className="mt-3 grid grid-cols-2 gap-3"><Metric label="PYQs uploaded" value={String(pyqData?.totalPYQsAnalyzed ?? 0)} /><Metric label="Your average" value={pyqData?.averagePct == null ? '--' : `${pyqData.averagePct}%`} /></div></div>
             <section><h3 className="mb-2 text-sm font-semibold text-text-primary">Important topics</h3>{pyqData?.importantTopics?.length ? <div className="flex flex-wrap gap-2">{pyqData.importantTopics.map((topic) => <Badge key={topic.topic} tone={topic.priority === 'HIGH' ? 'danger' : topic.priority === 'MEDIUM' ? 'warning' : 'neutral'}>{topic.topic} - {topic.frequency} occurrences</Badge>)}</div> : <p className="text-sm text-text-muted">Important topics appear after the same topic occurs in more than one extracted question.</p>}</section>
-            <section><h3 className="mb-2 text-sm font-semibold text-text-primary">Uploaded papers</h3><div className="space-y-2">{pyqData?.files?.map((file) => <div key={file.pyqId} className="rounded-card border border-border p-3"><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold text-text-primary">PYQ {file.year}</p><p className="text-xs text-text-muted">{file.topics.join(', ') || 'Processing extracted topics'}</p></div><Button size="sm" variant="outline" leftIcon={<Sparkles size={14} />} onClick={() => setSummaryOf(file)}>AI summary</Button></div></div>)}</div>{!pyqData?.files?.length && <p className="text-sm text-text-muted">No PYQ has been uploaded for this subject.</p>}</section>
+            <section><h3 className="mb-2 text-sm font-semibold text-text-primary">Uploaded papers</h3><div className="space-y-2">{pyqData?.files?.map((file) => <div key={file.pyqId} className="rounded-card border border-border p-3"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold text-text-primary">PYQ {file.year}</p><p className="text-xs text-text-muted">{file.status === 'failed' ? 'Analysis failed, but the original paper is available below.' : file.topics.join(', ') || 'Processing extracted topics'}</p></div><div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" leftIcon={<Eye size={14} />} loading={fileAccess.isPending} onClick={() => openFile(file, 'preview')}>Preview</Button><Button size="sm" variant="outline" leftIcon={<Download size={14} />} loading={fileAccess.isPending} onClick={() => openFile(file, 'download')}>Download</Button><Button size="sm" variant="outline" leftIcon={<Sparkles size={14} />} onClick={() => setSummaryOf(file)}>AI summary</Button></div></div></div>)}</div>{!pyqData?.files?.length && <p className="text-sm text-text-muted">No PYQ has been uploaded for this subject.</p>}</section>
           </>}
         </CardBody>
       </Card>
       <Card><CardHeader title="T4 Prediction" subtitle="Projected from published T1, T2, and T3 marks." /><CardBody className="space-y-3">{marks.isLoading ? <CardSkeleton height={280} /> : marks.isError ? <EmptyState icon={<BarChart3 size={22} />} title="Prediction unavailable" description={errorMessage(marks.error)} className="border-0" /> : <><div className="rounded-card bg-primary-light/40 p-4"><p className="text-xs font-semibold uppercase text-text-muted">Predicted overall</p><p className="mt-1 text-3xl font-bold text-text-primary">{marksData?.predicted_percentage ?? '--'}%</p><p className="mt-1 text-xs text-text-muted">{marksData?.prediction_confidence ?? 'Confidence unavailable'}</p></div>{(marksData?.predictions ?? []).map((item) => <div key={item.subject_code} className="rounded-card border border-border p-3"><div className="flex justify-between gap-2"><div><p className="font-semibold text-text-primary">{item.subject_code}</p><p className="text-xs text-text-muted">{item.subject_name}</p></div><Badge tone={item.trend === 'Improving' ? 'success' : item.trend === 'Declining' ? 'warning' : 'neutral'}>{item.trend}</Badge></div><p className="mt-2 text-sm font-semibold text-primary">{item.predicted_marks}/50 ({item.predicted_percentage}%)</p><p className="mt-1 text-xs text-text-secondary">{item.confidence_note}</p></div>)}</>}</CardBody></Card>
     </div>
     <Modal open={!!summaryOf} onClose={() => setSummaryOf(null)} title={`PYQ ${summaryOf?.year ?? ''} AI Summary`} subtitle="Generated from the stored, processed PYQ chunks." size="lg"><div className="min-h-24 text-sm leading-7 text-text-secondary">{summary.isLoading ? 'Loading AI summary...' : summary.isError ? errorMessage(summary.error) : summary.data?.status === 'failed' ? summary.data.errorMessage || 'This PYQ could not be processed.' : summary.data?.summary || 'This PYQ is still processing. Try again shortly.'}</div></Modal>
+    <Modal open={!!preview} onClose={() => setPreview(null)} title={preview?.title ?? 'PYQ preview'} subtitle="Original faculty-uploaded paper" size="xl"><iframe title={preview?.title ?? 'PYQ preview'} src={preview?.url} className="h-[70vh] w-full rounded border border-border" /></Modal>
   </PageShell>
 }
 

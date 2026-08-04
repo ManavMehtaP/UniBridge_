@@ -190,7 +190,7 @@ def _extract_pdf_pages(path: str | Path) -> str:
             pages: list[str] = []
             for page_index, page in enumerate(pdf, start=1):
                 text = page.get_text("text").strip()
-                if len(text) >= 100:
+                if not _is_scanned_page(text):
                     logger.info("Page %s -> Embedded text detected (PyMuPDF)", page_index)
                     pages.append(f"[Page {page_index}]\n{text}")
                     continue
@@ -209,6 +209,17 @@ def _extract_pdf_pages(path: str | Path) -> str:
     finally:
         if cleanup_path:
             os.unlink(cleanup_path)
+
+
+def _is_scanned_page(text: str) -> bool:
+    """Detect missing text layers and watermark-only pseudo text from photographed scans."""
+    if len(text.strip()) < 100:
+        return True
+    lines = [" ".join(line.split()).lower() for line in text.splitlines() if line.strip()]
+    if len(lines) >= 3 and max(Counter(lines).values(), default=0) / len(lines) >= 0.7:
+        return True
+    words = re.findall(r"[A-Za-z0-9]{2,}", text.lower())
+    return len(words) >= 20 and len(set(words)) / len(words) < 0.12
 
 
 def _ocr_pdf_page(page: object, page_number: int) -> str:

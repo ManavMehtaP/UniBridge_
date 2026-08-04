@@ -133,6 +133,7 @@ export const studentApi = {
   renameAiConversation: (id: string, title: string) => djangoAiPatch(`/chats/${id}`, { title }),
   pyqAnalysis: (subjectId: string) => api.get(`/student/ai/pyq-analysis/${subjectId}`).then((r) => r.data),
   pyqSummary: (pyqId: string) => api.get(`/student/ai/pyq/${pyqId}/summary`).then((r) => r.data),
+  pyqFileAccess: (pyqId: string) => api.get<{ fileName: string; downloadUrl: string }>(`/student/ai/pyq/${pyqId}/file`).then((r) => r.data),
   smartNoteSummary: (noteId: string) => api.get(`/student/ai/smart-notes/${noteId}/summary`).then((r) => r.data),
   marksPrediction: () => djangoAiGet('/students/me/marks/prediction'),
 
