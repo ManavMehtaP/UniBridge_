@@ -123,6 +123,15 @@ studentRouter.get("/notes/:noteId/download", asyncHandler(async (req, res) => {
   res.json(await portalService.studentNoteDownload(req.user!.id, req.user!.universityId, str(req.params.noteId)));
 }));
 
+studentRouter.get("/notes/:noteId/file", asyncHandler(async (req, res) => {
+  const file = await portalService.studentNoteFile(req.user!.id, req.user!.universityId, str(req.params.noteId));
+  const mode = str(req.query.mode || "inline") === "download" ? "attachment" : "inline";
+  res.setHeader("Content-Type", file.mimeType);
+  res.setHeader("Content-Disposition", `${mode}; filename="${encodeURIComponent(file.filename)}"`);
+  res.setHeader("Cache-Control", "private, max-age=300");
+  res.send(file.buffer);
+}));
+
 studentRouter.get("/notes/:noteId/flashcards", asyncHandler(async (req, res) => {
   res.json(await portalService.studentNoteFlashcards(req.user!.id, req.user!.universityId, str(req.params.noteId)));
 }));

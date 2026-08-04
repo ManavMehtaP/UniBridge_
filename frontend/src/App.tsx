@@ -4,7 +4,7 @@ import { Toaster } from 'react-hot-toast'
 import { router } from '@/router'
 
 const queryClient = new QueryClient({
-  defaultOptions: {
+  defaultOptions: { 
     queries: {
       staleTime: 60_000,
       // Retry only transient failures (network / 5xx) once. A 401/403/404/422 won't

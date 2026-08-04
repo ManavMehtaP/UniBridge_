@@ -18,6 +18,11 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { CardSkeleton } from '@/components/ui/Skeleton'
 
+function formatDate(value?: string | null) {
+  if (!value) return 'Not set'
+  return new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(new Date(value))
+}
+
 export default function QuizzesPage() {
   const qc = useQueryClient()
   const scope = useFacultyScope()
@@ -69,6 +74,7 @@ export default function QuizzesPage() {
               </div>
               {q.description && <p className="mt-1 line-clamp-2 text-xs text-text-secondary">{q.description}</p>}
               {!!q.batchCodes?.length && <p className="mt-2 text-[11px] font-medium text-primary">Visible to: {q.batchCodes.join(', ')}</p>}
+              {q.isPublished && <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-text-secondary"><span>Start date <b>{formatDate(q.createdAt)}</b></span><span>End date <b>{formatDate(q.dueDate)}</b></span></div>}
               <div className="mt-3 flex items-center justify-between border-t border-border-light pt-3 text-xs text-text-secondary">
                 <div className="flex gap-3">
                   <span><b>{q.questionCount ?? 0}</b> Q</span>
@@ -80,8 +86,8 @@ export default function QuizzesPage() {
                     <ListChecks size={14} /> Questions
                   </button>
                   {!q.isPublished && (
-                    <button onClick={() => publish.mutate(q.id)} title="Publish" className="flex h-7 w-7 items-center justify-center rounded-sm text-text-secondary hover:bg-primary-light hover:text-primary">
-                      <Send size={14} />
+                    <button onClick={() => publish.mutate(q.id)} title="Publish" className="flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-[11px] font-semibold text-text-secondary hover:bg-primary-light hover:text-primary">
+                      <Send size={14} /> Publish
                     </button>
                   )}
                   <button onClick={() => setDeleteOf(q)} title="Delete" className="flex h-7 w-7 items-center justify-center rounded-sm text-text-secondary hover:bg-danger-light hover:text-danger">

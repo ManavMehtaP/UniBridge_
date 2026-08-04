@@ -67,6 +67,8 @@ export const studentApi = {
   noteDownloadUrl: (id: string) => `${api.defaults.baseURL}/student/notes/${id}/download`,
   // Returns a short-lived presigned URL (auth header is carried by axios; a plain <a> can't).
   noteDownload: (id: string) => api.get<{ downloadUrl: string }>(`/student/notes/${id}/download`).then((r) => r.data),
+  noteFile: (id: string, mode: 'inline' | 'download' = 'inline') =>
+    api.get(`/student/notes/${id}/file`, { params: { mode }, responseType: 'blob' }).then((r) => r.data as Blob),
 
   selfNotes: () => api.get<{ data: T.SelfNote[] }>('/student/self-notes').then((r) => r.data),
   createSelfNote: (body: Record<string, unknown>) => api.post('/student/self-notes', body).then((r) => r.data),

@@ -3456,6 +3456,21 @@ export const portalService = {
     return { downloadUrl, expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(), mimeType: note.mimeType, filename: stored?.originalFileName ?? `${note.title.replace(/\s+/g, "_")}_${note.subjectCode}` };
   },
 
+  async studentNoteFile(studentId: string, universityId: string, noteId: string) {
+    const note = await this.studentNote(studentId, universityId, noteId); // enforces batch + PUBLISHED access
+    const stored = await prisma.note.findUnique({ where: { id: noteId }, select: { fileKey: true, fileUrl: true, originalFileName: true } });
+    const sourceUrl = storageEnabled && stored?.fileKey ? presignGetUrl(stored.fileKey, 15 * 60) : stored?.fileUrl;
+    if (!sourceUrl) throw new ApiError(404, "NOT_FOUND", "File not found.");
+    const response = await fetch(sourceUrl);
+    if (!response.ok) throw new ApiError(502, "FILE_FETCH_FAILED", "Unable to fetch the file preview.");
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return {
+      buffer,
+      mimeType: note.mimeType || response.headers.get("content-type") || "application/octet-stream",
+      filename: stored?.originalFileName ?? `${note.title.replace(/\s+/g, "_")}_${note.subjectCode}`,
+    };
+  },
+
   async studentNoteFlashcards(studentId: string, universityId: string, noteId: string) {
     const note = await this.studentNote(studentId, universityId, noteId);
     return { noteTitle: note.title, subjectCode: note.subjectCode, flashcards: note.flashcards, total: note.flashcards.length };
