@@ -72,6 +72,9 @@ facultyRouter.get("/activity-feed", asyncHandler(async (req, res) => {
 facultyRouter.get("/my-scope", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyMyScope(req.user!.id, req.user!.universityId, req.query.semesterId as string | undefined));
 }));
+facultyRouter.get("/history/semesters", asyncHandler(async (req, res) => {
+  res.json(await portalService.facultyHistorySemesters(req.user!.id, req.user!.universityId));
+}));
 
 facultyRouter.get("/timetable/today", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyTodayTimetable(req.user!.id, req.user!.universityId, req.query.semesterId as string | undefined));

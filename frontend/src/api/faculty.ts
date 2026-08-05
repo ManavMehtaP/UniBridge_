@@ -6,7 +6,8 @@ import type * as T from '@/types/faculty'
 type Params = Record<string, string | number | boolean | undefined>
 
 export const facultyApi = {
-  scope: () => api.get<T.FacultyScope>('/faculty/my-scope').then((r) => r.data),
+  scope: (semesterId?: string) => api.get<T.FacultyScope>('/faculty/my-scope', { params: { semesterId } }).then((r) => r.data),
+  historySemesters: () => api.get<{ currentSemesterId: string; data: { semesterId: string; label: string; number: number; yearLevel: string; academicYear: string; assignmentCount: number; isCurrent: boolean }[] }>('/faculty/history/semesters').then((r) => r.data),
 
   profile: () => api.get('/faculty/profile').then((r) => r.data),
   updateProfile: (body: Record<string, unknown>) => api.put('/faculty/profile', body).then((r) => r.data),
@@ -17,11 +18,11 @@ export const facultyApi = {
   activityFeed: (page = 1, limit = 10) =>
     api.get('/faculty/activity-feed', { params: { page, limit } }).then((r) => r.data),
 
-  dashboardSummary: () => api.get<T.FacultyDashboardStats>('/faculty/dashboard/summary').then((r) => r.data),
+  dashboardSummary: (semesterId?: string) => api.get<T.FacultyDashboardStats>('/faculty/dashboard/summary', { params: { semesterId } }).then((r) => r.data),
 
-  timetableToday: () => api.get<T.TodayTimetable>('/faculty/timetable/today').then((r) => r.data),
-  timetable: () =>
-    api.get<{ slots: T.TimetableSlot[] }>('/faculty/timetable').then((r) => r.data),
+  timetableToday: (semesterId?: string) => api.get<T.TodayTimetable>('/faculty/timetable/today', { params: { semesterId } }).then((r) => r.data),
+  timetable: (semesterId?: string) =>
+    api.get<{ slots: T.TimetableSlot[] }>('/faculty/timetable', { params: { semesterId } }).then((r) => r.data),
 
   students: (params: Params) =>
     api.get<PaginatedResponse<T.FacultyStudentRow>>('/faculty/students', { params }).then((r) => r.data),

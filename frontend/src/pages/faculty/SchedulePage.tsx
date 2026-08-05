@@ -5,6 +5,7 @@ import { format } from 'date-fns'
 import { ArrowRight, CalendarCheck2, CheckCircle2, Clock } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
 import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
+import { useFacultyHistoryStore } from '@/stores/facultyHistoryStore'
 import { subjectVisual, fmtTime, roomTone } from '@/lib/schedule'
 import { cn } from '@/lib/utils'
 import type { TimetableSlot } from '@/types/faculty'
@@ -16,9 +17,11 @@ import { CardSkeleton } from '@/components/ui/Skeleton'
 const DAYS = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 export default function SchedulePage() {
-  const scope = useFacultyScope()
-  const today = useQuery({ queryKey: ['faculty', 'timetable', 'today'], queryFn: facultyApi.timetableToday })
-  const weekly = useQuery({ queryKey: ['faculty', 'timetable'], queryFn: facultyApi.timetable })
+  const history = useFacultyHistoryStore()
+  const semesterId = history.semesterId ?? undefined
+  const scope = useFacultyScope(semesterId)
+  const today = useQuery({ queryKey: ['faculty', 'timetable', 'today', semesterId], queryFn: () => facultyApi.timetableToday(semesterId) })
+  const weekly = useQuery({ queryKey: ['faculty', 'timetable', semesterId], queryFn: () => facultyApi.timetable(semesterId) })
 
   const byDay = useMemo(() => {
     const m = new Map<number, TimetableSlot[]>()
@@ -38,6 +41,7 @@ export default function SchedulePage() {
       title="My Schedule"
       subtitle={scope.data ? scope.data.activeSemester.label : 'Your lectures this week'}
     >
+      {history.semesterId && <div className="mb-4 rounded-sm border border-warning/30 bg-warning-light/30 px-3 py-2 text-xs font-medium text-warning">Viewing {history.semesterLabel} — timetable history is read-only.</div>}
       {/* Today's schedule — the lead */}
       <Card className="p-4 md:p-5">
         <div className="mb-3 flex items-center justify-between">
@@ -82,7 +86,7 @@ export default function SchedulePage() {
                       <Clock size={12} /> {fmtTime(s.slotStart)} – {fmtTime(s.slotEnd)}
                     </div>
                   </div>
-                  {s.attendanceMarked ? (
+                  {s.attendanceMarked || history.semesterId ? (
                     <Badge tone="success" className="shrink-0"><CheckCircle2 size={12} /> Marked</Badge>
                   ) : (
                     <Link to="/faculty/attendance" className="flex shrink-0 items-center gap-1 rounded-full bg-primary px-2.5 py-1 text-xs font-semibold text-white hover:bg-primary-dark">

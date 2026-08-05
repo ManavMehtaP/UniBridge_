@@ -5,6 +5,7 @@ import { useAuthStore, useUser } from '@/stores/authStore'
 import { authApi } from '@/api/auth'
 import { SidebarNavItem } from './SidebarNavItem'
 import { SemesterHistorySelector } from './SemesterHistorySelector'
+import { FacultySemesterHistorySelector } from './FacultySemesterHistorySelector'
 import type { NavSection } from './navItems/types'
 
 const roleLabel: Record<string, string> = {
@@ -59,6 +60,7 @@ export function Sidebar({
 
       {/* Semester history (HOD only — under the logo) */}
       {role === 'HOD' && <SemesterHistorySelector />}
+      {role === 'FACULTY' && <FacultySemesterHistorySelector />}
 
       {/* Nav */}
       <nav className="scrollbar-thin flex-1 overflow-y-auto px-3 py-4">

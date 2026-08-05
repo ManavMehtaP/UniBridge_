@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { BookOpen, CalendarCheck, ClipboardList, Heart, Users } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
 import { useUser } from '@/stores/authStore'
+import { useFacultyHistoryStore } from '@/stores/facultyHistoryStore'
 import { formatNumber } from '@/lib/utils'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
@@ -12,8 +13,10 @@ import { StatCardSkeleton } from '@/components/ui/Skeleton'
 
 export default function FacultyDashboardPage() {
   const user = useUser()
-  const summary = useQuery({ queryKey: ['faculty', 'dashboard'], queryFn: facultyApi.dashboardSummary })
-  const today = useQuery({ queryKey: ['faculty', 'today'], queryFn: facultyApi.timetableToday })
+  const history = useFacultyHistoryStore()
+  const semesterId = history.semesterId ?? undefined
+  const summary = useQuery({ queryKey: ['faculty', 'dashboard', semesterId], queryFn: () => facultyApi.dashboardSummary(semesterId) })
+  const today = useQuery({ queryKey: ['faculty', 'today', semesterId], queryFn: () => facultyApi.timetableToday(semesterId) })
   const upcoming = useQuery({ queryKey: ['faculty', 'upcoming'], queryFn: () => facultyApi.upcomingEvents(5) })
 
   const s = summary.data?.stats
@@ -28,6 +31,7 @@ export default function FacultyDashboardPage() {
         {summary.data?.faculty.mentorCode && (
           <Badge tone="teal" className="mt-2">Mentor Code: {summary.data.faculty.mentorCode}</Badge>
         )}
+        {history.semesterId && <Badge tone="warning" className="mt-2">Viewing {history.semesterLabel} · read-only history</Badge>}
       </div>
 
       <div className="grid grid-cols-2 gap-3.5 md:grid-cols-4">
@@ -75,9 +79,9 @@ export default function FacultyDashboardPage() {
             action={<ClipboardList size={16} className="text-text-muted" />}
           />
           <CardBody className="grid grid-cols-2 gap-2">
-            <QuickAction to="/faculty/attendance" label="Mark Attendance" tone="primary" />
-            <QuickAction to="/faculty/notes" label="Upload Notes" tone="purple" />
-            <QuickAction to="/faculty/quizzes" label="Create Quiz" tone="teal" />
+            {!history.semesterId && <QuickAction to="/faculty/attendance" label="Mark Attendance" tone="primary" />}
+            {!history.semesterId && <QuickAction to="/faculty/notes" label="Upload Notes" tone="purple" />}
+            {!history.semesterId && <QuickAction to="/faculty/quizzes" label="Create Quiz" tone="teal" />}
             <QuickAction to="/faculty/announcements" label="Post Announcement" tone="warning" />
             <QuickAction to="/faculty/mentees" label="View Mentees" tone="danger" />
             <QuickAction to="/faculty/analytics" label="Analytics" tone="success" />

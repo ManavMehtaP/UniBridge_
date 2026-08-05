@@ -400,7 +400,12 @@ async function getSemester(semesterId?: string, universityId?: string) {
 // getActiveSemester(uni) is ambiguous — prefer the ACTIVE semester where they have assignments,
 // then their year level, then any active. Mirrors hodActiveSemester so HOD & faculty agree.
 async function facultyActiveSemester(facultyId: string, universityId: string, explicitSemesterId?: string) {
-  if (explicitSemesterId) return getSemester(explicitSemesterId);
+  if (explicitSemesterId) {
+    const semester = await getSemester(explicitSemesterId);
+    const assigned = await prisma.facultyBatchAssignment.count({ where: { facultyId, semesterId: semester.id } });
+    if (semester.universityId !== universityId || assigned === 0) throw new ApiError(403, "SEMESTER_NOT_IN_SCOPE", "You did not teach in this semester.");
+    return semester;
+  }
   const asg = await prisma.facultyBatchAssignment.findFirst({
     where: { facultyId, semester: { status: "ACTIVE", universityId } },
     include: { semester: true },
@@ -4419,6 +4424,18 @@ export const portalService = {
       totalStudents: enrollments.length,
       mentorCode: faculty.mentorCode,
     };
+  },
+
+  async facultyHistorySemesters(facultyId: string, universityId: string) {
+    const rows = await prisma.facultyBatchAssignment.groupBy({ by: ["semesterId"], where: { facultyId }, _count: { _all: true } });
+    const semesters = await prisma.semester.findMany({
+      where: { id: { in: rows.map((row) => row.semesterId) }, universityId },
+      include: { academicYear: { select: { label: true } } },
+      orderBy: { number: "asc" },
+    });
+    const current = await facultyActiveSemester(facultyId, universityId);
+    const counts = new Map(rows.map((row) => [row.semesterId, row._count._all]));
+    return { currentSemesterId: current.id, data: semesters.map((semester) => ({ semesterId: semester.id, label: semester.label, number: semester.number, yearLevel: semester.yearLevel, academicYear: semester.academicYear.label, assignmentCount: counts.get(semester.id) ?? 0, isCurrent: semester.id === current.id })) };
   },
 
   // ── Faculty — Timetable ───────────────────────────────────
