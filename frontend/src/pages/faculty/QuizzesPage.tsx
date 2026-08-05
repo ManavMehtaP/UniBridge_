@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { HelpCircle, ListChecks, Plus, Send, Trash2 } from 'lucide-react'
+import { BarChart3, HelpCircle, ListChecks, Plus, Send, Trash2 } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
 import { errorMessage } from '@/api/client'
 import { useFacultyScope } from '@/hooks/faculty/useFacultyScope'
@@ -29,6 +29,7 @@ export default function QuizzesPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [deleteOf, setDeleteOf] = useState<FacultyQuiz | null>(null)
   const [questionsOf, setQuestionsOf] = useState<FacultyQuiz | null>(null)
+  const [marksOf, setMarksOf] = useState<FacultyQuiz | null>(null)
 
   const list = useQuery({ queryKey: ['faculty', 'quizzes'], queryFn: () => facultyApi.quizzes({ page: 1, limit: 30 }) })
 
@@ -85,6 +86,9 @@ export default function QuizzesPage() {
                   <button onClick={() => setQuestionsOf(q)} title="Edit questions" className="flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-[11px] font-semibold text-text-secondary hover:bg-primary-light hover:text-primary">
                     <ListChecks size={14} /> Questions
                   </button>
+                  <button onClick={() => setMarksOf(q)} title="Student marks" className="flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-[11px] font-semibold text-text-secondary hover:bg-primary-light hover:text-primary">
+                    <BarChart3 size={14} /> Marks
+                  </button>
                   {!q.isPublished && (
                     <button onClick={() => publish.mutate(q.id)} title="Publish" className="flex h-7 items-center justify-center gap-1 rounded-sm px-2 text-[11px] font-semibold text-text-secondary hover:bg-primary-light hover:text-primary">
                       <Send size={14} /> Publish
@@ -104,6 +108,8 @@ export default function QuizzesPage() {
 
       <QuestionsModal quiz={questionsOf} onClose={() => setQuestionsOf(null)} onSuccess={() => qc.invalidateQueries({ queryKey: ['faculty', 'quizzes'] })} />
 
+      <QuizMarksModal quiz={marksOf} onClose={() => setMarksOf(null)} />
+
       <ConfirmDialog
         open={!!deleteOf}
         title="Delete quiz?"
@@ -114,6 +120,46 @@ export default function QuizzesPage() {
         onCancel={() => setDeleteOf(null)}
       />
     </PageShell>
+  )
+}
+
+// Faculty view of every student's marks for a quiz.
+function QuizMarksModal({ quiz, onClose }: { quiz: FacultyQuiz | null; onClose: () => void }) {
+  const attempts = useQuery({ queryKey: ['faculty', 'quiz-attempts', quiz?.id], queryFn: () => facultyApi.quizAttempts(quiz!.id), enabled: !!quiz })
+  const rows = attempts.data?.data ?? []
+  const stats = attempts.data?.stats
+  return (
+    <Modal open={!!quiz} onClose={onClose} title={`Marks — ${quiz?.title ?? ''}`} size="lg" footer={<Button onClick={onClose}>Close</Button>}>
+      {attempts.isLoading ? <CardSkeleton height={200} /> : rows.length === 0 ? (
+        <EmptyState icon={<BarChart3 size={22} />} title="No attempts yet" description="Marks appear here once students take the quiz." className="border-0" />
+      ) : (
+        <div className="space-y-3">
+          {stats && (
+            <div className="grid grid-cols-4 gap-2 text-center">
+              {([['Attempts', stats.attemptCount], ['Average', `${Math.round(stats.avgScore)}%`], ['High', `${stats.highScore}%`], ['Low', `${stats.lowScore}%`]] as const).map(([label, value]) => (
+                <div key={label} className="rounded-sm border border-border bg-surface-2 p-2"><div className="text-lg font-bold text-text-primary">{value}</div><div className="text-[11px] text-text-muted">{label}</div></div>
+              ))}
+            </div>
+          )}
+          <div className="max-h-96 overflow-y-auto rounded-card border border-border">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-surface-2 text-left text-xs text-text-muted"><tr><th className="px-3 py-2 font-semibold">Student</th><th className="px-3 py-2 font-semibold">Enrollment</th><th className="px-3 py-2 font-semibold">Batch</th><th className="px-3 py-2 text-right font-semibold">Marks</th><th className="px-3 py-2 font-semibold">Submitted</th></tr></thead>
+              <tbody>
+                {[...rows].sort((a, b) => b.score - a.score).map((r, i) => (
+                  <tr key={`${r.enrollmentNo}-${i}`} className="border-t border-border-light">
+                    <td className="px-3 py-2 font-medium text-text-primary">{r.studentName}</td>
+                    <td className="px-3 py-2 text-xs text-text-muted">{r.enrollmentNo}</td>
+                    <td className="px-3 py-2 text-xs">{r.batchCode || '—'}</td>
+                    <td className="px-3 py-2 text-right"><Badge tone={r.score >= 40 ? 'success' : 'danger'}>{r.score}%</Badge></td>
+                    <td className="px-3 py-2 text-xs text-text-muted">{r.submittedAt ? new Date(r.submittedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </Modal>
   )
 }
 

@@ -55,6 +55,30 @@ def _extract_from_path(path: Path) -> str:
                 if hasattr(shape, "text"):
                     lines.append(shape.text)
         return "\n".join(lines)
+    if suffix == ".zip":
+        # A zip of notes: extract text from every supported file inside and concatenate.
+        import zipfile
+
+        supported = TEXT_EXTENSIONS | {".pdf", ".docx", ".pptx"}
+        parts: list[str] = []
+        with zipfile.ZipFile(str(path)) as archive:
+            for name in archive.namelist():
+                inner = Path(name).suffix.lower()
+                if inner not in supported or name.endswith("/"):
+                    continue
+                with tempfile.NamedTemporaryFile(delete=False, suffix=inner) as handle:
+                    handle.write(archive.read(name))
+                    inner_path = Path(handle.name)
+                try:
+                    parts.append(f"[{name}]\n{_extract_from_path(inner_path)}")
+                except Exception:  # noqa: BLE001 — skip a single unreadable member
+                    pass
+                finally:
+                    try:
+                        os.remove(inner_path)
+                    except OSError:
+                        pass
+        return "\n\n".join(parts)
     return path.read_text(encoding="utf-8", errors="ignore")
 
 

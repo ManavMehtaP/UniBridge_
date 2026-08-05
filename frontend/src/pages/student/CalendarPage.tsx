@@ -3,16 +3,17 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { studentApi } from '@/api/student'
 import { PageShell } from '@/components/shared/PageShell'
+import { CalendarGrid, EVENT_META } from '@/components/shared/CalendarGrid'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
+import { Button } from '@/components/ui/Button'
 import { CardSkeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
+import type { HodCalendarEvent } from '@/types/hod'
 
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const tone: Record<string, 'success' | 'danger' | 'purple' | 'primary' | 'neutral'> = {
-  REGULAR_TEACHING: 'success',
-  HOLIDAY: 'success', EXAM: 'danger', CULTURAL: 'purple', PHASE: 'primary', OTHER: 'neutral',
-}
+type RawEvent = { id: string; date: string; startDate?: string; endDate?: string; title: string; type: string }
+const toEvents = (rows: RawEvent[]): HodCalendarEvent[] =>
+  rows.map((e) => ({ id: e.id, date: e.date, startDate: e.startDate ?? e.date, endDate: e.endDate ?? e.date, title: e.title, type: (e.type as HodCalendarEvent['type']) ?? 'OTHER' }))
 
 export default function StudentCalendarPage() {
   const [d, setD] = useState(() => new Date())
@@ -21,14 +22,8 @@ export default function StudentCalendarPage() {
   const upcoming = useQuery({ queryKey: ['student', 'cal-up'], queryFn: () => studentApi.upcomingEvents(6) })
   const timeline = useQuery({ queryKey: ['student', 'cal-timeline'], queryFn: studentApi.phaseTimeline })
 
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
-  const startPad = new Date(year, month, 1).getDay()
-  const byDay = new Map<number, { id: string; title: string; type: string }[]>()
-  ;((events.data as { data?: { id: string; date: string; title: string; type: string }[] })?.data ?? []).forEach((e) => {
-    const day = new Date(e.date).getDate()
-    if (!byDay.has(day)) byDay.set(day, [])
-    byDay.get(day)!.push(e)
-  })
+  const monthEvents = toEvents((events.data as { data?: RawEvent[] })?.data ?? [])
+  const upcomingRows = ((upcoming.data as { data?: RawEvent[] })?.data ?? [])
 
   return (
     <PageShell title="Calendar" subtitle="Academic events and phase timeline">
@@ -39,32 +34,17 @@ export default function StudentCalendarPage() {
             action={
               <div className="flex items-center gap-1">
                 <button onClick={() => setD(new Date(year, month - 1, 1))} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronLeft size={16} /></button>
-                <button onClick={() => setD(new Date())} className="rounded-sm border border-border px-3 h-8 text-xs font-semibold hover:bg-surface-2">Today</button>
+                <Button variant="outline" size="sm" onClick={() => setD(new Date())}>Today</Button>
                 <button onClick={() => setD(new Date(year, month + 1, 1))} className="flex h-8 w-8 items-center justify-center rounded-sm border border-border hover:bg-surface-2"><ChevronRight size={16} /></button>
               </div>
             }
           />
           <CardBody className="pt-0">
-            <div className="mb-1 grid grid-cols-7 gap-1 text-center text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-              {DAYS.map((d) => <div key={d}>{d}</div>)}
-            </div>
-            <div className="grid grid-cols-7 gap-1">
-              {Array.from({ length: startPad }).map((_, i) => <div key={`p-${i}`} />)}
-              {Array.from({ length: daysInMonth }).map((_, i) => {
-                const day = i + 1
-                const isToday = year === new Date().getFullYear() && month === new Date().getMonth() && day === new Date().getDate()
-                const dayEvents = byDay.get(day) ?? []
-                return (
-                  <div key={day} className={cn('min-h-[80px] rounded-sm border border-border-light p-1.5', isToday && 'border-primary bg-primary-light')}>
-                    <div className={cn('mb-1 text-xs font-semibold', isToday ? 'text-primary' : 'text-text-primary')}>{day}</div>
-                    <div className="space-y-0.5">
-                      {dayEvents.slice(0, 2).map((e) => (
-                        <div key={e.id} className={cn('truncate rounded-xs px-1 py-0.5 text-[10px] font-medium', `bg-${tone[e.type] ?? 'neutral'}-light text-${tone[e.type] ?? 'neutral'}`)}>{e.title}</div>
-                      ))}
-                      {dayEvents.length > 2 && <div className="text-[10px] text-text-muted">+{dayEvents.length - 2}</div>}
-                    </div>
-                  </div>
-                )
+            {events.isLoading ? <CardSkeleton height={420} /> : <CalendarGrid events={monthEvents} year={year} month={month} readonly />}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(['REGULAR_TEACHING', 'EXAM', 'PUBLIC_HOLIDAY', 'HOLIDAY', 'READING_HOLIDAY', 'SEMESTER_BREAK', 'CULTURAL'] as HodCalendarEvent['type'][]).map((t) => {
+                const m = EVENT_META[t]; const Icon = m.icon
+                return <span key={t} className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium', m.chip)}><Icon size={10} />{m.label}</span>
               })}
             </div>
           </CardBody>
@@ -74,17 +54,22 @@ export default function StudentCalendarPage() {
           <Card>
             <CardHeader title="Upcoming" />
             <CardBody className="pt-0">
-              <ul className="space-y-2">
-                {((upcoming.data as { data?: { id: string; date: string; title: string; type: string }[] })?.data ?? []).map((e) => (
-                  <li key={e.id} className="flex items-start gap-2">
-                    <div className={cn('mt-1 h-2 w-2 shrink-0 rounded-full', `bg-${tone[e.type] ?? 'neutral'}`)} />
-                    <div className="flex-1">
-                      <div className="text-[13px] font-semibold text-text-primary">{e.title}</div>
-                      <div className="text-xs text-text-muted">{new Date(e.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              {upcomingRows.length === 0 ? <p className="text-xs text-text-muted">No upcoming events.</p> : (
+                <ul className="space-y-2">
+                  {upcomingRows.map((e) => {
+                    const m = EVENT_META[(e.type as HodCalendarEvent['type'])] ?? EVENT_META.OTHER
+                    return (
+                      <li key={e.id} className="flex items-start gap-2">
+                        <div className={cn('mt-1 h-2 w-2 shrink-0 rounded-full', m.dot)} />
+                        <div className="flex-1">
+                          <div className="text-[13px] font-semibold text-text-primary">{e.title}</div>
+                          <div className="text-xs text-text-muted">{new Date(e.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
             </CardBody>
           </Card>
           <Card>

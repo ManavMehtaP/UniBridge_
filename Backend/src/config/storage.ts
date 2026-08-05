@@ -48,15 +48,46 @@ export async function uploadObject(key: string, body: Buffer, contentType: strin
   const signature = hmac(signingKey(datestamp), stringToSign).toString("hex");
   const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
-  // `host` is signed but not set here — fetch/undici sets the Host header itself (it's a forbidden header).
-  // Cast: the DOM lib's BodyInit omits ArrayBufferView, but undici accepts a Buffer/Uint8Array at runtime.
-  const res = await fetch(`${endpoint}/${enc(bucket)}/${encPath(key)}`, {
+  // Content-Type is NOT part of the signed headers, so we can retry with a different one on the
+  // same signature. `host` is signed but not set here — undici sets it (it's a forbidden header).
+  const put = (ct: string) => fetch(`${endpoint}/${enc(bucket)}/${encPath(key)}`, {
     method: "PUT",
-    headers: { "x-amz-date": amzdate, "x-amz-content-sha256": payloadHash, Authorization: authorization, "Content-Type": contentType },
+    headers: { "x-amz-date": amzdate, "x-amz-content-sha256": payloadHash, Authorization: authorization, "Content-Type": ct },
     body: body as unknown as BodyInit,
   });
-  if (!res.ok) throw new Error(`Storage upload failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  let res = await put(contentType);
+  if (!res.ok) {
+    const detail = (await res.text()).slice(0, 300);
+    // A restrictive bucket rejects e.g. zip by MIME. Most such buckets still allow the generic
+    // binary type, so retry once as application/octet-stream before giving up.
+    if (res.status === 400 && /mime|content.?type/i.test(detail) && contentType !== "application/octet-stream") {
+      res = await put("application/octet-stream");
+    }
+    if (!res.ok) throw new Error(`Storage upload failed (${res.status}): ${detail}`);
+  }
   return key;
+}
+
+// Best-effort: clear the storage bucket's MIME/size allow-list so every file type (zip, decks,
+// large PDFs) uploads. Supabase buckets created with "Restrict file uploads" ON reject e.g. zip
+// with a 400 mime error; this removes that restriction via the Storage admin API. No-op unless
+// SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are configured.
+export async function ensureBucketAcceptsAllTypes(): Promise<void> {
+  const base = env.SUPABASE_URL?.replace(/\/$/, "");
+  const key = env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!base || !key || !bucket) return;
+  try {
+    const res = await fetch(`${base}/storage/v1/bucket/${encodeURIComponent(bucket)}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${key}`, apikey: key, "Content-Type": "application/json" },
+      // null = allow all MIME types / no size cap (plan limits still apply).
+      body: JSON.stringify({ id: bucket, name: bucket, allowed_mime_types: null, file_size_limit: null }),
+    });
+    if (res.ok) console.log(`[storage] bucket "${bucket}" now accepts all file types.`);
+    else console.warn(`[storage] could not relax bucket restrictions (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  } catch (err) {
+    console.warn("[storage] bucket restriction relax skipped:", (err as Error).message);
+  }
 }
 
 export async function deleteObject(key: string): Promise<void> {

@@ -17,6 +17,10 @@ const envSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().optional(),
   S3_BUCKET: z.string().optional(),
   S3_REGION: z.string().optional(),
+  // Optional: Supabase project URL + service_role key. When set, the backend removes the storage
+  // bucket's MIME/size restrictions on startup so every file type (zip, decks, …) uploads.
+  SUPABASE_URL: z.string().url().optional(),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),
   DJANGO_AI_BASE_URL: z.string().url().optional(),
   DJANGO_AI_SERVICE_TOKEN: z.string().optional(),
 });

@@ -34,8 +34,9 @@ export function subjectVisual(code = ''): Visual {
 export function fmtTime(hhmm?: string): string {
   if (!hhmm) return ''
   const [h, m] = hhmm.split(':').map(Number)
-  const pm = h === 12 || h < 8 // 08–11 morning, 12 noon, 01–02 afternoon
-  return `${String(h).padStart(2, '0')}:${String(m ?? 0).padStart(2, '0')} ${pm ? 'PM' : 'AM'}`
+  const period = h >= 12 ? 'PM' : 'AM'
+  const h12 = h % 12 === 0 ? 12 : h % 12 // 13:30 → 1:30 PM, 12:30 → 12:30 PM, 00:15 → 12:15 AM
+  return `${h12}:${String(m ?? 0).padStart(2, '0')} ${period}`
 }
 
 export function roomTone(room?: string): 'success' | 'danger' | 'neutral' {

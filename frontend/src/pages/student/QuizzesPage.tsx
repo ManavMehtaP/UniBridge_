@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
 import { CheckCircle2, HelpCircle, Pencil, Play, RefreshCw, Sparkles, Trash2 } from 'lucide-react'
 import { studentApi } from '@/api/student'
 import { errorMessage } from '@/api/client'
@@ -22,6 +23,15 @@ function formatDate(value?: string | null) {
   return new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium' }).format(new Date(value))
 }
 
+// An in-progress attempt is mirrored to localStorage so that leaving/refreshing the page can't be
+// used to dodge a recorded attempt — on next load the saved answers are auto-submitted.
+const PENDING_KEY = 'unibridge:pendingQuizAttempt'
+type PendingAttempt = { quizId: string; presentation: { questionOrder: string[]; optionOrder: Record<string, string[]> }; answers: Record<string, string> }
+const readPending = (): PendingAttempt | null => { try { const raw = localStorage.getItem(PENDING_KEY); return raw ? JSON.parse(raw) as PendingAttempt : null } catch { return null } }
+const writePending = (p: PendingAttempt) => { try { localStorage.setItem(PENDING_KEY, JSON.stringify(p)) } catch { /* storage unavailable */ } }
+const clearPending = () => { try { localStorage.removeItem(PENDING_KEY) } catch { /* storage unavailable */ } }
+const presentationOf = (questions: Question[]) => ({ questionOrder: questions.map((q) => q.id), optionOrder: Object.fromEntries(questions.map((q) => [q.id, q.options.map((o) => o.id)])) })
+
 export default function StudentQuizzesPage() {
   const client = useQueryClient()
   const [generatorOpen, setGeneratorOpen] = useState(false)
@@ -38,8 +48,8 @@ export default function StudentQuizzesPage() {
   const chapters = useQuery({ queryKey: ['student', 'quiz-chapters', subjectId], queryFn: () => studentApi.quizChapters(subjectId), enabled: Boolean(subjectId), refetchInterval: (query) => query.state.data?.processing ? 5000 : false })
   const refresh = () => client.invalidateQueries({ queryKey: ['student', 'quizzes'] })
   const generate = useMutation({ mutationFn: studentApi.generateAiQuiz, onSuccess: () => { setGeneratorOpen(false); setSelectedChapters([]); refresh() } })
-  const start = useMutation({ mutationFn: studentApi.startQuiz, onSuccess: (data) => { autoSubmitted.current = false; setAnswers({}); setRemainingSeconds(null); setActiveAttempt(data) } })
-  const submit = useMutation({ mutationFn: ({ id, selected, presentation, autoSubmit }: { id: string; selected: Record<string, string>; presentation: unknown; autoSubmit?: boolean }) => studentApi.submitQuiz(id, selected, presentation, autoSubmit), onSuccess: (data) => { setRemainingSeconds(null); setActiveAttempt(null); setResult(data); refresh() } })
+  const start = useMutation({ mutationFn: studentApi.startQuiz, onSuccess: (data) => { autoSubmitted.current = false; setAnswers({}); setRemainingSeconds(null); writePending({ quizId: data.quizId, presentation: presentationOf(data.questions), answers: {} }); setActiveAttempt(data) } })
+  const submit = useMutation({ mutationFn: ({ id, selected, presentation, autoSubmit }: { id: string; selected: Record<string, string>; presentation: unknown; autoSubmit?: boolean }) => studentApi.submitQuiz(id, selected, presentation, autoSubmit), onSuccess: (data) => { clearPending(); setRemainingSeconds(null); setActiveAttempt(null); setResult(data); refresh() } })
   const loadReview = useMutation({ mutationFn: studentApi.quizResult, onSuccess: setReview })
   const removeQuiz = useMutation({ mutationFn: studentApi.deleteAiQuiz, onSuccess: refresh })
   const renameQuiz = useMutation({ mutationFn: ({ id, title }: { id: string; title: string }) => studentApi.renameAiQuiz(id, title), onSuccess: refresh })
@@ -61,8 +71,28 @@ export default function StudentQuizzesPage() {
   const openAttempt = (quiz: StudentQuiz) => start.mutate(quiz.id)
   const submitAttempt = (autoSubmit = false) => {
     if (!activeAttempt || (!autoSubmit && activeAttempt.questions.some((question) => !answers[question.id]))) return
-    submit.mutate({ id: activeAttempt.quizId, selected: answers, autoSubmit, presentation: { questionOrder: activeAttempt.questions.map((question) => question.id), optionOrder: Object.fromEntries(activeAttempt.questions.map((question) => [question.id, question.options.map((option) => option.id)])) } })
+    submit.mutate({ id: activeAttempt.quizId, selected: answers, autoSubmit, presentation: presentationOf(activeAttempt.questions) })
   }
+
+  // Keep the persisted attempt's answers current so a refresh auto-submits the latest selections.
+  useEffect(() => {
+    if (!activeAttempt) return
+    const p = readPending()
+    if (p && p.quizId === activeAttempt.quizId) writePending({ ...p, answers })
+  }, [answers, activeAttempt])
+
+  // On page load, auto-submit any attempt a previous refresh/navigation left open.
+  const bootstrapped = useRef(false)
+  useEffect(() => {
+    if (bootstrapped.current) return
+    bootstrapped.current = true
+    const p = readPending()
+    if (!p) return
+    clearPending()
+    studentApi.submitQuiz(p.quizId, p.answers, p.presentation, true)
+      .then(() => { toast('Your previous quiz attempt was auto-submitted.', { icon: '⏱️' }); refresh() })
+      .catch(() => { /* the attempt may already be recorded server-side */ })
+  }, [])
 
   useEffect(() => {
     if (!activeAttempt?.expiresAt || !activeAttempt.timeLimitMins) {
@@ -112,7 +142,7 @@ export default function StudentQuizzesPage() {
             <div className="p-4">
               <p className="mb-3 text-xs text-text-muted">Quizzes whose end date passed before completion.</p>
               <div className="space-y-2 md:max-h-80 md:overflow-y-auto">
-                {missedQuizzes.length ? missedQuizzes.map((quiz) => <div key={quiz.id} className="w-full rounded-sm bg-surface-2 px-3 py-2 text-left text-xs"><div className="font-semibold text-text-primary">{quiz.title}</div><div className="mt-0.5 text-text-muted">{quiz.subject.code} · {quiz.subject.name}</div><div className="mt-0.5 text-text-muted">Start {formatDate(quiz.startDate ?? quiz.createdAt)} · End {formatDate(quiz.dueDate)}</div></div>) : <p className="text-xs text-text-muted">No missed quizzes.</p>}
+                {missedQuizzes.length ? missedQuizzes.map((quiz) => <div key={quiz.id} className="w-full rounded-sm bg-surface-2 px-3 py-2 text-left text-xs"><div className="flex items-start justify-between gap-2"><div className="min-w-0"><div className="font-semibold text-text-primary">{quiz.title}</div><div className="mt-0.5 text-text-muted">{quiz.subject.code} · {quiz.subject.name}</div><div className="mt-0.5 text-text-muted">Start {formatDate(quiz.startDate ?? quiz.createdAt)} · End {formatDate(quiz.dueDate)}</div></div>{quiz.attemptsTaken ? <Button size="sm" variant="outline" onClick={() => loadReview.mutate(quiz.id)}>Review</Button> : null}</div></div>) : <p className="text-xs text-text-muted">No missed quizzes.</p>}
               </div>
             </div>
           </Card>

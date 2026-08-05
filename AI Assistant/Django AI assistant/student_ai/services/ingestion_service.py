@@ -187,13 +187,60 @@ def extract_document_text(path: str | Path, mime_type: str | None = None) -> str
     suffix = Path(str(path)).suffix.lower()
     if (mime_type or "").lower().startswith("image/") or suffix in IMAGE_EXTENSIONS:
         return GeminiDocumentService().extract_image_text(path, mime_type=mime_type)
-    if suffix != ".pdf":
-        return extract_text(path)
-    return _extract_pdf_pages(path)
+    extracted = extract_text(path)
+    if suffix == ".pdf":
+        # Drop watermark/header/footer lines that repeat across pages so the summary/quiz
+        # aren't built from watermark noise, then decide whether the remaining text is usable.
+        extracted = _strip_repeated_lines(extracted)
+    if suffix != ".pdf" or _has_usable_pdf_text(extracted):
+        return extracted
+    # Camera-photographed / scanned PDFs have no usable text layer → read the pages with vision.
+    return _extract_scanned_pdf_text(path)
 
 
-def _extract_pdf_pages(path: str | Path) -> str:
-    """Extract each PDF page with PyMuPDF, using OCR only for scanned pages."""
+def _strip_repeated_lines(text: str) -> str:
+    """Remove short lines that recur on many pages — almost always a watermark, header or footer."""
+    raw_lines = text.splitlines()
+    norm = [" ".join(line.split()).lower() for line in raw_lines]
+    counts: dict[str, int] = {}
+    for line in norm:
+        if line:
+            counts[line] = counts.get(line, 0) + 1
+    page_count = max(1, text.count("\f") + 1)
+    threshold = max(3, page_count // 2)
+    kept = [orig for orig, n in zip(raw_lines, norm) if not (n and len(n) <= 60 and counts[n] >= threshold)]
+    return "\n".join(kept)
+
+
+def _has_usable_pdf_text(extracted: str) -> bool:
+    """Reject PDFs whose text layer is only a repeated scan watermark/header."""
+    tokens = re.findall(r"[A-Za-z0-9]{2,}", extracted.lower())
+    if len(tokens) < 20:
+        return False
+    unique_ratio = len(set(tokens)) / len(tokens)
+    lines = [" ".join(line.split()).lower() for line in extracted.splitlines() if line.strip()]
+    repeated_line_ratio = len(set(lines)) / len(lines) if lines else 0
+    return len(extracted.strip()) >= 80 and unique_ratio >= 0.12 and repeated_line_ratio >= 0.2
+
+
+def _ocr_image(image_path: Path) -> str:
+    """Local OCR fallback (Tesseract). Works with no external API key; returns '' if unavailable."""
+    try:
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        logger.warning("pytesseract/Pillow not installed — cannot OCR scanned pages locally.")
+        return ""
+    try:
+        return (pytesseract.image_to_string(Image.open(str(image_path))) or "").strip()
+    except Exception as exc:  # noqa: BLE001 — e.g. the tesseract binary isn't installed
+        logger.warning("Local OCR failed (%s). Install the tesseract-ocr binary to enable it.", exc)
+        return ""
+
+
+def _extract_scanned_pdf_text(path: str | Path) -> str:
+    """Read a scanned/camera-photographed PDF page by page: try Gemini vision, then fall back to
+    local Tesseract OCR so extraction still works when no vision API key is configured."""
     try:
         import fitz
     except ImportError as exc:
@@ -206,21 +253,25 @@ def _extract_pdf_pages(path: str | Path) -> str:
             if not pdf.page_count:
                 return ""
             pages: list[str] = []
-            for page_index, page in enumerate(pdf, start=1):
-                text = page.get_text("text").strip()
-                if not _is_scanned_page(text):
-                    logger.info("Page %s -> Embedded text detected (PyMuPDF)", page_index)
-                    pages.append(f"[Page {page_index}]\n{text}")
-                    continue
-
-                logger.info("Page %s -> No embedded text detected. Running OCR.", page_index)
-                ocr_text = _ocr_pdf_page(page, page_index)
-                if ocr_text:
-                    logger.info("Page %s -> OCR completed successfully.", page_index)
-                    pages.append(f"[Page {page_index}]\n{ocr_text}")
-                else:
-                    logger.warning("Page %s -> OCR produced no text; continuing with remaining pages.", page_index)
-            logger.info("Document extraction completed.")
+            # Keep uploads bounded while still processing normal academic handouts end to end.
+            for page_index in range(min(pdf.page_count, 30)):
+                page = pdf.load_page(page_index)
+                image = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+                    image_path = Path(handle.name)
+                image.save(str(image_path))
+                try:
+                    text = ""
+                    try:
+                        text = service.extract_image_text(image_path, mime_type="image/png") or ""
+                    except Exception as exc:  # noqa: BLE001 — vision model missing/misconfigured
+                        logger.warning("Gemini vision failed on page %s (%s); trying local OCR.", page_index + 1, exc)
+                    if not text.strip():
+                        text = _ocr_image(image_path)
+                    if text.strip():
+                        pages.append(f"[Page {page_index + 1}]\n{text.strip()}")
+                finally:
+                    image_path.unlink(missing_ok=True)
             return "\n\n".join(pages)
         finally:
             pdf.close()

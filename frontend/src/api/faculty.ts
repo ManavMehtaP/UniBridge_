@@ -113,11 +113,12 @@ export const facultyApi = {
   renameNoteFolder: (id: string, name: string) => api.patch(`/faculty/notes/folders/${id}`, { name }).then((r) => r.data),
   deleteNoteFolder: (id: string) => api.delete(`/faculty/notes/folders/${id}`).then((r) => r.data),
   // Multipart: file + fields (title, subjectId, batchIds, releaseAt). Backend uploads to Supabase S3.
-  createNote: (form: FormData) => api.post('/faculty/notes', form).then((r) => r.data),
-  updateNote: (id: string, form: FormData) => api.put(`/faculty/notes/${id}`, form).then((r) => r.data),
+  // Large files (zip/decks) can exceed the 30s default on slow links — allow up to 3 min.
+  createNote: (form: FormData) => api.post('/faculty/notes', form, { timeout: 180_000 }).then((r) => r.data),
+  updateNote: (id: string, form: FormData) => api.put(`/faculty/notes/${id}`, form, { timeout: 180_000 }).then((r) => r.data),
   deleteNote: (id: string) => api.delete(`/faculty/notes/${id}`).then((r) => r.data),
   // Multipart: file + fields (subjectId, year). Backend stores it and triggers AI PYQ analysis.
-  uploadPyq: (form: FormData) => api.post('/faculty/pyq', form).then((r) => r.data),
+  uploadPyq: (form: FormData) => api.post('/faculty/pyq', form, { timeout: 180_000 }).then((r) => r.data),
   pyqs: () => api.get<{ data: FacultyPyq[] }>('/faculty/pyq').then((r) => r.data),
   deletePyq: (id: string) => api.delete(`/faculty/pyq/${id}`),
 
@@ -132,6 +133,8 @@ export const facultyApi = {
   getQuiz: (id: string) => api.get(`/faculty/quizzes/${id}`).then((r) => r.data),
   replaceQuizQuestions: (id: string, questions: { text: string; options: string[]; correctOption: string; explanation?: string; order: number }[]) =>
     api.put(`/faculty/quizzes/${id}/questions`, { questions }).then((r) => r.data),
+  // Student marks for a quiz (per-attempt) — visible to the owning faculty.
+  quizAttempts: (id: string) => api.get<{ data: { studentName: string; enrollmentNo: string; batchCode: string; score: number; submittedAt: string }[]; stats: { avgScore: number; highScore: number; lowScore: number; attemptCount: number } }>(`/faculty/quizzes/${id}/attempts`, { params: { limit: 500 } }).then((r) => r.data),
 
   announcements: (params: Params) =>
     api.get<PaginatedResponse<T.FacultyAnnouncement>>('/faculty/announcements', { params }).then((r) => r.data),
