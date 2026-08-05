@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { BarChart2, BookOpen, CalendarCheck, HelpCircle, Sparkles, Trophy } from 'lucide-react'
+import { BarChart2, BookOpen, CalendarCheck, ChevronRight, GraduationCap, HelpCircle, Sparkles, Trophy } from 'lucide-react'
 import { studentApi } from '@/api/student'
 import { useStudentEnrollment } from '@/hooks/student/useStudentEnrollment'
 import { useUser } from '@/stores/authStore'
@@ -18,6 +18,7 @@ export default function StudentDashboardPage() {
   const att = useQuery({ queryKey: ['student', 'att'], queryFn: () => studentApi.attendance(enrollment.data?.semesterId), enabled: !!enrollment.data?.semesterId })
   const upcoming = useQuery({ queryKey: ['student', 'upcoming'], queryFn: () => studentApi.upcomingEvents(5) })
   const announcements = useQuery({ queryKey: ['student', 'announcements-preview'], queryFn: () => studentApi.announcements({ page: 1, limit: 3 }) })
+  const journey = useQuery({ queryKey: ['student', 'enrollment-history'], queryFn: studentApi.enrollmentHistory })
 
   const totalAtt = att.data?.subjects.reduce((s, sub) => s + sub.percentage, 0) ?? 0
   const avgAtt = att.data?.subjects.length ? Math.round(totalAtt / att.data.subjects.length) : 0
@@ -45,6 +46,29 @@ export default function StudentDashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader title="Academic Journey" subtitle="Your promotion history is preserved permanently" />
+          <CardBody className="pt-0">
+            {(journey.data?.journey ?? []).length === 0 ? (
+              <p className="text-xs text-text-muted">Your semester journey will appear here after enrollment.</p>
+            ) : (
+              <ol className="space-y-2">
+                {journey.data.journey.map((item: { semesterNumber: number; semesterLabel: string; academicYear: string; batchCode: string; rollNo: string; isCurrent: boolean }) => (
+                  <li key={`${item.semesterNumber}-${item.batchCode}`} className="flex items-center gap-3 rounded-sm border border-border-light px-3 py-2.5">
+                    <div className={`flex h-8 w-8 items-center justify-center rounded-full ${item.isCurrent ? 'bg-primary text-white' : 'bg-surface-2 text-text-muted'}`}>
+                      {item.isCurrent ? <GraduationCap size={15} /> : <ChevronRight size={15} />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[13px] font-semibold text-text-primary">{item.semesterLabel} · Batch {item.batchCode}</div>
+                      <div className="text-xs text-text-muted">{item.academicYear} · Roll {item.rollNo}</div>
+                    </div>
+                    {item.isCurrent && <Badge tone="success">Current</Badge>}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </CardBody>
+        </Card>
         <Card>
           <CardHeader
             title="Today's Classes"
