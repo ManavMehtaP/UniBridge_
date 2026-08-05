@@ -5,6 +5,8 @@ import { BookOpen, FileText, Plus, SlidersHorizontal, UserPlus, Users, X } from 
 import { hodApi, type SubjectConfigInput } from '@/api/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
+import { useHistoryStore } from '@/stores/historyStore'
+import { HistoryBanner } from '@/components/hod/HistoryBanner'
 import { useDebounce } from '@/hooks/shared/useDebounce'
 import type { SubjectRow } from '@/types/hod'
 import { PageShell } from '@/components/shared/PageShell'
@@ -34,7 +36,9 @@ function groupByFaculty(assignments: NonNullable<SubjectRow['assignments']>): Fa
 
 export default function SubjectsPage() {
   const qc = useQueryClient()
-  const scope = useHodScope()
+  const history = useHistoryStore()
+  const readOnly = !!history.semesterId
+  const scope = useHodScope(history.semesterId ?? undefined)
   const semesterId = scope.data?.activeSemester.id
 
   const [search, setSearch] = useState('')
@@ -64,8 +68,9 @@ export default function SubjectsPage() {
     <PageShell
       title="Subjects"
       subtitle={scope.data ? scope.data.activeSemester.label : 'Manage subjects & faculty'}
-      action={<p className="text-xs text-text-muted">Subjects are managed by the Dean · you can assign faculty</p>}
+      action={<p className="text-xs text-text-muted">{readOnly ? 'Archived subject setup · read-only' : 'Subjects are managed by the Dean · you can assign faculty'}</p>}
     >
+      <HistoryBanner />
       <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-4">
         {list.isLoading ? (
           <StatCardSkeleton count={4} />
@@ -137,21 +142,21 @@ export default function SubjectsPage() {
                   )}
                 </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border-light pt-3">
+                {!readOnly && <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border-light pt-3">
                   <Button size="sm" variant="outline" leftIcon={<SlidersHorizontal size={14} />} onClick={() => setConfigOf(s.id)}>
                     Assessment
                   </Button>
                   <Button size="sm" variant="outline" leftIcon={<UserPlus size={14} />} onClick={() => setManageOf(s.id)}>
                     Faculty
                   </Button>
-                </div>
+                </div>}
               </Card>
             )
           })}
         </div>
       )}
 
-      {manageSubject && semesterId && (
+      {!readOnly && manageSubject && semesterId && (
         <ManageFacultyModal
           subject={manageSubject}
           semesterId={semesterId}
@@ -160,7 +165,7 @@ export default function SubjectsPage() {
         />
       )}
 
-      {configOf && <SubjectConfigModal subjectId={configOf} onClose={() => setConfigOf(null)} />}
+      {!readOnly && configOf && <SubjectConfigModal subjectId={configOf} onClose={() => setConfigOf(null)} />}
 
     </PageShell>
   )

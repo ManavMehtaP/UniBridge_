@@ -67,12 +67,12 @@ export const hodApi = {
   dashboard: {
     summary: (params?: Params) =>
       api.get<T.DashboardSummary>('/hod/dashboard/summary', { params }).then((r) => r.data),
-    attendanceTrend: (months = 6) =>
-      api.get<T.AttendanceTrend>('/hod/dashboard/attendance-trend', { params: { months } }).then((r) => r.data),
+    attendanceTrend: (months = 6, semesterId?: string) =>
+      api.get<T.AttendanceTrend>('/hod/dashboard/attendance-trend', { params: { months, semesterId } }).then((r) => r.data),
     resultsOverview: (semesterId?: string) =>
       api.get<T.ResultsOverview>('/hod/dashboard/results-overview', { params: { semesterId } }).then((r) => r.data),
-    atRisk: (limit = 5) =>
-      api.get<{ data: T.AtRiskRow[]; total: number }>('/hod/dashboard/at-risk', { params: { limit } }).then((r) => r.data),
+    atRisk: (limit = 5, semesterId?: string) =>
+      api.get<{ data: T.AtRiskRow[]; total: number }>('/hod/dashboard/at-risk', { params: { limit, semesterId } }).then((r) => r.data),
     activityFeed: (page = 1, limit = 10) =>
       api.get<PaginatedResponse<T.ActivityItem>>('/hod/dashboard/activity-feed', { params: { page, limit } }).then((r) => r.data),
   },

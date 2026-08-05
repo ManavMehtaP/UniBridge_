@@ -11,6 +11,8 @@ import {
 } from 'lucide-react'
 import { hodApi } from '@/api/hod'
 import { useHodScope } from '@/hooks/hod/useHodScope'
+import { useHistoryStore } from '@/stores/historyStore'
+import { HistoryBanner } from '@/components/hod/HistoryBanner'
 import { useUser } from '@/stores/authStore'
 import { formatNumber } from '@/lib/utils'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
@@ -27,12 +29,14 @@ const PHASE_COLORS = ['#2563EB', '#7C3AED', '#0891B2', '#16A34A']
 
 export default function DashboardPage() {
   const user = useUser()
-  const scope = useHodScope()
+  const history = useHistoryStore()
+  const scope = useHodScope(history.semesterId ?? undefined)
+  const semesterId = history.semesterId ?? undefined
 
-  const summary = useQuery({ queryKey: ['hod', 'dashboard', 'summary'], queryFn: () => hodApi.dashboard.summary() })
-  const trend = useQuery({ queryKey: ['hod', 'dashboard', 'trend'], queryFn: () => hodApi.dashboard.attendanceTrend(6) })
-  const results = useQuery({ queryKey: ['hod', 'dashboard', 'results'], queryFn: () => hodApi.dashboard.resultsOverview() })
-  const atRisk = useQuery({ queryKey: ['hod', 'dashboard', 'at-risk'], queryFn: () => hodApi.dashboard.atRisk(5) })
+  const summary = useQuery({ queryKey: ['hod', 'dashboard', 'summary', semesterId], queryFn: () => hodApi.dashboard.summary({ semesterId }) })
+  const trend = useQuery({ queryKey: ['hod', 'dashboard', 'trend', semesterId], queryFn: () => hodApi.dashboard.attendanceTrend(6, semesterId) })
+  const results = useQuery({ queryKey: ['hod', 'dashboard', 'results', semesterId], queryFn: () => hodApi.dashboard.resultsOverview(semesterId) })
+  const atRisk = useQuery({ queryKey: ['hod', 'dashboard', 'at-risk', semesterId], queryFn: () => hodApi.dashboard.atRisk(5, semesterId) })
   const feed = useQuery({ queryKey: ['hod', 'dashboard', 'feed'], queryFn: () => hodApi.dashboard.activityFeed(1, 8) })
 
   const firstName = user?.name?.split(' ').slice(0, 2).join(' ') ?? 'HOD'
@@ -40,6 +44,7 @@ export default function DashboardPage() {
 
   return (
     <div className="mx-auto w-full max-w-[1400px] space-y-5">
+      <HistoryBanner />
       {/* Hero */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>

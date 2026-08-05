@@ -30,7 +30,7 @@ function str(value: unknown) {
 
 export const hodRouter = Router();
 
-hodRouter.get("/my-scope", asyncHandler(async (req, res) => res.json(await portalService.myScope(scopeFrom(req)))));
+hodRouter.get("/my-scope", asyncHandler(async (req, res) => res.json(await portalService.myScope(scopeFrom(req), req.query.semesterId as string | undefined))));
 hodRouter.post("/onboarding/complete", asyncHandler(async (req, res) => res.json(await portalService.hodOnboardingComplete(scopeFrom(req), req.body))));
 hodRouter.get("/onboarding/branches", asyncHandler(async (req, res) => res.json(await portalService.uniBranches(req.user!.universityId))));
 hodRouter.get("/onboarding/faculty", asyncHandler(async (req, res) => res.json(await portalService.hodOnboardingFaculty(scopeFrom(req)))));
@@ -41,10 +41,10 @@ hodRouter.get("/history/semesters", asyncHandler(async (req, res) => res.json(aw
 hodRouter.post("/reset-semester", asyncHandler(async (req, res) => res.json(await portalService.hodResetSemester(scopeFrom(req)))));
 hodRouter.post("/graduate", asyncHandler(async (req, res) => res.json(await portalService.graduateFinalYear(scopeFrom(req), req.body ?? {}))));
 
-hodRouter.get("/dashboard/summary", asyncHandler(async (req, res) => res.json(await portalService.dashboardSummary(scopeFrom(req)))));
-hodRouter.get("/dashboard/attendance-trend", asyncHandler(async (req, res) => res.json(await portalService.dashboardAttendanceTrend(scopeFrom(req), Number(req.query.months ?? 6)))));
+hodRouter.get("/dashboard/summary", asyncHandler(async (req, res) => res.json(await portalService.dashboardSummary(scopeFrom(req), req.query.semesterId as string | undefined))));
+hodRouter.get("/dashboard/attendance-trend", asyncHandler(async (req, res) => res.json(await portalService.dashboardAttendanceTrend(scopeFrom(req), Number(req.query.months ?? 6), req.query.semesterId as string | undefined))));
 hodRouter.get("/dashboard/results-overview", asyncHandler(async (req, res) => res.json(await portalService.dashboardResultsOverview(scopeFrom(req), req.query.semesterId as string | undefined))));
-hodRouter.get("/dashboard/at-risk", asyncHandler(async (req, res) => res.json(await portalService.dashboardAtRisk(scopeFrom(req)))));
+hodRouter.get("/dashboard/at-risk", asyncHandler(async (req, res) => res.json(await portalService.dashboardAtRisk(scopeFrom(req), req.query.semesterId as string | undefined))));
 hodRouter.get("/dashboard/activity-feed", asyncHandler(async (req, res) => res.json(await portalService.dashboardActivityFeed(scopeFrom(req), Number(req.query.page ?? 1), Number(req.query.limit ?? 10)))));
 
 // ponytail: literal paths MUST come before /:param routes or Express matches

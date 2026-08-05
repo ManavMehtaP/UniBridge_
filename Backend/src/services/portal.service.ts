@@ -443,7 +443,18 @@ async function validateFacultyContentTargets(
 // ponytail: the semester an HOD-scoped call operates on. With multiple batches active at once,
 // getActiveSemester(uni) is ambiguous — resolve to the HOD's OWN scoped semester instead.
 async function scopeSemester(scope: Scope, explicitSemesterId?: string) {
-  if (explicitSemesterId) return getSemester(explicitSemesterId);
+  if (explicitSemesterId) {
+    const semester = await getSemester(explicitSemesterId);
+    if (semester.universityId !== scope.universityId) throw new ApiError(403, "SEMESTER_NOT_IN_SCOPE", "That semester belongs to another university.");
+    // Historical access is limited to batches this HOD has owned. This keeps the archive useful
+    // after promotion without allowing an HOD to enumerate another department's history.
+    const batchIds = await hodAllBatchIds(scope.userId);
+    const allowed = batchIds.length > 0 && await prisma.studentEnrollment.count({ where: { semesterId: semester.id, batchId: { in: batchIds } } }) > 0;
+    if (!allowed && !scope.hodSemesterIds?.includes(semester.id)) {
+      throw new ApiError(403, "SEMESTER_NOT_IN_SCOPE", "You do not have access to this semester.");
+    }
+    return semester;
+  }
   if (scope.hodSemesterIds?.[0]) {
     const s = await prisma.semester.findUnique({ where: { id: scope.hodSemesterIds[0] } });
     if (s && s.universityId === scope.universityId) return s;
@@ -894,18 +905,21 @@ export const portalService = {
 
   // ── HOD Scope / Dashboard ─────────────────────────────────
 
-  async myScope(scope: Scope) {
+  async myScope(scope: Scope, semesterId?: string) {
     const faculty = await facultyById(scope.userId);
-    const activeSemester = await hodActiveSemester(scope.universityId, faculty.year, scope.hodSemesterIds ?? []);
-    const allFaculty = await getScopedFaculty(scope);
+    const activeSemester = semesterId
+      ? await scopeSemester(scope, semesterId)
+      : await hodActiveSemester(scope.universityId, faculty.year, scope.hodSemesterIds ?? []);
+    const historyBatchIds = semesterId
+      ? [...new Set((await scopedCurrentEnrollments(scope, activeSemester.id)).map((enrollment) => enrollment.batchId))]
+      : scope.hodBatchIds;
     const assignedFacultyIds = new Set(
-      (await prisma.facultyBatchAssignment.findMany({ where: { batchId: { in: scope.hodBatchIds } }, select: { facultyId: true } })).map((a) => a.facultyId),
+      (await prisma.facultyBatchAssignment.findMany({ where: { batchId: { in: historyBatchIds }, semesterId: activeSemester.id }, select: { facultyId: true } })).map((a) => a.facultyId),
     );
     const batches = await Promise.all(
-      scope.hodBatchIds.map(async (batchId) => {
+      historyBatchIds.map(async (batchId) => {
         const batch = await batchById(batchId);
-        // current students in the batch — isCurrent is the source of truth (survives promotion).
-        const studentCount = await prisma.studentEnrollment.count({ where: { batchId, isCurrent: true } });
+        const studentCount = await prisma.studentEnrollment.count({ where: { batchId, semesterId: activeSemester.id } });
         return { id: batch.id, code: batch.code, yearLevel: batch.yearLevel, studentCount };
       }),
     );
@@ -917,7 +931,7 @@ export const portalService = {
       batches,
       totalStudents: batches.reduce((s, b) => s + b.studentCount, 0),
       totalFaculty: assignedFacultyIds.size,
-      needsOnboarding: isYearStartSem && batches.length === 0,
+      needsOnboarding: !semesterId && isYearStartSem && batches.length === 0,
     };
   },
 
@@ -1137,26 +1151,27 @@ export const portalService = {
     return { graduated: passed.count, detained: detained.count, semester: sem.label };
   },
 
-  async dashboardSummary(scope: Scope) {
-    const enrollments = await scopedCurrentEnrollments(scope);
-    const allFaculty = await getScopedFaculty(scope);
-    const activeSemester = await scopeSemester(scope);
+  async dashboardSummary(scope: Scope, semesterId?: string) {
+    const activeSemester = await scopeSemester(scope, semesterId);
+    const enrollments = await scopedCurrentEnrollments(scope, semesterId ? activeSemester.id : undefined);
+    const batchIds = [...new Set(enrollments.map((enrollment) => enrollment.batchId))];
+    const allFaculty = await prisma.faculty.findMany({ where: { batchAssignments: { some: { semesterId: activeSemester.id, batchId: { in: batchIds } } } } });
     const attendancePcts = await overallAttendancePctBulkArr(enrollments);
     const avgAttendance = average(attendancePcts);
-    const results = await prisma.result.findMany({ where: { enrollment: { batchId: { in: scope.hodBatchIds }, isCurrent: true } } });
+    const results = await prisma.result.findMany({ where: { enrollmentId: { in: enrollments.map((enrollment) => enrollment.id) } } });
     const published = results.filter((r) => r.isPublished).length;
     return {
       totalStudents: { value: enrollments.length, deltaLabel: `${enrollments.length} current enrollments`, trend: "neutral" },
       totalFaculty: { value: allFaculty.length, deltaLabel: `${allFaculty.length} visible faculty`, trend: "neutral" },
-      activeBatches: { value: scope.hodBatchIds.length, deltaLabel: scope.hodBatchIds.length === 0 ? "No batches assigned" : `${scope.hodBatchIds.length} assigned batches`, trend: "neutral" },
+      activeBatches: { value: batchIds.length, deltaLabel: batchIds.length === 0 ? "No batches assigned" : `${batchIds.length} assigned batches`, trend: "neutral" },
       avgAttendance: { value: avgAttendance, deltaLabel: enrollments.length === 0 ? "No attendance data" : "Current average", trend: "neutral" },
       resultsUploadedPct: { value: results.length === 0 ? 0 : Math.round((published / results.length) * 100), deltaLabel: results.length === 0 ? "No results uploaded" : `${published}/${results.length} published`, trend: "neutral" },
     };
   },
 
-  async dashboardAttendanceTrend(scope: Scope, months = 6) {
+  async dashboardAttendanceTrend(scope: Scope, months = 6, semesterId?: string) {
     const labels = monthLabels(months);
-    const enrollments = await scopedCurrentEnrollments(scope);
+    const enrollments = await scopedCurrentEnrollments(scope, semesterId);
     const ids = enrollments.map((e) => e.id);
     // Real per-month attendance from lectureDate (was a flat line repeating the overall avg).
     const now = new Date();
@@ -1175,9 +1190,9 @@ export const portalService = {
     return { labels, series: [{ label: "Overall", data }] };
   },
 
-  async dashboardAtRisk(scope: Scope) {
+  async dashboardAtRisk(scope: Scope, semesterId?: string) {
     const rules = await getAttendanceRules(scope.universityId);
-    const enrollments = await scopedCurrentEnrollments(scope);
+    const enrollments = await scopedCurrentEnrollments(scope, semesterId);
     const rows = await Promise.all(
       enrollments.map(async (e) => {
         const student = await prisma.student.findUnique({ where: { id: e.studentId } });
@@ -1215,15 +1230,13 @@ export const portalService = {
   // ponytail: routes call these two — either they were never written or got renamed.
   // Both return empty-safe payloads matching API.md so the frontend renders.
   async dashboardResultsOverview(scope: Scope, semesterId?: string) {
-    const semester = semesterId
-      ? await prisma.semester.findUnique({ where: { id: semesterId } })
-      : await prisma.semester.findFirst({ where: { universityId: scope.universityId, status: "ACTIVE" } });
+    const semester = await scopeSemester(scope, semesterId);
     if (!semester) return { phases: [] };
     const phases = await prisma.phase.findMany({ where: { semesterId: semester.id }, orderBy: { number: "asc" } });
     const rows = await Promise.all(
       phases.map(async (p) => {
         const results = await prisma.result.findMany({
-          where: { phaseId: p.id, enrollment: { batchId: { in: scope.hodBatchIds }, isCurrent: true }, isPublished: true },
+          where: { phaseId: p.id, enrollmentId: { in: (await scopedCurrentEnrollments(scope, semester.id)).map((enrollment) => enrollment.id) }, isPublished: true },
           select: { marksObtained: true, maxMarks: true },
         });
         const avg = results.length === 0 ? null : Math.round(average(results.map((r) => (r.marksObtained / r.maxMarks) * 100)));
