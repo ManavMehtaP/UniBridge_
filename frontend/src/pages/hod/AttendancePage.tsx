@@ -29,8 +29,9 @@ const cellBg = { success: 'bg-success-light text-success', warning: 'bg-warning-
 
 export default function AttendancePage() {
   const qc = useQueryClient()
-  const scope = useHodScope()
   const history = useHistoryStore()
+  const scope = useHodScope(history.semesterId ?? undefined)
+  const readOnly = !!history.semesterId
   const semesterId = history.semesterId ?? scope.data?.activeSemester.id
   const [batchId, setBatchId] = useState('')
   const [tab, setTab] = useState('overview')
@@ -124,7 +125,7 @@ export default function AttendancePage() {
           <Select className="w-40" value={batchId} onChange={(e) => { setBatchId(e.target.value); setPage(1) }}
             options={scope.data?.batches.map((b) => ({ value: b.id, label: `Batch ${b.code}` })) ?? []} />
           <ExportMenu disabled={!ready} onExport={(f) => hodApi.attendance.export(batchId, semesterId!, f)} />
-          <Button variant="outline" leftIcon={<Lock size={15} />} disabled={!ready} loading={lockAll.isPending} onClick={() => lockAll.mutate()}>Lock All</Button>
+          {!readOnly && <Button variant="outline" leftIcon={<Lock size={15} />} disabled={!ready} loading={lockAll.isPending} onClick={() => lockAll.mutate()}>Lock All</Button>}
         </div>
       }
     >
@@ -151,7 +152,7 @@ export default function AttendancePage() {
 
       {tab === 'overview' && (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <Card className="lg:col-span-3">
+          {!readOnly && <Card className="lg:col-span-3">
             <CardHeader title="Attendance Coordinator Management"
               subtitle="Coordinators get the attendance-report page (daily & weekly PDFs across all batches)." />
             <CardBody>
@@ -184,7 +185,7 @@ export default function AttendancePage() {
                 </div>
               )}
             </CardBody>
-          </Card>
+          </Card>}
           <Card className="lg:col-span-2">
             <CardHeader title="Attendance Trend" subtitle="Average % per batch · last 6 months" />
             <CardBody>
@@ -258,7 +259,7 @@ export default function AttendancePage() {
                       <Td><AttendancePctCell pct={r.avgPct} showBar={false} /></Td>
                       <Td><Badge tone={r.status === 'AT_RISK' ? 'danger' : 'success'}>{r.status.replace('_', ' ')}</Badge></Td>
                       <Td className="text-right">
-                        {r.isLocked ? (
+                        {r.isLocked && !readOnly ? (
                           <button title="Unlock" onClick={() => unlockOne.mutate((r as { enrollmentId?: string }).enrollmentId ?? r.enrollmentNo)} className="ml-auto flex h-8 w-8 items-center justify-center rounded-sm text-teal hover:bg-teal-light">
                             <Lock size={15} />
                           </button>

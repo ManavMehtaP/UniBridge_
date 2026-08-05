@@ -39,8 +39,8 @@ const isOther = (s: { subjectCode: string; subjectName: string }) => /seminar|ac
 
 export default function HodTimetablePage() {
   const qc = useQueryClient()
-  const scope = useHodScope()
   const history = useHistoryStore()
+  const scope = useHodScope(history.semesterId ?? undefined)
   const readOnly = !!history.semesterId
   const [batchId, setBatchId] = useState('')
   const [view, setView] = useState<'week' | 'list'>('week')

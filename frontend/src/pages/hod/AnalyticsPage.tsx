@@ -22,8 +22,8 @@ import { StatCardSkeleton, ChartSkeleton, TableSkeleton } from '@/components/ui/
 import { DonutChart, MultiLineChart, RadarCompareChart, SimpleBarChart } from '@/components/charts'
 
 export default function AnalyticsPage() {
-  const scope = useHodScope()
   const history = useHistoryStore()
+  const scope = useHodScope(history.semesterId ?? undefined)
   const semesterId = history.semesterId ?? scope.data?.activeSemester.id
   const [batchId, setBatchId] = useState('')
   const [phaseId, setPhaseId] = useState('')

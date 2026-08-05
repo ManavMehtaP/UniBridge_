@@ -27,8 +27,8 @@ import { EmptyState } from '@/components/ui/EmptyState'
 
 export default function MentorshipPage() {
   const qc = useQueryClient()
-  const scope = useHodScope()
   const history = useHistoryStore()
+  const scope = useHodScope(history.semesterId ?? undefined)
   const semesterId = history.semesterId ?? scope.data?.activeSemester.id
 
   const [tab, setTab] = useState('mentors')

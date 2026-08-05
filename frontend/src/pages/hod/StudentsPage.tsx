@@ -34,8 +34,8 @@ const statusTone = { ACTIVE: 'success', AT_RISK: 'danger', INACTIVE: 'neutral' }
 
 export default function StudentsPage() {
   const qc = useQueryClient()
-  const scope = useHodScope()
   const history = useHistoryStore()
+  const scope = useHodScope(history.semesterId ?? undefined)
 
   const [search, setSearch] = useState('')
   const [branch, setBranch] = useState('')

@@ -48,8 +48,9 @@ interface Preview {
 }
 
 export default function ResultsPage() {
-  const scope = useHodScope()
   const history = useHistoryStore()
+  const scope = useHodScope(history.semesterId ?? undefined)
+  const readOnly = !!history.semesterId
   const semesterId = history.semesterId ?? scope.data?.activeSemester.id
 
   const [phaseId, setPhaseId] = useState('')
@@ -92,11 +93,11 @@ export default function ResultsPage() {
     <PageShell
       title="Results"
       subtitle="Marks are entered by exam checkers and pushed live by your coordinators — browse and correct here"
-      action={
+      action={!readOnly ? (
         <Link to="/hod/exam-management">
           <Button variant="outline" leftIcon={<ShieldCheck size={15} />}>Examination</Button>
         </Link>
-      }
+      ) : undefined}
     >
       <HistoryBanner />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -171,7 +172,7 @@ export default function ResultsPage() {
                           <Badge tone={r.status === 'Fail' ? 'danger' : r.status === 'Pending' ? 'neutral' : 'success'}>{r.status}</Badge>
                         </Td>
                         <Td>
-                          {r.resultId && (
+                          {!readOnly && r.resultId && (
                             <button onClick={() => setEditOf(r)} className="text-text-muted hover:text-primary" title="Correct marks">
                               <Pencil size={14} />
                             </button>
