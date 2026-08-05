@@ -19,6 +19,7 @@ import { Spinner } from '@/components/ui/Spinner'
 import { CardSkeleton, StatCardSkeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { useHistoryStore } from '@/stores/historyStore'
 
 const YEAR_LABEL: Record<string, string> = { FY: 'First Year', SY: 'Second Year', TY: 'Third Year', FINAL: 'Final Year' }
 
@@ -49,11 +50,14 @@ interface YearPreview {
 }
 
 export default function PromotionPage() {
+  const history = useHistoryStore()
   const ctx = useQuery({ queryKey: ['hod', 'promo', 'context'], queryFn: () => hodApi.promotion.context() as Promise<PromoContext> })
 
   return (
     <PageShell title="Promotion" subtitle="Advance students to the next semester or academic year — based on results">
-      {ctx.isLoading || !ctx.data ? (
+      {history.semesterId ? (
+        <EmptyState icon={<GraduationCap size={22} />} title="Promotion is available only in the current semester" description={`You are viewing ${history.semesterLabel ?? 'archived history'}. Switch to Current Semester in the sidebar before starting a promotion.`} />
+      ) : ctx.isLoading || !ctx.data ? (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3.5 md:grid-cols-4"><StatCardSkeleton count={4} /></div>
           <CardSkeleton height={260} />
