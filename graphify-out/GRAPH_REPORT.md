@@ -5,12 +5,12 @@
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2698 nodes · 5101 edges · 249 communities (175 shown, 74 thin omitted)
-- Extraction: 85% EXTRACTED · 15% INFERRED · 0% AMBIGUOUS · INFERRED: 775 edges (avg confidence: 0.52)
+- 2698 nodes · 5018 edges · 255 communities (173 shown, 82 thin omitted)
+- Extraction: 85% EXTRACTED · 15% INFERRED · 0% AMBIGUOUS · INFERRED: 774 edges (avg confidence: 0.52)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `0d185629`
+- Built from commit: `6b39667c`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -116,8 +116,6 @@
 - ResultsPage.tsx
 - vercel.json
 - hod.ts
-- StudentsPage.tsx
-- faculty.ts
 - useTableSort.ts
 - http.ts
 - http.ts
@@ -216,6 +214,10 @@
 - clsx
 - overallAttendancePctBulk
 - hod.ts
+- getAttendanceRules
+- NON_WORKING_TYPES
+- overallAttendancePctBulk
+- parseCsvRecords
 - AttendanceCoordinatorPage.tsx
 - SchedulePage.tsx
 - facultyHistoryStore.ts
@@ -233,37 +235,37 @@
 10. `Note` - 35 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `MarksEntry()` --indirect_call--> `seed()`  [INFERRED]
-  frontend/src/pages/faculty/ExamsPage.tsx → AI Assistant/freellmapi/server/src/scripts/routing-sim.ts
+- `FacultyPickerModal()` --indirect_call--> `s()`  [INFERRED]
+  frontend/src/pages/hod/ExamManagementPage.tsx → Backend/src/routes/exam.routes.ts
 - `asyncHandler()` --indirect_call--> `req()`  [INFERRED]
   Backend/src/utils/http.ts → AI Assistant/freellmapi/server/src/__tests__/integration/full-flow.test.ts
-- `AttendanceCoordinatorPage()` --indirect_call--> `seed()`  [INFERRED]
-  frontend/src/pages/faculty/AttendanceCoordinatorPage.tsx → AI Assistant/freellmapi/server/src/scripts/routing-sim.ts
 - `TimetablePage()` --indirect_call--> `cell()`  [INFERRED]
   frontend/src/pages/student/TimetablePage.tsx → Backend/src/utils/export.ts
+- `CalendarGrid()` --indirect_call--> `dateStr()`  [INFERRED]
+  frontend/src/components/shared/CalendarGrid.tsx → Backend/src/services/exam.service.ts
 - `AttendancePage()` --indirect_call--> `pct()`  [INFERRED]
   frontend/src/pages/hod/AttendancePage.tsx → AI Assistant/freellmapi/server/src/scripts/routing-sim.ts
 
 ## Import Cycles
 - None detected.
 
-## Communities (249 total, 74 thin omitted)
+## Communities (255 total, 82 thin omitted)
 
 ### Community 0 - "UniBridge Free-Tier Deployment Plan"
-Cohesion: 0.11
-Nodes (28): getDb(), getSetting(), setSetting(), updateSchema, logRequest(), callProvider(), EmbeddingModelRow, EmbeddingsError (+20 more)
+Cohesion: 0.10
+Nodes (30): getDb(), getSetting(), setSetting(), embeddingsRouter, updateSchema, logRequest(), callProvider(), EmbeddingModelRow (+22 more)
 
 ### Community 1 - "Confirmed Bugs"
-Cohesion: 0.10
-Nodes (37): Store, HodService, StudentListParams, paginate(), AcademicYear, AcademicYearStatus, Activity, ArchiveJob (+29 more)
+Cohesion: 0.13
+Nodes (33): Store, AcademicYear, AcademicYearStatus, Activity, ArchiveJob, AttendanceRecord, AttendanceRules, Batch (+25 more)
 
 ### Community 2 - "UniBridge Frontend & Backend Changes for Faster Response"
 Cohesion: 0.15
 Nodes (8): authApi, api, queue, facultyApi, FacultyPyq, Params, Notification, notificationsApi
 
 ### Community 3 - "Observability: verify every performance change"
-Cohesion: 0.03
-Nodes (17): conductedPhases(), DAY_LABELS, DAY_NAMES, DayStatus, formatStudyPlan(), getAttendanceRules(), NON_WORKING_TYPES, overallAttendancePctBulk() (+9 more)
+Cohesion: 0.04
+Nodes (5): DAY_LABELS, DAY_NAMES, DayStatus, Scope, RFC-4180
 
 ### Community 4 - "Backend changes"
 Cohesion: 0.12
@@ -274,8 +276,8 @@ Cohesion: 0.11
 Nodes (19): autoprefixer, devDependencies, autoprefixer, postcss, tailwindcss, @types/node, @types/react, @types/react-dom (+11 more)
 
 ### Community 6 - "Secure deployment plan"
-Cohesion: 0.08
-Nodes (28): YearLevel, AcademicYearWithSemesters, ActivityItem, AnalyticsKpi, AssignmentRow, AtRiskRow, AttendanceStatSummary, AttendanceTableRow (+20 more)
+Cohesion: 0.07
+Nodes (27): AcademicYearWithSemesters, ActivityItem, AnalyticsKpi, AssignmentRow, AtRiskRow, AttendanceStatSummary, AttendanceTableRow, AttendanceTrend (+19 more)
 
 ### Community 7 - "devDependencies"
 Cohesion: 0.13
@@ -294,8 +296,8 @@ Cohesion: 0.25
 Nodes (14): normalize_list(), analyze_pyq_statistics(), _extract_questions(), _local_pyq_extract(), _matching_semester(), process_pyq_document(), _store_legacy_insight(), _store_pyq_chunks() (+6 more)
 
 ### Community 11 - "AppShell.tsx"
-Cohesion: 0.13
-Nodes (15): FacultySemesterHistorySelector(), MobileTabBar(), PRIMARY_TABS, SHORT_LABEL, facultyNavItems, hodNavItems, studentNavItems, NavItem (+7 more)
+Cohesion: 0.12
+Nodes (12): FacultySemesterHistorySelector(), PRIMARY_TABS, SHORT_LABEL, facultyNavItems, hodNavItems, studentNavItems, NavItem, NavSection (+4 more)
 
 ### Community 12 - "compilerOptions"
 Cohesion: 0.10
@@ -315,11 +317,11 @@ Nodes (10): BASE, DAYS, HodTimetablePage(), isLab(), isOther(), LAB, OTHER, Pale
 
 ### Community 16 - "faculty.ts"
 Cohesion: 0.08
-Nodes (25): PaginatedResponse, AttendanceSessionRow, ChatMsg, DayStatus, FacultyAnnouncement, FacultyDashboardStats, FacultyNote, FacultyNoteDrive (+17 more)
+Nodes (24): AttendanceSessionRow, ChatMsg, DayStatus, FacultyAnnouncement, FacultyDashboardStats, FacultyNote, FacultyNoteDrive, FacultyNoteDriveFile (+16 more)
 
 ### Community 17 - "student.ts"
-Cohesion: 0.11
-Nodes (17): AIConversation, AIMessage, AttendancePerSubject, LeaderboardEntry, PaginatedAnnouncements, PaginatedNotes, PaginatedQuizzes, SelfNote (+9 more)
+Cohesion: 0.05
+Nodes (35): AuthUser, LoginResponse, LoginRole, RefreshResponse, University, UserRole, AcademicYear, Announcement (+27 more)
 
 ### Community 18 - "Button.tsx"
 Cohesion: 0.16
@@ -330,16 +332,12 @@ Cohesion: 0.14
 Nodes (7): firstFreeInitial(), LeaderRow, PromoContext, STEPS, YEAR_LABEL, YearFlow(), YearPreview
 
 ### Community 21 - "common.ts"
-Cohesion: 0.18
-Nodes (10): AcademicYear, Announcement, ApiError, AttendanceSummary, Batch, CalendarEvent, ChatMessage, Phase (+2 more)
+Cohesion: 0.31
+Nodes (4): HodService, StudentListParams, YearLevel, buildPagination()
 
 ### Community 22 - "StatCard.tsx"
 Cohesion: 0.22
 Nodes (5): Card(), StatCardProps, Trend, TrendIcon, trendPill
-
-### Community 23 - "ExamsPage.tsx"
-Cohesion: 0.40
-Nodes (3): Cell, MarksEntry(), STATUS_TONE
 
 ### Community 25 - "seed-sy3-timetable-attendance.ts"
 Cohesion: 0.40
@@ -378,8 +376,8 @@ Cohesion: 0.12
 Nodes (26): build_features(), _generate_synthetic_data(), get_model(), Any, Train and persist the best ML regressor for marks prediction., retrain_from_db(), train_model(), model_metadata() (+18 more)
 
 ### Community 34 - "auth.ts"
-Cohesion: 0.16
-Nodes (13): requireFacultyPortal(), facultyScope(), facultyRouter, upload, cell(), csvCell(), ExportFormat, ExportTable (+5 more)
+Cohesion: 0.18
+Nodes (12): requireFacultyPortal(), facultyScope(), upload, cell(), csvCell(), ExportFormat, ExportTable, parseFormat() (+4 more)
 
 ### Community 35 - "download.ts"
 Cohesion: 0.48
@@ -395,7 +393,7 @@ Nodes (5): LEGEND_TYPES, MONTHS, NON_WORKING_TYPES, TYPE_LABEL, TYPES
 
 ### Community 39 - "ExamPanelPage.tsx"
 Cohesion: 0.11
-Nodes (20): extractApiToken(), buildResponseObject(), contentPartSchema, functionCallItemSchema, functionCallOutputItemSchema, inputItemSchema, messageItemSchema, newId() (+12 more)
+Nodes (20): extractApiToken(), timingSafeStringEqual(), buildResponseObject(), contentPartSchema, functionCallItemSchema, functionCallOutputItemSchema, inputItemSchema, messageItemSchema (+12 more)
 
 ### Community 41 - "facultyActiveSemester"
 Cohesion: 0.09
@@ -417,10 +415,6 @@ Nodes (57): FacAnalytics, FacAnnouncements, FacAttendance, FacAttendanceReport, 
 Cohesion: 0.18
 Nodes (14): CALENDAR_TEMPLATE_CSV, COL, EventTypeStr, normalizeType(), normalizeVisibility(), parseCalendarFile(), parseDate(), ParsedEvent (+6 more)
 
-### Community 51 - "CsvUploadModal.tsx"
-Cohesion: 0.40
-Nodes (3): UploadConfig, FileDrop(), FileDropProps
-
 ### Community 53 - "Badge.tsx"
 Cohesion: 0.40
 Nodes (3): BadgeProps, Tone, tones
@@ -430,8 +424,8 @@ Cohesion: 0.22
 Nodes (7): Assignment, blankQuestion(), Draft, formatDate(), LETTERS, QuestionsModal(), QuizzesPage()
 
 ### Community 58 - "CalendarGrid.tsx"
-Cohesion: 0.10
-Nodes (17): addMinutes(), assertManager(), assertPaperCheckAccess(), busyReason(), dateStr(), examOver(), examService, isExamCoordinator() (+9 more)
+Cohesion: 0.09
+Nodes (17): addMinutes(), assertManager(), assertPaperCheckAccess(), busyReason(), dateStr(), examOver(), isExamCoordinator(), minToStr() (+9 more)
 
 ### Community 60 - "Select.tsx"
 Cohesion: 0.40
@@ -474,8 +468,8 @@ Cohesion: 0.13
 Nodes (21): CalendarGridResult, CalEvent, CalEventType, CalTest, classify(), MONTHS, parseAcademicCalendarExcel(), parseMonthHeader() (+13 more)
 
 ### Community 97 - "buildPagination"
-Cohesion: 0.15
-Nodes (25): canMakeRequest(), canUseProvider(), canUseTokens(), COOLDOWN_DURATIONS, cooldownHits, cooldowns, countPersistedRequests(), DEFAULT_PROVIDER_DAILY_REQUEST_CAPS (+17 more)
+Cohesion: 0.14
+Nodes (31): canUseProvider(), clearPersistedCooldown(), COOLDOWN_DURATIONS, cooldownHits, cooldowns, countPersistedProviderRequests(), countPersistedRequests(), DEFAULT_PROVIDER_DAILY_REQUEST_CAPS (+23 more)
 
 ### Community 109 - "AnalyticsPage.tsx"
 Cohesion: 0.33
@@ -490,8 +484,8 @@ Cohesion: 0.27
 Nodes (10): clearPending(), formatDate(), PendingAttempt, presentationOf(), Question, QuizAttempt, QuizResult, readPending() (+2 more)
 
 ### Community 119 - "ResultsPage.tsx"
-Cohesion: 0.09
-Nodes (34): createApp(), DEFAULT_DASHBOARD_ORIGINS, __dirname, getAllowedCorsOrigins(), getUnifiedApiKey(), regenerateUnifiedKey(), errorHandler(), createProxyRateLimiter() (+26 more)
+Cohesion: 0.11
+Nodes (30): createApp(), DEFAULT_DASHBOARD_ORIGINS, __dirname, getAllowedCorsOrigins(), getUnifiedApiKey(), regenerateUnifiedKey(), errorHandler(), createProxyRateLimiter() (+22 more)
 
 ### Community 129 - "hod.ts"
 Cohesion: 0.25
@@ -511,7 +505,7 @@ Nodes (21): backgroundColor, backgroundImage, foregroundImage, monochromeImage, 
 
 ### Community 135 - "studyPlanner.service.ts"
 Cohesion: 0.28
-Nodes (14): academicInputsForStudent(), AcademicSubject, activePhaseForToday(), addDays(), buildTasks(), generateStudyPlanForStudent(), getLatestStudyPlan(), jsonStrings() (+6 more)
+Nodes (13): academicInputsForStudent(), AcademicSubject, activePhaseForToday(), addDays(), buildTasks(), generateStudyPlanForStudent(), jsonStrings(), nearestExamDate() (+5 more)
 
 ### Community 136 - "app.ts"
 Cohesion: 0.12
@@ -522,8 +516,8 @@ Cohesion: 0.10
 Nodes (19): AvailabilityRow, ConflictReport, examApi, ExamBlock, ExamDashboard, ExamDetail, ExamMode, ExamPhaseWindow (+11 more)
 
 ### Community 138 - "Any"
-Cohesion: 0.16
-Nodes (20): distribution(), main(), pct(), printDistribution(), printScores(), Profile, PROFILES, seed() (+12 more)
+Cohesion: 0.13
+Nodes (23): distribution(), main(), pct(), printDistribution(), printScores(), Profile, PROFILES, seed() (+15 more)
 
 ### Community 139 - "studentAiBridge.service.ts"
 Cohesion: 0.33
@@ -534,8 +528,8 @@ Cohesion: 0.10
 Nodes (20): FloatingBar(), ModelsTabs(), PageHeader(), Switch(), EmbeddingsData, EmbeddingsPage(), Family, formatTokens() (+12 more)
 
 ### Community 141 - "bestEffortStudentAi"
-Cohesion: 0.41
-Nodes (12): amzDate(), basePath, deleteObject(), enc(), encPath(), hmac(), presignGetUrl(), sha256hex() (+4 more)
+Cohesion: 0.17
+Nodes (20): env, envSchema, amzDate(), basePath, deleteObject(), enc(), encPath(), hmac() (+12 more)
 
 ### Community 144 - "seed-sy3-timetable-attendance.ts"
 Cohesion: 0.10
@@ -566,8 +560,8 @@ Cohesion: 0.08
 Nodes (25): devDependencies, eslint, @eslint/js, eslint-plugin-react-hooks, eslint-plugin-react-refresh, globals, @types/node, @types/react (+17 more)
 
 ### Community 152 - "withDb"
-Cohesion: 0.36
-Nodes (9): clearPersistedCooldown(), countPersistedProviderRequests(), isOnCooldown(), persistCooldown(), persistedCooldownExpiry(), RateLimitDb, setCooldown(), sumPersistedTokens() (+1 more)
+Cohesion: 0.40
+Nodes (5): ensureFacultyAssignedBatch(), ensureFacultyAssignedSubject(), getFacultyAssignments(), getFacultyScopeData(), getFacultyVisibleEnrollments()
 
 ### Community 153 - "seed-sy3-marks.ts"
 Cohesion: 0.09
@@ -586,8 +580,8 @@ Cohesion: 0.09
 Nodes (21): aliases, components, hooks, lib, ui, utils, iconLibrary, menuAccent (+13 more)
 
 ### Community 163 - "StudentsPage.tsx"
-Cohesion: 0.17
-Nodes (13): hashPassword(), verifyPassword(), attempts, authRouter, credentialsSchema, createSession(), createUser(), deleteSession() (+5 more)
+Cohesion: 0.15
+Nodes (15): hashPassword(), verifyPassword(), requireAuth(), attempts, authRouter, credentialsSchema, createSession(), createUser() (+7 more)
 
 ### Community 164 - "hodAllBatchIds"
 Cohesion: 0.10
@@ -650,8 +644,8 @@ Cohesion: 0.22
 Nodes (9): scripts, build, dev, postinstall, prisma:generate, prisma:migrate, prisma:push, reset:import-faculty (+1 more)
 
 ### Community 185 - "Path"
-Cohesion: 0.36
-Nodes (8): chunked(), clamp(), GRID, LECTURES, main(), rand(), studentBase(), T
+Cohesion: 0.17
+Nodes (12): chunked(), clamp(), GRID, LECTURES, main(), rand(), studentBase(), T (+4 more)
 
 ### Community 186 - "Student"
 Cohesion: 0.25
@@ -660,10 +654,6 @@ Nodes (7): compilerOptions, baseUrl, paths, files, ./src/*, @/*, references
 ### Community 187 - "Subject"
 Cohesion: 0.25
 Nodes (5): BROKEN_ARGS, chatCompletion, fakeProvider, streamChatCompletion, UPDATE_PLAN_TOOL
-
-### Community 188 - "auth.ts"
-Cohesion: 0.25
-Nodes (6): AuthUser, LoginResponse, LoginRole, RefreshResponse, University, UserRole
 
 ### Community 189 - "formatStudyPlan"
 Cohesion: 0.25
@@ -698,20 +688,20 @@ Cohesion: 0.25
 Nodes (5): MarksData, PyqData, PyqFile, Subject, Topic
 
 ### Community 197 - "LoginScreen.tsx"
-Cohesion: 0.14
+Cohesion: 0.15
 Nodes (8): addDaysIso(), CalendarTab(), clampIso(), Coordinator, ExamManagementPage(), fmtDate(), PickerFaculty, TABS
 
 ### Community 199 - "@prisma/adapter-pg"
-Cohesion: 0.13
-Nodes (11): requireSuperAdmin(), hodScope(), adminRouter, upload, authRouter, examRouter, s(), hodRouter (+3 more)
+Cohesion: 0.22
+Nodes (4): hodRouter, upload, app, portalService
 
 ### Community 211 - "express"
 Cohesion: 0.29
 Nodes (4): AddStudentModal(), BRANCHES, STATUSES, statusTone
 
 ### Community 219 - "content.ts"
-Cohesion: 0.16
-Nodes (14): coordinatorHodBatchIds(), ensureFacultyAssignedBatch(), ensureFacultyAssignedSubject(), facultyActiveSemester(), getActiveSemester(), getFacultyAssignments(), getFacultyScopeData(), getFacultyVisibleEnrollments() (+6 more)
+Cohesion: 0.28
+Nodes (9): coordinatorHodBatchIds(), facultyActiveSemester(), getActiveSemester(), getSemester(), hodActiveSemester(), hodAllBatchIds(), hodEnrollmentWhere(), scopedCurrentEnrollments() (+1 more)
 
 ### Community 221 - "react-dom"
 Cohesion: 0.10
@@ -724,10 +714,6 @@ Nodes (5): _image_url(), _mime_from_suffix(), _parse_json(), Any, Path
 ### Community 230 - "seed-sy3-marks.ts"
 Cohesion: 0.70
 Nodes (4): chunkedCreate(), gradeFor(), main(), rand()
-
-### Community 231 - "InternalServicePermission"
-Cohesion: 0.21
-Nodes (10): env, envSchema, ensureBucketAcceptsAllTypes(), app, baseUrl(), DjangoResponse, requestInternal(), requestStudent() (+2 more)
 
 ### Community 232 - "facultyActiveSemester"
 Cohesion: 0.73
@@ -742,20 +728,12 @@ Cohesion: 0.31
 Nodes (8): BASE, code(), DAYS, facultyName(), name(), Palette, Slot, TimetablePage()
 
 ### Community 236 - "seed-week-attendance.ts"
-Cohesion: 0.70
-Nodes (4): chunked(), main(), pick(), rand()
+Cohesion: 0.16
+Nodes (13): initials(), main(), WIPE_TABLES, FacultyRow, main(), parseCsv(), chunked(), main() (+5 more)
 
 ### Community 237 - "CalendarGrid.tsx"
-Cohesion: 0.13
-Nodes (13): initials(), main(), WIPE_TABLES, adapter, pool, prisma, universityId(), requireAuth() (+5 more)
-
-### Community 238 - "reset-and-import-faculty.ts"
-Cohesion: 0.67
-Nodes (3): FacultyRow, main(), parseCsv()
-
-### Community 239 - "CalendarGrid.tsx"
-Cohesion: 0.50
-Nodes (3): EVENT_META, EVENT_TONE, WEEKDAYS
+Cohesion: 0.14
+Nodes (14): universityId(), requireAuth(), requireSuperAdmin(), requireUserRole(), hodScope(), studentScope(), adminRouter, upload (+6 more)
 
 ### Community 242 - "formatStudyPlan"
 Cohesion: 0.21
@@ -770,24 +748,24 @@ Cohesion: 0.70
 Nodes (4): AttendanceCoordinatorPage(), statusLabel(), statusTone(), today()
 
 ## Knowledge Gaps
-- **900 isolated node(s):** `Meta`, `$schema`, `style`, `rsc`, `tsx` (+895 more)
+- **915 isolated node(s):** `upload`, `app`, `YEAR_ORDER`, `YearContext`, `Scope` (+910 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **74 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **82 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `req()` connect `ResultsPage.tsx` to `@prisma/adapter-pg`?**
-  _High betweenness centrality (0.077) - this node is a cross-community bridge._
-- **Why does `asyncHandler()` connect `@prisma/adapter-pg` to `auth.ts`, `CalendarGrid.tsx`, `ResultsPage.tsx`?**
-  _High betweenness centrality (0.077) - this node is a cross-community bridge._
-- **Why does `getDb()` connect `UniBridge Free-Tier Deployment Plan` to `buildPagination`, `StudentsPage.tsx`, `http.ts`, `test-all-models.ts`, `facultyActiveSemester`, `Any`, `seed-sy3-timetable-attendance.ts`, `SchedulePage.tsx`, `ResultsPage.tsx`, `withDb`, `react-dom`?**
-  _High betweenness centrality (0.025) - this node is a cross-community bridge._
+- **Why does `req()` connect `ResultsPage.tsx` to `CalendarGrid.tsx`?**
+  _High betweenness centrality (0.052) - this node is a cross-community bridge._
+- **Why does `asyncHandler()` connect `CalendarGrid.tsx` to `auth.ts`, `ResultsPage.tsx`?**
+  _High betweenness centrality (0.052) - this node is a cross-community bridge._
+- **Why does `getDb()` connect `UniBridge Free-Tier Deployment Plan` to `buildPagination`, `StudentsPage.tsx`, `http.ts`, `test-all-models.ts`, `facultyActiveSemester`, `Any`, `seed-sy3-timetable-attendance.ts`, `SchedulePage.tsx`, `ResultsPage.tsx`, `react-dom`?**
+  _High betweenness centrality (0.021) - this node is a cross-community bridge._
 - **Are the 27 inferred relationships involving `StudentContextMixin` (e.g. with `AIConversation` and `BackgroundJob`) actually correct?**
   _`StudentContextMixin` has 27 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 38 inferred relationships involving `StudyPlan` (e.g. with `ChatCreateSerializer` and `ChatMessageSerializer`) actually correct?**
   _`StudyPlan` has 38 INFERRED edges - model-reasoned connections that need verification._
-- **What connects `Meta`, `$schema`, `style` to the rest of the system?**
-  _900 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **What connects `upload`, `app`, `YEAR_ORDER` to the rest of the system?**
+  _915 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `UniBridge Free-Tier Deployment Plan` be split into smaller, more focused modules?**
-  _Cohesion score 0.10810810810810811 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.09986504723346828 - nodes in this community are weakly interconnected._
