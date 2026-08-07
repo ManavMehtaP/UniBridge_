@@ -24,7 +24,7 @@ export default function FacultyResultsPage() {
 
   const list = useQuery({
     queryKey: ['faculty', 'results', { subjectId, batchId, phase, page }],
-    queryFn: () => facultyApi.results({ subjectId: subjectId || undefined, batchId: batchId || undefined, phase: phase || undefined, page, limit: 10000 }),
+    queryFn: () => facultyApi.results({ subjectId: subjectId || undefined, batchId: batchId || undefined, phaseId: phase || undefined, page, limit: 10000 }),
   })
 
   const subjectOpts = useMemo(() => {
@@ -45,7 +45,7 @@ export default function FacultyResultsPage() {
 
   return (
     <PageShell title="Results" subtitle="View published results for your subjects"
-      action={<ExportMenu onExport={(f) => facultyApi.resultsExport({ subjectId: subjectId || undefined, batchId: batchId || undefined, phase: phase || undefined }, f)} />}
+      action={<ExportMenu onExport={(f) => facultyApi.resultsExport({ subjectId: subjectId || undefined, batchId: batchId || undefined, phaseId: phase || undefined }, f)} />}
     >
       <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-3">
         {list.isLoading ? (
@@ -53,8 +53,8 @@ export default function FacultyResultsPage() {
         ) : list.data?.stats ? (
           <>
             <StatCard value={`${Math.round(list.data.stats.avgMarksPct)}%`} label="Avg Marks" />
-            <StatCard value={list.data.stats.passCount} label="Pass" trend="up" delta="≥40%" />
-            <StatCard value={list.data.stats.failCount} label="Fail" trend="down" delta="<40%" />
+            <StatCard value={list.data.stats.passCount} label="Pass" trend="up" delta="≥36%" />
+            <StatCard value={list.data.stats.failCount} label="Fail" trend="down" delta="<36%" />
           </>
         ) : null}
       </div>

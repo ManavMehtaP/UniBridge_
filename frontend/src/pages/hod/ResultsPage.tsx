@@ -30,6 +30,7 @@ interface UploadContext {
   phases: { id: string; label: string; number: number }[]
   subjects: { id: string; code: string; name: string }[]
   batches: { id: string; code: string }[]
+  batchSubjects?: { batchId: string; subjectId: string }[]
 }
 interface PreviewRow {
   resultId: string | null
@@ -78,6 +79,9 @@ export default function ResultsPage() {
   })
 
   const ready = !!phaseId && !!subjectId && !!batchId
+  const visibleSubjects = !batchId
+    ? (ctx.data?.subjects ?? [])
+    : (ctx.data?.subjects ?? []).filter((subject) => ctx.data?.batchSubjects?.some((item) => item.batchId === batchId && item.subjectId === subject.id))
   const preview = useQuery({
     queryKey: ['hod', 'results', 'preview', phaseId, subjectId, batchId],
     queryFn: () => hodApi.results.preview(phaseId, subjectId, batchId) as Promise<Preview>,
@@ -118,10 +122,10 @@ export default function ResultsPage() {
                 </Labeled>
                 <Labeled label="Subject">
                   <Select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} placeholder="Select subject"
-                    options={ctx.data?.subjects.map((s) => ({ value: s.id, label: s.code })) ?? []} />
+                    options={visibleSubjects.map((s) => ({ value: s.id, label: s.code }))} />
                 </Labeled>
                 <Labeled label="Batch">
-                  <Select value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Select batch"
+                  <Select value={batchId} onChange={(e) => { setBatchId(e.target.value); setSubjectId('') }} placeholder="Select batch"
                     options={ctx.data?.batches.map((b) => ({ value: b.id, label: b.code })) ?? []} />
                 </Labeled>
               </div>

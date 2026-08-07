@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { CardSkeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
 import type { HodCalendarEvent } from '@/types/hod'
+import { format } from 'date-fns'
 
 type RawEvent = { id: string; date: string; startDate?: string; endDate?: string; title: string; type: string }
 const toEvents = (rows: RawEvent[]): HodCalendarEvent[] =>
@@ -88,12 +89,16 @@ export default function FacultyCalendarPage() {
                 <CardSkeleton height={100} />
               ) : (
                 <ul className="space-y-2">
-                  {(timeline.data as { phases?: { label: string; examDate?: string; isComplete: boolean }[] })?.phases?.map((p) => (
-                    <li key={p.label} className="flex items-center justify-between rounded-sm bg-surface-2 px-3 py-2">
-                      <span className="text-sm font-semibold">{p.label}</span>
+                  {(timeline.data as { phases?: { label: string; startDate?: string; endDate?: string; examDate?: string; isComplete: boolean }[] })?.phases?.map((p) => (
+                    <li key={p.label} className="flex items-center justify-between gap-3 rounded-sm bg-surface-2 px-3 py-2">
+                      <div>
+                        <div className="text-sm font-semibold">{p.label}</div>
+                        {p.startDate && p.endDate && <div className="text-xs text-text-muted">{format(new Date(p.startDate), 'MMM d')} - {format(new Date(p.endDate), 'MMM d')}{p.examDate ? ` · Exam ${format(new Date(p.examDate), 'MMM d')}` : ''}</div>}
+                      </div>
                       <Badge tone={p.isComplete ? 'success' : 'neutral'}>{p.isComplete ? 'Complete' : 'Pending'}</Badge>
                     </li>
                   )) ?? <EmptyState title="No phases" className="border-0" />}
+                  {timeline.data && ((timeline.data as { phases?: unknown[] })?.phases ?? []).length === 0 && <EmptyState title="No phases" className="border-0" />}
                 </ul>
               )}
             </CardBody>
