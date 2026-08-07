@@ -18,6 +18,9 @@ api.interceptors.request.use((config) => {
   if (config.data instanceof FormData) {
     if (typeof config.headers.delete === 'function') config.headers.delete('Content-Type')
     else delete (config.headers as Record<string, unknown>)['Content-Type']
+    // Big CSV/XLSX imports parse + write rows sequentially and can take a minute+.
+    // The 30s default was firing a timeout even though the import kept succeeding.
+    if (config.timeout == null || config.timeout === 30_000) config.timeout = 300_000
   }
   return config
 })

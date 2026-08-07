@@ -302,7 +302,7 @@ export default function AttendanceCoordinatorPage() {
                       <td className="px-3 py-2">
                         <Select className="min-w-[200px]" value={lec.proxyFacultyId ?? ''}
                           onChange={(e) => setProxy.mutate({ slotId: lec.slotId, proxyFacultyId: e.target.value })}
-                          options={[{ value: '', label: '— No proxy (original) —' }, ...(proxies.data!.facultyOptions)
+                          options={[{ value: '', label: '— No proxy (original) —' }, ...(lec.facultyOptions ?? [])
                             .filter((f) => f.id !== lec.originalFacultyId)
                             .map((f) => ({ value: f.id, label: `${f.name} (${f.employeeId})` }))]} />
                       </td>

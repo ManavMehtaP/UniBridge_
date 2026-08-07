@@ -3,8 +3,9 @@ import { useTableSort } from '@/hooks/shared/useTableSort'
 import { ExportMenu } from '@/components/shared/ExportMenu'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Activity, AlertTriangle, Award, TrendingUp, Users } from 'lucide-react'
+import { Activity, AlertTriangle, Award, ClipboardCheck, TrendingUp, Users } from 'lucide-react'
 import { hodApi } from '@/api/hod'
+import type { AnalyticsKpi } from '@/types/hod'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
 import { useHistoryStore } from '@/stores/historyStore'
@@ -21,6 +22,10 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { StatCardSkeleton, ChartSkeleton, TableSkeleton } from '@/components/ui/Skeleton'
 import { DonutChart, MultiLineChart, RadarCompareChart, SimpleBarChart } from '@/components/charts'
 
+// Marks-first analytics: everything is shown in absolute marks (out of each test's
+// 25 or 50), never a % of 100. Only tests with uploaded results are shown, so the
+// page follows the calendar — if only T-1 is done, the marks views stop at T-1.
+
 export default function AnalyticsPage() {
   const history = useHistoryStore()
   const scope = useHodScope(history.semesterId ?? undefined)
@@ -29,7 +34,7 @@ export default function AnalyticsPage() {
   const [phaseId, setPhaseId] = useState('')
   const [tab, setTab] = useState('attendance')
 
-  const kpi = useQuery({ queryKey: ['hod', 'an', 'kpi', batchId], queryFn: () => hodApi.analytics.kpi(batchId || undefined) })
+  const kpi = useQuery({ queryKey: ['hod', 'an', 'kpi', batchId], queryFn: () => hodApi.analytics.kpi(batchId || undefined) as Promise<AnalyticsKpi> })
   const ctx = useQuery({ queryKey: ['hod', 'results', 'ctx', semesterId], queryFn: () => hodApi.results.uploadContext(semesterId) as Promise<{ phases: { id: string; label: string }[] }>, enabled: !!semesterId })
 
   useEffect(() => {
@@ -40,12 +45,12 @@ export default function AnalyticsPage() {
   const bySub = useQuery({ queryKey: ['hod', 'an', 'bysub', batchId], queryFn: () => hodApi.analytics.attendanceBySubject(batchId || undefined) as Promise<{ subjects: { code: string; avgPct: number }[] }>, enabled: tab === 'attendance' })
   const dist = useQuery({ queryKey: ['hod', 'an', 'dist', batchId], queryFn: () => hodApi.analytics.attendanceDistribution(batchId || undefined) as Promise<{ buckets: { range: string; count: number }[] }>, enabled: tab === 'attendance' })
 
-  const grade = useQuery({ queryKey: ['hod', 'an', 'grade', phaseId, batchId], queryFn: () => hodApi.analytics.gradeDistribution(phaseId, batchId || undefined) as Promise<{ buckets: { grade: string; count: number }[] }>, enabled: tab === 'marks' && !!phaseId })
-  const marksBySub = useQuery({ queryKey: ['hod', 'an', 'marksbysub', phaseId, batchId], queryFn: () => hodApi.analytics.marksBySubject(phaseId, batchId || undefined) as Promise<{ subjects: { code: string; avgMarksPct: number }[] }>, enabled: tab === 'marks' && !!phaseId })
-  const radar = useQuery({ queryKey: ['hod', 'an', 'radar', phaseId], queryFn: () => hodApi.analytics.performanceRadar(phaseId) as Promise<{ subjects: string[]; topAvg: number[]; bottomAvg: number[] }>, enabled: tab === 'marks' && !!phaseId })
+  const marksDist = useQuery({ queryKey: ['hod', 'an', 'marksdist', phaseId, batchId], queryFn: () => hodApi.analytics.gradeDistribution(phaseId, batchId || undefined) as Promise<{ maxMarks: number; buckets: { grade: string; count: number }[] }>, enabled: tab === 'marks' && !!phaseId })
+  const marksBySub = useQuery({ queryKey: ['hod', 'an', 'marksbysub', phaseId, batchId], queryFn: () => hodApi.analytics.marksBySubject(phaseId, batchId || undefined) as Promise<{ maxMarks: number; riskMark: number; subjects: { code: string; avgMarks: number }[] }>, enabled: tab === 'marks' && !!phaseId })
+  const radar = useQuery({ queryKey: ['hod', 'an', 'radar', phaseId], queryFn: () => hodApi.analytics.performanceRadar(phaseId) as Promise<{ maxMarks: number; subjects: string[]; topAvg: number[]; bottomAvg: number[] }>, enabled: tab === 'marks' && !!phaseId })
 
-  const atRisk = useQuery({ queryKey: ['hod', 'an', 'atrisk', batchId], queryFn: () => hodApi.analytics.atRisk({ batchId: batchId || undefined, limit: 20 }) as Promise<{ data: { enrollmentNo: string; name: string; batchCode: string; mentorCode?: string; avgAttendancePct: number; latestPhaseMarksPct: number; riskFactor: string }[] }>, enabled: tab === 'atrisk' })
-  const leaderboard = useQuery({ queryKey: ['hod', 'an', 'lb', phaseId, batchId], queryFn: () => hodApi.analytics.leaderboard(phaseId, batchId || undefined, 10) as Promise<{ data: { rank: number; enrollmentNo: string; name: string; batchCode: string; avgPct: number }[] }>, enabled: tab === 'leaderboard' && !!phaseId })
+  const atRisk = useQuery({ queryKey: ['hod', 'an', 'atrisk', batchId], queryFn: () => hodApi.analytics.atRisk({ batchId: batchId || undefined, limit: 20 }) as Promise<{ data: AtRiskRow[] }>, enabled: tab === 'atrisk' })
+  const leaderboard = useQuery({ queryKey: ['hod', 'an', 'lb', phaseId, batchId], queryFn: () => hodApi.analytics.leaderboard(phaseId, batchId || undefined, 10) as Promise<{ maxMarks: number; data: { rank: number; enrollmentNo: string; name: string; batchCode: string; avgMarks: number }[] }>, enabled: tab === 'leaderboard' && !!phaseId })
 
   const notify = useMutation({
     mutationFn: (enrollmentNo: string) => hodApi.analytics.notifyMentor(enrollmentNo),
@@ -61,11 +66,12 @@ export default function AnalyticsPage() {
   const riskSortTh = { activeKey: riskSort.sortKey, dir: riskSort.sortDir, onSort: riskSort.onSort }
   const lbSort = useTableSort(leaderboard.data?.data ?? [])
   const lbSortTh = { activeKey: lbSort.sortKey, dir: lbSort.sortDir, onSort: lbSort.onSort }
+  const lbMax = leaderboard.data?.maxMarks ?? 25
 
   return (
     <PageShell
       title="Analytics"
-      subtitle="Deep-dive into attendance and performance"
+      subtitle="Attendance and performance — marks shown out of each test's total (25 or 50)"
       action={
         <div className="flex flex-wrap items-center gap-2">
           <Select className="w-40" value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="All Batches" options={batchOptions} />
@@ -78,10 +84,10 @@ export default function AnalyticsPage() {
         {kpi.isLoading || !k ? <StatCardSkeleton count={5} /> : (
           <>
             <StatCard value={`${Math.round(k.avgAttendance.value)}%`} label="Avg Attendance" delta={k.avgAttendance.deltaLabel} trend="up" icon={<Activity size={18} className="text-primary" />} iconBg="var(--primary-light)" />
-            <StatCard value={`${Math.round(k.avgMarksLatestPhase.value)}%`} label={`Avg Marks (${k.avgMarksLatestPhase.phaseLabel})`} delta={k.avgMarksLatestPhase.deltaLabel} trend="up" icon={<TrendingUp size={18} className="text-teal" />} iconBg="var(--teal-light)" />
+            <StatCard value={`${k.testsConducted.done}/${k.testsConducted.total}`} label="Tests Conducted" delta="From uploaded results" icon={<ClipboardCheck size={18} className="text-teal" />} iconBg="var(--teal-light)" />
+            <StatCard value={k.latestTest.rows === 0 ? '—' : `${k.latestTest.avgMarks}/${k.latestTest.maxMarks}`} label={`Avg Marks (${k.latestTest.phaseLabel})`} delta={`${k.latestTest.rows} entries`} trend="up" icon={<TrendingUp size={18} className="text-primary" />} iconBg="var(--primary-light)" />
             <StatCard value={k.atRiskCount.value} label="At Risk" delta={k.atRiskCount.deltaLabel} trend="down" icon={<AlertTriangle size={18} className="text-danger" />} iconBg="var(--danger-light)" />
-            <StatCard value={`${Math.round(k.passRateLatestPhase.value)}%`} label={`Pass Rate (${k.passRateLatestPhase.phaseLabel})`} delta={k.passRateLatestPhase.deltaLabel} trend="up" icon={<Users size={18} className="text-success" />} iconBg="var(--success-light)" />
-            <StatCard value={`${Math.round(k.topScorer.avgPct)}%`} label={`Top: ${k.topScorer.name}`} icon={<Award size={18} className="text-purple" />} iconBg="var(--purple-light)" />
+            <StatCard value={k.topScorer.name === '-' ? '—' : `${k.topScorer.marks}/${k.topScorer.maxMarks}`} label={`Top: ${k.topScorer.name}`} icon={<Award size={18} className="text-purple" />} iconBg="var(--purple-light)" />
           </>
         )}
       </div>
@@ -112,18 +118,21 @@ export default function AnalyticsPage() {
 
       {tab === 'marks' && (
         <>
-          <div className="mb-4"><Select className="w-40" value={phaseId} onChange={(e) => setPhaseId(e.target.value)} placeholder="Phase" options={phaseOptions} /></div>
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <Select className="w-40" value={phaseId} onChange={(e) => setPhaseId(e.target.value)} placeholder="Test" options={phaseOptions} />
+            {marksBySub.data && <Badge tone="neutral">Out of {marksBySub.data.maxMarks} · risk below {marksBySub.data.riskMark}</Badge>}
+          </div>
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Card>
-              <CardHeader title="Grade Distribution" />
-              <CardBody>{grade.data ? <DonutChart data={grade.data.buckets.map((b) => ({ label: b.grade, value: b.count }))} /> : <ChartSkeleton />}</CardBody>
+              <CardHeader title="Marks Distribution" subtitle="Students per marks band" />
+              <CardBody>{marksDist.data ? <DonutChart data={marksDist.data.buckets.map((b) => ({ label: b.grade, value: b.count }))} /> : <ChartSkeleton />}</CardBody>
             </Card>
             <Card>
-              <CardHeader title="Avg Marks by Subject" />
-              <CardBody>{marksBySub.data ? <SimpleBarChart data={marksBySub.data.subjects.map((x) => ({ label: x.code, value: x.avgMarksPct }))} color="#7C3AED" /> : <ChartSkeleton />}</CardBody>
+              <CardHeader title="Avg Marks by Subject" subtitle={marksBySub.data ? `Out of ${marksBySub.data.maxMarks}` : undefined} />
+              <CardBody>{marksBySub.data ? <SimpleBarChart data={marksBySub.data.subjects.map((x) => ({ label: x.code, value: x.avgMarks }))} color="#7C3AED" domainMax={marksBySub.data.maxMarks} /> : <ChartSkeleton />}</CardBody>
             </Card>
             <Card className="lg:col-span-2">
-              <CardHeader title="Performance Radar" subtitle="Top 10 vs Bottom 10 by subject" />
+              <CardHeader title="Performance Radar" subtitle={radar.data ? `Top 10 vs Bottom 10 — avg marks out of ${radar.data.maxMarks}` : 'Top 10 vs Bottom 10 by subject'} />
               <CardBody>{radar.data ? <RadarCompareChart subjects={radar.data.subjects} topAvg={radar.data.topAvg} bottomAvg={radar.data.bottomAvg} /> : <ChartSkeleton height={300} />}</CardBody>
             </Card>
           </div>
@@ -136,15 +145,18 @@ export default function AnalyticsPage() {
             <EmptyState icon={<AlertTriangle size={22} />} title="No at-risk students" description="Every student in this view is above the attendance and marks thresholds." className="border-0" />
           ) : (
             <Table>
-              <thead><tr><Th sortKey="name" {...riskSortTh}>Student</Th><Th sortKey="batchCode" {...riskSortTh}>Batch</Th><Th sortKey="mentorCode" {...riskSortTh}>Mentor</Th><Th sortKey="avgAttendancePct" {...riskSortTh}>Attendance</Th><Th sortKey="latestPhaseMarksPct" {...riskSortTh}>Marks</Th><Th sortKey="riskFactor" {...riskSortTh}>Risk</Th><Th className="text-right">Action</Th></tr></thead>
+              <thead><tr><Th sortKey="name" {...riskSortTh}>Student</Th><Th sortKey="batchCode" {...riskSortTh}>Batch</Th><Th sortKey="mentorCode" {...riskSortTh}>Mentor</Th><Th sortKey="avgAttendancePct" {...riskSortTh}>Attendance</Th><Th sortKey="latestTestMarks" {...riskSortTh}>Marks</Th><Th sortKey="riskFactor" {...riskSortTh}>Risk</Th><Th className="text-right">Action</Th></tr></thead>
               <tbody>
                 {riskSort.rows.map((r) => (
                   <Tr key={r.enrollmentNo}>
                     <Td><div className="font-medium">{r.name}</div><div className="font-mono text-[11px] text-text-muted">{r.enrollmentNo}</div></Td>
                     <Td>{r.batchCode}</Td>
                     <Td>{r.mentorCode ? <Badge tone="teal">{r.mentorCode}</Badge> : '—'}</Td>
-                    <Td className="font-semibold text-danger">{Math.round(r.avgAttendancePct)}%</Td>
-                    <Td className="font-semibold text-danger">{Math.round(r.latestPhaseMarksPct)}%</Td>
+                    <Td className={r.avgAttendancePct < 75 ? 'font-semibold text-danger' : ''}>{Math.round(r.avgAttendancePct)}%</Td>
+                    <Td className="font-semibold">
+                      {r.latestTestMarks == null ? <span className="text-text-muted">—</span> : <span className={r.riskFactor !== 'ATTENDANCE' ? 'text-danger' : ''}>{r.latestTestMarks}/{r.latestTestMax}</span>}
+                      <span className="ml-1 text-[10px] font-normal text-text-muted">{r.latestTestLabel}</span>
+                    </Td>
                     <Td><Badge tone="danger">{r.riskFactor}</Badge></Td>
                     <Td className="text-right"><Button size="sm" variant="outline" loading={notify.isPending && notify.variables === r.enrollmentNo} onClick={() => notify.mutate(r.enrollmentNo)}>Notify Mentor</Button></Td>
                   </Tr>
@@ -157,20 +169,20 @@ export default function AnalyticsPage() {
 
       {tab === 'leaderboard' && (
         <>
-          <div className="mb-4"><Select className="w-40" value={phaseId} onChange={(e) => setPhaseId(e.target.value)} placeholder="Phase" options={phaseOptions} /></div>
+          <div className="mb-4"><Select className="w-40" value={phaseId} onChange={(e) => setPhaseId(e.target.value)} placeholder="Test" options={phaseOptions} /></div>
           <Card className="overflow-hidden">
             {leaderboard.isLoading ? <div className="p-4"><TableSkeleton rows={8} cols={4} /></div> : leaderboard.data && leaderboard.data.data.length === 0 ? (
-              <EmptyState icon={<Award size={22} />} title="No ranked students yet" description="Once marks are published for this phase, the leaderboard fills in." className="border-0" />
+              <EmptyState icon={<Award size={22} />} title="No ranked students yet" description="Once marks are uploaded for this test, the leaderboard fills in." className="border-0" />
             ) : (
               <Table>
-                <thead><tr><Th sortKey="rank" {...lbSortTh}>Rank</Th><Th sortKey="name" {...lbSortTh}>Student</Th><Th sortKey="batchCode" {...lbSortTh}>Batch</Th><Th sortKey="avgPct" {...lbSortTh} className="text-right">Avg %</Th></tr></thead>
+                <thead><tr><Th sortKey="rank" {...lbSortTh}>Rank</Th><Th sortKey="name" {...lbSortTh}>Student</Th><Th sortKey="batchCode" {...lbSortTh}>Batch</Th><Th sortKey="avgMarks" {...lbSortTh} className="text-right">Avg Marks</Th></tr></thead>
                 <tbody>
                   {lbSort.rows.map((r) => (
                     <Tr key={r.enrollmentNo}>
                       <Td><Badge tone={r.rank <= 3 ? 'warning' : 'neutral'}>#{r.rank}</Badge></Td>
                       <Td><div className="font-medium">{r.name}</div><div className="font-mono text-[11px] text-text-muted">{r.enrollmentNo}</div></Td>
                       <Td>{r.batchCode}</Td>
-                      <Td className="text-right font-semibold text-success">{r.avgPct.toFixed(1)}%</Td>
+                      <Td className="text-right font-semibold text-success">{r.avgMarks}/{lbMax}</Td>
                     </Tr>
                   ))}
                 </tbody>
@@ -181,4 +193,16 @@ export default function AnalyticsPage() {
       )}
     </PageShell>
   )
+}
+
+interface AtRiskRow {
+  enrollmentNo: string
+  name: string
+  batchCode: string
+  mentorCode?: string | null
+  avgAttendancePct: number
+  latestTestMarks: number | null
+  latestTestMax: number
+  latestTestLabel: string
+  riskFactor: string
 }

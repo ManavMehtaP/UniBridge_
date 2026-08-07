@@ -7,8 +7,6 @@ const app = createApp();
 
 app.listen(env.PORT, () => {
   console.log(`UniBridge backend listening on port ${env.PORT}`);
-  console.log("Sample HOD token: HOD:fac_001");
-  console.log("Sample super-admin token: SUPER_ADMIN:super_admin_001");
   // Ensure the storage bucket accepts every file type (zip included) — best-effort, no-op without creds.
   void ensureBucketAcceptsAllTypes();
 });

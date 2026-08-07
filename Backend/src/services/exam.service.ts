@@ -23,11 +23,31 @@ const toMin = (hhmm: string) => {
   return (h || 0) * 60 + (m || 0);
 };
 const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number) => aStart < bEnd && bStart < aEnd;
+const minToStr = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const addMinutes = (hhmm: string, n: number) => minToStr(toMin(hhmm) + n);
+// Coding subjects split their total: offline written + online coding.
+const componentSplit = (total: number) => (total >= 50 ? { offline: 35, online: 15 } : { offline: 16, online: 9 });
 const dayOnly = (raw: string | Date) => {
   const d = raw instanceof Date ? raw : new Date(`${String(raw).slice(0, 10)}T00:00:00.000Z`);
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 };
 const dateStr = (d: Date) => d.toISOString().slice(0, 10);
+
+// A schedule is "over" once its exam DATE has passed. Date-granular on purpose:
+// keeps the whole exam day editable for morning emergencies and is timezone-safe
+// (exam times are local wall-clock). After the day, only paper checking can change.
+// ponytail: date-granular lock. Add an IST offset constant here for minute-precision.
+const scheduleOver = (sched: { date: Date }) => dateStr(sched.date) < dateStr(new Date());
+const examOver = (schedules: { date: Date }[]) => schedules.length > 0 && schedules.every(scheduleOver);
+
+// Fisher–Yates in-place shuffle — paper-checking allocation is randomised every run.
+function shuffle<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
 
 // ── access + workspace resolution ──
 type YearContext = { yearLevel: YearLevel; academicYearId: string; semesterId: string; isHod: boolean };
@@ -193,8 +213,12 @@ export const examService = {
     const subjIds = [...new Set(schedules.map((s) => s.subjectId))];
     const subs = subjIds.length ? await prisma.subject.findMany({ where: { id: { in: subjIds } }, select: { id: true, code: true, name: true } }) : [];
     const subById = new Map(subs.map((s) => [s.id, s]));
+    // The exam's phase window comes straight from the academic calendar (Phase dates) —
+    // the calendar picker uses it to auto-fill exam-day dates instead of manual entry.
+    const phase = exam.phaseId ? await prisma.phase.findUnique({ where: { id: exam.phaseId }, select: { label: true, startDate: true, endDate: true, examDate: true } }) : null;
     return {
       exam, blockCount, externalCount: externals,
+      phase: phase ? { label: phase.label, startDate: dateStr(phase.startDate), endDate: dateStr(phase.endDate), examDate: phase.examDate ? dateStr(phase.examDate) : null } : null,
       schedules: schedules.map((s) => ({ ...s, subjectCode: subById.get(s.subjectId)?.code ?? "?", subjectName: subById.get(s.subjectId)?.name ?? "" })),
     };
   },
@@ -218,19 +242,38 @@ export const examService = {
   },
 
   // ── Exam calendar / schedules ──
-  async addSchedule(actorId: string, universityId: string, examId: string, body: { subjectId: string; date: string; startTime: string; endTime: string; branch?: string }) {
+  async addSchedule(actorId: string, universityId: string, examId: string, body: { subjectId: string; date: string; startTime: string; endTime: string; branch?: string; coding?: boolean; online?: { startTime?: string; endTime?: string; blockSize?: number; supervisorsPerBlock?: number } }) {
     const ctx = await assertManager(actorId, universityId);
-    await getExamOrThrow(examId, ctx);
+    const exam = await getExamOrThrow(examId, ctx);
     if (!body.subjectId || !body.date || !body.startTime || !body.endTime) throw new ApiError(400, "VALIDATION_ERROR", "subject, date, start and end time are required.");
     const subject = await prisma.subject.findFirst({ where: { id: body.subjectId, universityId, deletedAt: null }, select: { semesterNumber: true } });
     if (!subject) throw new ApiError(404, "SUBJECT_NOT_FOUND", "Subject not found.");
     const dur = toMin(body.endTime) - toMin(body.startTime);
     if (dur <= 0) throw new ApiError(400, "BAD_TIME", "End time must be after start time.");
-    const s = await prisma.examSchedule.create({
-      data: { examId, subjectId: body.subjectId, semesterNumber: subject.semesterNumber, branch: body.branch ?? null, date: dayOnly(body.date), startTime: body.startTime, endTime: body.endTime, durationMinutes: dur },
-    });
-    await audit(examId, actorId, "ADD_SCHEDULE", `${dateStr(dayOnly(body.date))} ${body.startTime}`);
-    return s;
+    const date = dayOnly(body.date);
+    const base = { examId, subjectId: body.subjectId, semesterNumber: subject.semesterNumber, branch: body.branch ?? null, date };
+
+    // Non-coding: one OFFLINE paper, full marks (componentMax null).
+    if (!body.coding) {
+      const s = await prisma.examSchedule.create({ data: { ...base, mode: "OFFLINE", startTime: body.startTime, endTime: body.endTime, durationMinutes: dur } });
+      await audit(examId, actorId, "ADD_SCHEDULE", `${dateStr(date)} ${body.startTime}`);
+      return s;
+    }
+
+    // Coding: OFFLINE written + ONLINE coding paper on the same day. Marks split by phase total.
+    const total = exam.phaseId ? (await phaseEntryMax(exam.phaseId)).entryMax : 25;
+    const split = componentSplit(total);
+    const on = body.online ?? {};
+    const onStart = on.startTime || addMinutes(body.endTime, 30);
+    const onEnd = on.endTime || addMinutes(onStart, 75);
+    const onDur = toMin(onEnd) - toMin(onStart);
+    if (onDur <= 0) throw new ApiError(400, "BAD_TIME", "Online end time must be after its start time.");
+    const [offline, online] = await prisma.$transaction([
+      prisma.examSchedule.create({ data: { ...base, mode: "OFFLINE", componentMax: split.offline, startTime: body.startTime, endTime: body.endTime, durationMinutes: dur } }),
+      prisma.examSchedule.create({ data: { ...base, mode: "ONLINE", componentMax: split.online, supervisorsPerBlock: Math.max(1, Math.min(Number(on.supervisorsPerBlock ?? 2), 3)), blockSize: Math.max(1, Math.min(Number(on.blockSize ?? 12), 40)), startTime: onStart, endTime: onEnd, durationMinutes: onDur } }),
+    ]);
+    await audit(examId, actorId, "ADD_SCHEDULE", `${dateStr(date)} coding: offline ${split.offline} + online ${split.online}`);
+    return { offline, online };
   },
 
   async updateSchedule(actorId: string, universityId: string, scheduleId: string, body: { date?: string; startTime?: string; endTime?: string; branch?: string; room?: string }) {
@@ -260,10 +303,30 @@ export const examService = {
   },
 
   // Subjects available for the year's active semester (for the calendar picker).
-  async yearSubjects(actorId: string, universityId: string) {
+  // When an examId is given, each subject also carries the exam date fetched from the
+  // Academic Calendar: the EXAM event (within the exam's phase window) whose title names
+  // that subject's code — e.g. "Test-4 (SEE): TOC" → TOC's date. Falls back to null.
+  async yearSubjects(actorId: string, universityId: string, examId?: string) {
     const ctx = await assertManager(actorId, universityId);
     const sem = await prisma.semester.findUnique({ where: { id: ctx.semesterId }, select: { number: true } });
-    return prisma.subject.findMany({ where: { universityId, semesterNumber: sem!.number, deletedAt: null }, select: { id: true, code: true, name: true }, orderBy: { code: "asc" } });
+    const subjects = await prisma.subject.findMany({ where: { universityId, semesterNumber: sem!.number, deletedAt: null }, select: { id: true, code: true, name: true }, orderBy: { code: "asc" } });
+    if (!examId) return subjects.map((s) => ({ ...s, examDate: null as string | null }));
+    const exam = await prisma.exam.findFirst({ where: { id: examId, deletedAt: null }, select: { phaseId: true } });
+    const phase = exam?.phaseId ? await prisma.phase.findUnique({ where: { id: exam.phaseId }, select: { startDate: true, endDate: true } }) : null;
+    if (!phase) return subjects.map((s) => ({ ...s, examDate: null as string | null }));
+    const events = await prisma.calendarEvent.findMany({
+      where: { universityId, eventType: "EXAM", deletedAt: null, startDate: { gte: dayOnly(phase.startDate), lte: dayOnly(phase.endDate) } },
+      select: { title: true, startDate: true }, orderBy: { startDate: "asc" },
+    });
+    // A subject code matches a title only as a whole token (so "DM" ≠ "ADMIN", but "FSD-2" hits).
+    const matchDate = (code: string, name: string) => {
+      const up = code.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`(^|[^A-Z0-9])${up}([^A-Z0-9]|$)`, "i");
+      const byCode = events.find((e) => re.test(e.title));
+      const byName = byCode ?? events.find((e) => e.title.toLowerCase().includes(name.toLowerCase()));
+      return byName ? dateStr(byName.startDate) : null;
+    };
+    return subjects.map((s) => ({ ...s, examDate: matchDate(s.code, s.name) }));
   },
 
   // ── Student block generation (session-level; per-HOD numbering) ──
@@ -285,6 +348,11 @@ export const examService = {
     // Wipe existing blocks (cascade clears students + allocations) then rebuild.
     await prisma.examBlock.deleteMany({ where: { examId } });
 
+    // OFFLINE always; ONLINE (smaller lab blocks) only when a coding component exists.
+    const onlineSched = await prisma.examSchedule.findFirst({ where: { examId, mode: "ONLINE" }, orderBy: { blockSize: "asc" }, select: { blockSize: true } });
+    const modes: { mode: "OFFLINE" | "ONLINE"; size: number }[] = [{ mode: "OFFLINE", size: exam.blockSize }];
+    if (onlineSched) modes.push({ mode: "ONLINE", size: onlineSched.blockSize ?? 12 });
+
     let totalBlocks = 0, totalStudents = 0;
     for (const [hodId, batchIds] of byHod) {
       const enrollments = await prisma.studentEnrollment.findMany({
@@ -292,40 +360,42 @@ export const examService = {
         include: { student: { select: { id: true, enrollmentNo: true } } },
       });
       enrollments.sort((a, b) => a.student.enrollmentNo.localeCompare(b.student.enrollmentNo));
-      // Balanced split: no block below 15; remainder grows blocks toward blockSize+4.
-      const sizes = splitBlockSizes(enrollments.length, exam.blockSize);
-      let cursor = 0;
-      for (let b = 0; b < sizes.length; b++) {
-        const chunk = enrollments.slice(cursor, cursor + sizes[b]);
-        cursor += sizes[b];
-        await prisma.examBlock.create({
-          data: {
-            examId, ownerHodId: hodId, blockNumber: b + 1,
-            students: { create: chunk.map((e, idx) => ({ studentId: e.student.id, enrollmentNo: e.student.enrollmentNo, seatOrder: idx + 1 })) },
-          },
-        });
-        totalBlocks++; totalStudents += chunk.length;
+      totalStudents += enrollments.length; // counted once (both modes seat everyone)
+      for (const { mode, size } of modes) {
+        // Balanced split: no block below 15; remainder grows blocks toward size+4.
+        const sizes = splitBlockSizes(enrollments.length, size);
+        let cursor = 0;
+        for (let b = 0; b < sizes.length; b++) {
+          const chunk = enrollments.slice(cursor, cursor + sizes[b]);
+          cursor += sizes[b];
+          await prisma.examBlock.create({
+            data: {
+              examId, mode, ownerHodId: hodId, blockNumber: b + 1,
+              students: { create: chunk.map((e, idx) => ({ studentId: e.student.id, enrollmentNo: e.student.enrollmentNo, seatOrder: idx + 1 })) },
+            },
+          });
+          totalBlocks++;
+        }
       }
     }
-    // Keep each schedule's student count in sync with the generated roster.
     await prisma.examSchedule.updateMany({ where: { examId }, data: { studentCount: totalStudents } });
-    await audit(examId, actorId, "GENERATE_BLOCKS", `${totalBlocks} blocks / ${totalStudents} students`);
-    return { blocks: totalBlocks, students: totalStudents, hods: byHod.size };
+    await audit(examId, actorId, "GENERATE_BLOCKS", `${totalBlocks} blocks (${modes.map((m) => m.mode).join("+")}) / ${totalStudents} students`);
+    return { blocks: totalBlocks, students: totalStudents, hods: byHod.size, modes: modes.map((m) => m.mode) };
   },
 
-  async listBlocks(actorId: string, universityId: string, examId: string) {
+  async listBlocks(actorId: string, universityId: string, examId: string, mode?: "OFFLINE" | "ONLINE") {
     const ctx = await assertManager(actorId, universityId);
     await getExamOrThrow(examId, ctx);
     const blocks = await prisma.examBlock.findMany({
-      where: { examId },
+      where: { examId, ...(mode ? { mode } : {}) },
       include: { students: { orderBy: { seatOrder: "asc" }, select: { studentId: true, enrollmentNo: true, seatOrder: true } }, _count: { select: { students: true } } },
-      orderBy: [{ ownerHodId: "asc" }, { blockNumber: "asc" }],
+      orderBy: [{ mode: "asc" }, { ownerHodId: "asc" }, { blockNumber: "asc" }],
     });
     const hodIds = [...new Set(blocks.map((b) => b.ownerHodId))];
     const hods = hodIds.length ? await prisma.faculty.findMany({ where: { id: { in: hodIds } }, select: { id: true, name: true } }) : [];
     const hodName = new Map(hods.map((h) => [h.id, h.name]));
     return blocks.map((b) => ({
-      id: b.id, ownerHodId: b.ownerHodId, ownerHodName: hodName.get(b.ownerHodId) ?? "—",
+      id: b.id, mode: b.mode, ownerHodId: b.ownerHodId, ownerHodName: hodName.get(b.ownerHodId) ?? "—",
       blockNumber: b.blockNumber, room: b.room, isLocked: b.isLocked, studentCount: b._count.students,
       firstEnrollment: b.students[0]?.enrollmentNo ?? null, lastEnrollment: b.students[b.students.length - 1]?.enrollmentNo ?? null,
       students: b.students,
@@ -361,6 +431,7 @@ export const examService = {
     if (!from || !to) throw new ApiError(404, "NOT_FOUND", "Block not found.");
     if (from.examId !== to.examId) throw new ApiError(400, "CROSS_EXAM", "Blocks belong to different exams.");
     await getExamOrThrow(from.examId, ctx);
+    if (examOver(await prisma.examSchedule.findMany({ where: { examId: from.examId }, select: { date: true } }))) throw new ApiError(409, "EXAM_OVER", "This exam is over — only paper checking can be changed now.");
     if (from.isLocked || to.isLocked) throw new ApiError(409, "LOCKED", "A locked block cannot be edited.");
     const row = await prisma.blockStudent.findFirst({ where: { blockId: body.fromBlockId, studentId: body.studentId } });
     if (!row) throw new ApiError(404, "NOT_IN_BLOCK", "Student is not in the source block.");
@@ -378,6 +449,7 @@ export const examService = {
     if (!a || !b) throw new ApiError(404, "NOT_FOUND", "Block not found.");
     if (a.examId !== b.examId) throw new ApiError(400, "CROSS_EXAM", "Blocks belong to different exams.");
     await getExamOrThrow(a.examId, ctx);
+    if (examOver(await prisma.examSchedule.findMany({ where: { examId: a.examId }, select: { date: true } }))) throw new ApiError(409, "EXAM_OVER", "This exam is over — only paper checking can be changed now.");
     if (a.isLocked || b.isLocked) throw new ApiError(409, "LOCKED", "A locked block cannot be edited.");
     const [aIds, bIds] = await Promise.all([
       prisma.blockStudent.findMany({ where: { blockId: a.id }, select: { id: true } }),
@@ -463,8 +535,10 @@ export const examService = {
     const exam = await getExamOrThrow(sched.examId, ctx);
     if (exam.status === "PUBLISHED") throw new ApiError(409, "PUBLISHED", "Unpublish before regenerating.");
 
-    const blocks = await prisma.examBlock.findMany({ where: { examId: exam.id }, orderBy: [{ ownerHodId: "asc" }, { blockNumber: "asc" }], select: { id: true } });
+    // Supervision uses the blocks of THIS schedule's mode (OFFLINE vs ONLINE lab set).
+    const blocks = await prisma.examBlock.findMany({ where: { examId: exam.id, mode: sched.mode }, orderBy: [{ ownerHodId: "asc" }, { blockNumber: "asc" }], select: { id: true } });
     if (blocks.length === 0) throw new ApiError(400, "NO_BLOCKS", "Generate student blocks first.");
+    const perBlock = Math.max(1, sched.supervisorsPerBlock); // ONLINE labs need 2
 
     const coords = await coordinatorIds(exam.semesterId);
     const startMin = toMin(sched.startTime), endMin = toMin(sched.endTime);
@@ -501,24 +575,27 @@ export const examService = {
 
     const externals = await prisma.externalFaculty.findMany({ where: { examId: exam.id }, select: { id: true } });
 
-    // Clear this schedule's supervisors then assign one distinct supervisor per block.
+    // Clear this schedule's supervisors then assign distinct supervisors per block —
+    // `perBlock` of them (1 offline, 2 online), each in its own slot.
     await prisma.supervisorAllocation.deleteMany({ where: { scheduleId } });
     let ci = 0, ei = 0, ownYear = 0, otherYear = 0, external = 0, unfilled = 0;
     for (const block of blocks) {
-      if (ci < candidates.length) {
-        const cand = candidates[ci++];
-        const source = cand.tier === 0 ? "OWN_YEAR" : "OTHER_YEAR";
-        await prisma.supervisorAllocation.create({ data: { examId: exam.id, scheduleId, blockId: block.id, facultyId: cand.id, source } });
-        if (cand.tier === 0) ownYear++; else otherYear++;
-      } else if (ei < externals.length) {
-        await prisma.supervisorAllocation.create({ data: { examId: exam.id, scheduleId, blockId: block.id, externalFacultyId: externals[ei++].id, source: "EXTERNAL" } });
-        external++;
-      } else {
-        unfilled++;
+      for (let slot = 1; slot <= perBlock; slot++) {
+        if (ci < candidates.length) {
+          const cand = candidates[ci++];
+          const source = cand.tier === 0 ? "OWN_YEAR" : "OTHER_YEAR";
+          await prisma.supervisorAllocation.create({ data: { examId: exam.id, scheduleId, blockId: block.id, slot, facultyId: cand.id, source } });
+          if (cand.tier === 0) ownYear++; else otherYear++;
+        } else if (ei < externals.length) {
+          await prisma.supervisorAllocation.create({ data: { examId: exam.id, scheduleId, blockId: block.id, slot, externalFacultyId: externals[ei++].id, source: "EXTERNAL" } });
+          external++;
+        } else {
+          unfilled++;
+        }
       }
     }
     await audit(exam.id, actorId, "GENERATE_SUPERVISION", `sched ${scheduleId}: own ${ownYear}, other ${otherYear}, ext ${external}, unfilled ${unfilled}`);
-    return { blocks: blocks.length, ownYear, otherYear, external, unfilled };
+    return { blocks: blocks.length, supervisorsPerBlock: perBlock, ownYear, otherYear, external, unfilled };
   },
 
   async listSupervision(actorId: string, universityId: string, scheduleId: string) {
@@ -529,7 +606,7 @@ export const examService = {
     const allocs = await prisma.supervisorAllocation.findMany({
       where: { scheduleId },
       include: { block: { select: { blockNumber: true, room: true, ownerHodId: true } } },
-      orderBy: { block: { blockNumber: "asc" } },
+      orderBy: [{ block: { blockNumber: "asc" } }, { slot: "asc" }],
     });
     const facIds = allocs.map((a) => a.facultyId).filter(Boolean) as string[];
     const extIds = allocs.map((a) => a.externalFacultyId).filter(Boolean) as string[];
@@ -540,7 +617,7 @@ export const examService = {
     const facById = new Map(facs.map((f) => [f.id, f]));
     const extById = new Map(exts.map((e) => [e.id, e]));
     return allocs.map((a) => ({
-      id: a.id, blockNumber: a.block.blockNumber, room: a.block.room, source: a.source,
+      id: a.id, blockNumber: a.block.blockNumber, slot: a.slot, room: a.block.room, source: a.source,
       supervisor: a.facultyId ? `${facById.get(a.facultyId)?.name ?? "?"} (${facById.get(a.facultyId)?.employeeId ?? ""})`
         : a.externalFacultyId ? `${extById.get(a.externalFacultyId)?.name ?? "?"} (External)` : "—",
       facultyId: a.facultyId, externalFacultyId: a.externalFacultyId,
@@ -552,6 +629,7 @@ export const examService = {
     const alloc = await prisma.supervisorAllocation.findUnique({ where: { id: allocationId }, include: { schedule: true } });
     if (!alloc) throw new ApiError(404, "NOT_FOUND", "Allocation not found.");
     const exam = await getExamOrThrow(alloc.examId, ctx);
+    if (scheduleOver(alloc.schedule)) throw new ApiError(409, "SCHEDULE_OVER", "This exam day is over — only paper checking can be changed now.");
     if (body.externalFacultyId) {
       await prisma.supervisorAllocation.update({ where: { id: allocationId }, data: { facultyId: null, externalFacultyId: body.externalFacultyId, source: "EXTERNAL" } });
     } else if (body.facultyId) {
@@ -590,30 +668,58 @@ export const examService = {
     const facs = await prisma.faculty.findMany({ where: { id: { in: facIds }, deletedAt: null }, select: { id: true } });
     const eligible = facs.map((f) => f.id);
 
-    const blocks = await prisma.examBlock.findMany({ where: { examId: exam.id }, orderBy: [{ ownerHodId: "asc" }, { blockNumber: "asc" }], select: { id: true, blockNumber: true } });
+    const blocks = await prisma.examBlock.findMany({ where: { examId: exam.id, mode: sched.mode }, orderBy: [{ ownerHodId: "asc" }, { blockNumber: "asc" }], select: { id: true, blockNumber: true, ownerHodId: true } });
     if (blocks.length === 0) throw new ApiError(400, "NO_BLOCKS", "Generate student blocks first.");
 
-    // Continuous, near-equal ranges: first (blocks % n) faculty get one extra.
-    const n = eligible.length, base = Math.floor(blocks.length / n), extra = blocks.length % n;
-    await prisma.paperCheckingAllocation.deleteMany({ where: { scheduleId } });
-    let idx = 0, seq = 1;
-    const result: { facultyId: string; count: number }[] = [];
-    for (let i = 0; i < n; i++) {
-      const take = base + (i < extra ? 1 : 0);
-      if (take === 0) break;
-      const slice = blocks.slice(idx, idx + take);
-      idx += take;
-      await prisma.paperCheckingAllocation.create({
-        data: {
-          examId: exam.id, scheduleId, subjectId: sched.subjectId, facultyId: eligible[i],
-          blockIds: slice.map((b) => b.id), fromLabel: `Block ${seq}`, toLabel: `Block ${seq + take - 1}`,
-        },
-      });
-      result.push({ facultyId: eligible[i], count: take });
-      seq += take;
+    // Each checker's OWN HOD(s): the HOD(s) whose batches this checker teaches for this
+    // subject/semester. A checker must never check their own HOD's students, so we assign
+    // only OTHER HODs' blocks — cross-checking to avoid bias.
+    const [subjFbas, scopes] = await Promise.all([
+      prisma.facultyBatchAssignment.findMany({ where: { subjectId: sched.subjectId, semesterId: exam.semesterId, facultyId: { in: eligible } }, select: { facultyId: true, batchId: true } }),
+      prisma.hodBatchScope.findMany({ where: { semesterId: exam.semesterId }, select: { facultyId: true, batchId: true } }),
+    ]);
+    const hodOfBatch = new Map(scopes.map((s) => [s.batchId, s.facultyId]));
+    const ownHods = new Map<string, Set<string>>();
+    for (const f of subjFbas) {
+      const h = hodOfBatch.get(f.batchId); if (!h) continue;
+      let set = ownHods.get(f.facultyId); if (!set) { set = new Set(); ownHods.set(f.facultyId, set); }
+      set.add(h);
     }
-    await audit(exam.id, actorId, "GENERATE_PAPER_CHECKING", `sched ${scheduleId}: ${blocks.length} blocks / ${n} faculty`);
-    return { blocks: blocks.length, faculty: n, distribution: result };
+    // Fallback to faculty.hodId for checkers who teach no scoped batch for this subject.
+    const noOwn = eligible.filter((id) => !ownHods.has(id));
+    if (noOwn.length) {
+      const facHods = await prisma.faculty.findMany({ where: { id: { in: noOwn } }, select: { id: true, hodId: true } });
+      for (const f of facHods) if (f.hodId) ownHods.set(f.id, new Set([f.hodId]));
+    }
+
+    await prisma.paperCheckingAllocation.deleteMany({ where: { scheduleId } });
+    // Group blocks by owner HOD; distribute each group (contiguous, near-equal ranges) among
+    // checkers NOT in that HOD, shuffled every run. If no cross-HOD checker exists (single-HOD
+    // pool) fall back to all eligible so no paper is left unchecked.
+    const byOwner = new Map<string, typeof blocks>();
+    for (const b of blocks) { const arr = byOwner.get(b.ownerHodId) ?? []; arr.push(b); byOwner.set(b.ownerHodId, arr); }
+    const loadOf = new Map<string, number>();
+    for (const [ownerHod, group] of byOwner) {
+      let pool = shuffle(eligible.filter((id) => !ownHods.get(id)?.has(ownerHod)));
+      if (pool.length === 0) pool = shuffle([...eligible]);
+      const n = pool.length, base = Math.floor(group.length / n), extra = group.length % n;
+      let idx = 0;
+      for (let i = 0; i < n; i++) {
+        const take = base + (i < extra ? 1 : 0);
+        if (take === 0) continue;
+        const slice = group.slice(idx, idx + take); idx += take;
+        await prisma.paperCheckingAllocation.create({
+          data: {
+            examId: exam.id, scheduleId, subjectId: sched.subjectId, facultyId: pool[i],
+            blockIds: slice.map((b) => b.id), fromLabel: `Block ${slice[0].blockNumber}`, toLabel: `Block ${slice[slice.length - 1].blockNumber}`,
+          },
+        });
+        loadOf.set(pool[i], (loadOf.get(pool[i]) ?? 0) + take);
+      }
+    }
+    const distribution = [...loadOf.entries()].map(([facultyId, count]) => ({ facultyId, count }));
+    await audit(exam.id, actorId, "GENERATE_PAPER_CHECKING", `sched ${scheduleId}: ${blocks.length} blocks, cross-HOD randomised`);
+    return { blocks: blocks.length, faculty: distribution.length, distribution };
   },
 
   async listPaperChecking(actorId: string, universityId: string, scheduleId: string) {
@@ -642,6 +748,25 @@ export const examService = {
       });
     }
     return out;
+  },
+
+  // Reassign one paper-checking block-range to a different checker. Unlike every
+  // other allocation, paper checking has NO time lock — it stays editable even after
+  // the exam day is over (checking happens afterwards). Already-entered marks live in
+  // Result (keyed by student/phase/subject), so they survive a checker change.
+  async editPaperChecking(actorId: string, universityId: string, allocationId: string, facultyId: string) {
+    const ctx = await assertManager(actorId, universityId);
+    const alloc = await prisma.paperCheckingAllocation.findUnique({ where: { id: allocationId } });
+    if (!alloc) throw new ApiError(404, "NOT_FOUND", "Allocation not found.");
+    const exam = await getExamOrThrow(alloc.examId, ctx);
+    if (!facultyId) throw new ApiError(400, "VALIDATION_ERROR", "Provide a facultyId.");
+    const coords = await coordinatorIds(exam.semesterId);
+    if (coords.has(facultyId)) throw new ApiError(409, "COORDINATOR", "Exam coordinators are not assigned paper-checking ranges.");
+    const fac = await prisma.faculty.findFirst({ where: { id: facultyId, universityId, deletedAt: null }, select: { id: true } });
+    if (!fac) throw new ApiError(404, "FACULTY_NOT_FOUND", "Faculty not found.");
+    await prisma.paperCheckingAllocation.update({ where: { id: allocationId }, data: { facultyId } });
+    await audit(exam.id, actorId, "EDIT_PAPER_CHECKING", `${allocationId} → ${facultyId}`);
+    return { updated: true };
   },
 
   // Candidate faculty for the paper-checking select/deselect dialog: subject
@@ -678,8 +803,15 @@ export const examService = {
     const alloc = await prisma.paperCheckingAllocation.findUnique({ where: { id: allocationId } });
     if (!alloc) throw new ApiError(404, "NOT_FOUND", "Allocation not found.");
     const exam = await assertPaperCheckAccess(alloc, facultyId, universityId);
-    const { phaseId, number, entryMax } = await phaseEntryMax(exam.phaseId);
+    const { phaseId, number, entryMax } = await phaseEntryMax(exam.phaseId); // entryMax = subject total 25/50
+    const sched = await prisma.examSchedule.findUnique({ where: { id: alloc.scheduleId }, select: { mode: true, componentMax: true } });
     const subject = await prisma.subject.findUnique({ where: { id: alloc.subjectId }, select: { code: true, name: true } });
+    // A split (coding) subject entry edits only one component; the other is read-only.
+    const isSplit = sched?.componentMax != null;
+    const split = componentSplit(entryMax);
+    const editableComponent = !isSplit ? "FULL" : sched!.mode === "ONLINE" ? "ONLINE" : "OFFLINE";
+    const componentMax = editableComponent === "FULL" ? entryMax : editableComponent === "ONLINE" ? split.online : split.offline;
+    const passMark = entryMax >= 50 ? 18 : 9; // below this the total is a fail (shown red)
     const students = await allocationStudents(alloc.blockIds, exam.semesterId);
     const results = students.length ? await prisma.result.findMany({ where: { enrollmentId: { in: students.map((s) => s.enrollmentId) }, phaseId, subjectId: alloc.subjectId } }) : [];
     const rById = new Map(results.map((r) => [r.enrollmentId, r]));
@@ -687,33 +819,60 @@ export const examService = {
       allocation: {
         id: alloc.id, examName: (await prisma.exam.findUnique({ where: { id: exam.id }, select: { name: true } }))?.name ?? "",
         subjectCode: subject?.code ?? "?", subjectName: subject?.name ?? "", range: `${alloc.fromLabel} – ${alloc.toLabel}`,
-        entryMax, phaseNumber: number, isPublished: results.length > 0 && results.every((r) => r.isPublished),
+        entryMax, totalMax: entryMax, phaseNumber: number, isSplit, editableComponent, componentMax,
+        offlineMax: split.offline, onlineMax: split.online, passMark,
+        isPublished: results.length > 0 && results.every((r) => r.isPublished),
       },
       students: students.map((s) => {
         const r = rById.get(s.enrollmentId);
-        return { enrollmentId: s.enrollmentId, enrollmentNo: s.enrollmentNo, rollNo: s.rollNo, name: s.name, blockNumber: s.blockNumber,
-          enteredMarks: r ? r.marksObtained * (entryMax === 50 ? 2 : 1) : null, grade: r?.grade ?? null, isPublished: r?.isPublished ?? false };
+        const offline = r?.offlineMarks ?? null;
+        const online = r?.onlineMarks ?? null;
+        const total = r && !r.isAbsent ? r.marksObtained : null;
+        return {
+          enrollmentId: s.enrollmentId, enrollmentNo: s.enrollmentNo, rollNo: s.rollNo, name: s.name, blockNumber: s.blockNumber,
+          offlineMarks: offline, onlineMarks: online, total,
+          // non-split convenience: the single editable value is the total
+          enteredMarks: !isSplit ? total : (editableComponent === "ONLINE" ? online : offline),
+          grade: r?.grade ?? null, isAbsent: r?.isAbsent ?? false, isPublished: r?.isPublished ?? false,
+        };
       }),
     };
   },
 
-  async savePaperCheckingMarks(facultyId: string, universityId: string, allocationId: string, marks: { enrollmentId: string; marks: number | null }[]) {
+  async savePaperCheckingMarks(facultyId: string, universityId: string, allocationId: string, marks: { enrollmentId: string; marks: number | null; absent?: boolean }[]) {
     const alloc = await prisma.paperCheckingAllocation.findUnique({ where: { id: allocationId } });
     if (!alloc) throw new ApiError(404, "NOT_FOUND", "Allocation not found.");
     const exam = await assertPaperCheckAccess(alloc, facultyId, universityId);
-    const { phaseId, entryMax } = await phaseEntryMax(exam.phaseId);
+    const { phaseId, entryMax } = await phaseEntryMax(exam.phaseId); // subject total 25/50
+    const sched = await prisma.examSchedule.findUnique({ where: { id: alloc.scheduleId }, select: { mode: true, componentMax: true } });
+    const isSplit = sched?.componentMax != null;
+    const split = componentSplit(entryMax);
+    const compMax = !isSplit ? entryMax : sched!.mode === "ONLINE" ? split.online : split.offline; // max for THIS field
     const allowed = new Set((await allocationStudents(alloc.blockIds, exam.semesterId)).map((s) => s.enrollmentId));
     let saved = 0;
     for (const m of marks) {
-      if (m.marks == null) continue;
+      // A plain null (untouched) is skipped so autosave never wipes existing entries.
+      if (!m.absent && m.marks == null) continue;
       if (!allowed.has(m.enrollmentId)) throw new ApiError(400, "OUT_OF_RANGE", "Student is outside your assigned blocks.");
-      if (!Number.isFinite(m.marks) || m.marks < 0 || m.marks > entryMax) throw new ApiError(400, "VALIDATION_ERROR", `Marks must be between 0 and ${entryMax}.`);
-      const stored = entryMax === 50 ? m.marks / 2 : m.marks; // T4: /50 entry → /25 stored
+      const isAbsent = Boolean(m.absent);
+      if (!isAbsent && (!Number.isFinite(m.marks!) || m.marks! < 0 || m.marks! > compMax)) throw new ApiError(400, "VALIDATION_ERROR", `Marks must be between 0 and ${compMax}.`);
       const existing = await prisma.result.findUnique({ where: { enrollmentId_phaseId_subjectId: { enrollmentId: m.enrollmentId, phaseId, subjectId: alloc.subjectId } } });
       if (existing?.isPublished) throw new ApiError(409, "ALREADY_PUBLISHED", "Marks are live — they can no longer be edited.");
-      const grade = gradeFromPct((stored / 25) * 100);
-      if (existing) await prisma.result.update({ where: { id: existing.id }, data: { marksObtained: stored, maxMarks: 25, grade, uploadedById: facultyId } });
-      else await prisma.result.create({ data: { enrollmentId: m.enrollmentId, phaseId, subjectId: alloc.subjectId, marksObtained: stored, maxMarks: 25, grade, uploadedById: facultyId } });
+
+      let data: { marksObtained: number; maxMarks: number; offlineMarks: number | null; onlineMarks: number | null; grade: string; isAbsent: boolean; uploadedById: string };
+      if (isAbsent) {
+        // Absent = didn't appear (applies to the whole subject, both papers).
+        data = { marksObtained: 0, maxMarks: entryMax, offlineMarks: null, onlineMarks: null, grade: "AB", isAbsent: true, uploadedById: facultyId };
+      } else if (isSplit) {
+        const offline = sched!.mode === "OFFLINE" ? m.marks! : (existing?.offlineMarks ?? null);
+        const online = sched!.mode === "ONLINE" ? m.marks! : (existing?.onlineMarks ?? null);
+        const total = (offline ?? 0) + (online ?? 0);
+        data = { marksObtained: total, maxMarks: entryMax, offlineMarks: offline, onlineMarks: online, grade: gradeFromPct((total / entryMax) * 100), isAbsent: false, uploadedById: facultyId };
+      } else {
+        data = { marksObtained: m.marks!, maxMarks: entryMax, offlineMarks: null, onlineMarks: null, grade: gradeFromPct((m.marks! / entryMax) * 100), isAbsent: false, uploadedById: facultyId };
+      }
+      if (existing) await prisma.result.update({ where: { id: existing.id }, data });
+      else await prisma.result.create({ data: { enrollmentId: m.enrollmentId, phaseId, subjectId: alloc.subjectId, ...data } });
       saved++;
     }
     await audit(exam.id, facultyId, "SAVE_MARKS", `alloc ${allocationId}: ${saved}`);
@@ -808,6 +967,7 @@ export const examService = {
     const sched = await prisma.examSchedule.findUnique({ where: { id: scheduleId } });
     if (!sched) throw new ApiError(404, "NOT_FOUND", "Schedule not found.");
     const exam = await getExamOrThrow(sched.examId, ctx);
+    if (scheduleOver(sched)) throw new ApiError(409, "SCHEDULE_OVER", "This exam day is over — only paper checking can be changed now.");
     if (slot !== 1 && slot !== 2) throw new ApiError(400, "VALIDATION_ERROR", "Slot must be 1 or 2.");
     const coords = await coordinatorIds(exam.semesterId);
     if (coords.has(facultyId)) throw new ApiError(409, "COORDINATOR", "Exam coordinators cannot be standby.");
@@ -825,6 +985,7 @@ export const examService = {
     const sched = await prisma.examSchedule.findUnique({ where: { id: scheduleId } });
     if (!sched) throw new ApiError(404, "NOT_FOUND", "Schedule not found.");
     const exam = await getExamOrThrow(sched.examId, ctx);
+    if (scheduleOver(sched)) throw new ApiError(409, "SCHEDULE_OVER", "This exam day is over — only paper checking can be changed now.");
     const coords = await coordinatorIds(exam.semesterId);
     const ids = [...new Set(facultyIds.filter((id) => !coords.has(id)))].slice(0, 2);
     await prisma.standbyFaculty.deleteMany({ where: { scheduleId } });
@@ -852,7 +1013,7 @@ export const examService = {
     const conflicts: { type: string; detail: string }[] = [];
 
     const supervisors = await prisma.supervisorAllocation.findMany({
-      where: { examId }, include: { schedule: { select: { date: true, startTime: true, endTime: true } }, block: { select: { blockNumber: true, room: true } } },
+      where: { examId }, include: { schedule: { select: { date: true, startTime: true, endTime: true, mode: true } }, block: { select: { blockNumber: true, room: true } } },
     });
     // Faculty double-booked at overlapping times (across schedules).
     const byFaculty = new Map<string, typeof supervisors>();
@@ -869,22 +1030,28 @@ export const examService = {
         }
       }
     }
-    // Room double-booked within a schedule.
-    const perSchedule = new Map<string, Map<string, number>>();
+    // Room double-booked — OFFLINE only. Online labs deliberately hold several blocks
+    // (e.g. 519-A has blocks 1 & 2) and 2 invigilators per block, so they don't conflict.
+    const perSchedule = new Map<string, Map<string, Set<number>>>();
     for (const s of supervisors) {
-      if (!s.block.room) continue;
-      const key = s.scheduleId;
-      const rooms = perSchedule.get(key) ?? new Map<string, number>();
-      rooms.set(s.block.room, (rooms.get(s.block.room) ?? 0) + 1);
-      perSchedule.set(key, rooms);
+      if (!s.block.room || s.schedule.mode === "ONLINE") continue;
+      const rooms = perSchedule.get(s.scheduleId) ?? new Map<string, Set<number>>();
+      const blks = rooms.get(s.block.room) ?? new Set<number>();
+      blks.add(s.block.blockNumber);
+      rooms.set(s.block.room, blks);
+      perSchedule.set(s.scheduleId, rooms);
     }
-    for (const [, rooms] of perSchedule) for (const [room, n] of rooms) if (n > 1) conflicts.push({ type: "ROOM_DOUBLE_BOOKED", detail: `Room ${room} is used by ${n} blocks in one slot.` });
-    // Unfilled supervision.
-    const blockCount = await prisma.examBlock.count({ where: { examId } });
-    const schedules = await prisma.examSchedule.findMany({ where: { examId }, select: { id: true } });
+    for (const [, rooms] of perSchedule) for (const [room, blks] of rooms) if (blks.size > 1) conflicts.push({ type: "ROOM_DOUBLE_BOOKED", detail: `Room ${room} is used by ${blks.size} blocks in one slot.` });
+    // Unfilled supervision: expected = (blocks of the schedule's mode) × supervisors-per-block.
+    const [offlineBlocks, onlineBlocks] = await Promise.all([
+      prisma.examBlock.count({ where: { examId, mode: "OFFLINE" } }),
+      prisma.examBlock.count({ where: { examId, mode: "ONLINE" } }),
+    ]);
+    const schedules = await prisma.examSchedule.findMany({ where: { examId }, select: { id: true, mode: true, supervisorsPerBlock: true } });
     for (const sc of schedules) {
+      const need = (sc.mode === "ONLINE" ? onlineBlocks : offlineBlocks) * Math.max(1, sc.supervisorsPerBlock);
       const filled = await prisma.supervisorAllocation.count({ where: { scheduleId: sc.id } });
-      if (blockCount > 0 && filled < blockCount) conflicts.push({ type: "UNFILLED_SUPERVISION", detail: `A schedule has ${blockCount - filled} block(s) without a supervisor.` });
+      if (need > 0 && filled < need) conflicts.push({ type: "UNFILLED_SUPERVISION", detail: `A ${sc.mode.toLowerCase()} schedule has ${need - filled} supervisor slot(s) unfilled.` });
     }
     // Duplicate standby.
     const standbys = await prisma.standbyFaculty.findMany({ where: { examId }, select: { scheduleId: true, facultyId: true } });
@@ -956,6 +1123,16 @@ export const examService = {
       externalFaculties: externalCount, standbyFaculties: standby, paperCheckingPending: paperPending,
       coordinators: coords.size, totalFaculty, published: exam.status === "PUBLISHED",
     };
+  },
+
+  // Does this faculty manage exams? Drives the faculty-portal "Exam Coordination"
+  // tab (coordinators are faculty, so they need the manager UI outside the HOD portal).
+  async myExamManagerStatus(facultyId: string, universityId: string) {
+    const fac = await prisma.faculty.findFirst({ where: { id: facultyId, universityId, deletedAt: null }, select: { year: true, isHod: true } });
+    if (!fac?.year) return { isManager: false, isCoordinator: false, isHod: false, yearLevel: null as string | null };
+    const sem = await prisma.semester.findFirst({ where: { universityId, status: "ACTIVE", yearLevel: fac.year as YearLevel } });
+    const isCoordinator = sem ? await isExamCoordinator(facultyId, sem.id) : false;
+    return { isManager: Boolean(fac.isHod) || isCoordinator, isCoordinator, isHod: Boolean(fac.isHod), yearLevel: fac.year };
   },
 
   // ── Faculty views (published duties) ──

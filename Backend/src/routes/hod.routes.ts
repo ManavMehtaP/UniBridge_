@@ -44,8 +44,18 @@ hodRouter.post("/graduate", asyncHandler(async (req, res) => res.json(await port
 hodRouter.get("/dashboard/summary", asyncHandler(async (req, res) => res.json(await portalService.dashboardSummary(scopeFrom(req), req.query.semesterId as string | undefined))));
 hodRouter.get("/dashboard/attendance-trend", asyncHandler(async (req, res) => res.json(await portalService.dashboardAttendanceTrend(scopeFrom(req), Number(req.query.months ?? 6), req.query.semesterId as string | undefined))));
 hodRouter.get("/dashboard/results-overview", asyncHandler(async (req, res) => res.json(await portalService.dashboardResultsOverview(scopeFrom(req), req.query.semesterId as string | undefined))));
-hodRouter.get("/dashboard/at-risk", asyncHandler(async (req, res) => res.json(await portalService.dashboardAtRisk(scopeFrom(req), req.query.semesterId as string | undefined))));
-hodRouter.get("/dashboard/activity-feed", asyncHandler(async (req, res) => res.json(await portalService.dashboardActivityFeed(scopeFrom(req), Number(req.query.page ?? 1), Number(req.query.limit ?? 10)))));
+hodRouter.get("/dashboard/at-risk", asyncHandler(async (req, res) => {
+  const limit = Number(req.query.limit ?? 5);
+  const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 5;
+  return res.json(await portalService.dashboardAtRisk(scopeFrom(req), req.query.semesterId as string | undefined, safeLimit));
+}));
+hodRouter.get("/dashboard/activity-feed", asyncHandler(async (req, res) => {
+  const page = Number(req.query.page ?? 1);
+  const limit = Number(req.query.limit ?? 5);
+  const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+  const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 5;
+  return res.json(await portalService.dashboardActivityFeed(scopeFrom(req), safePage, safeLimit));
+}));
 
 // ponytail: literal paths MUST come before /:param routes or Express matches
 // e.g. `/students/export` against `/students/:enrollmentNo` first.
@@ -104,9 +114,12 @@ hodRouter.delete("/attendance/coordinators/:facultyId", asyncHandler(async (req,
 hodRouter.get("/results/upload-context", asyncHandler(async (req, res) => res.json(await portalService.resultsUploadContext(scopeFrom(req), req.query.semesterId as string | undefined))));
 hodRouter.get("/results/students", asyncHandler(async (req, res) => res.json(await portalService.resultsStudents(scopeFrom(req), String(req.query.semesterId), String(req.query.batchId), String(req.query.subjectId)))));
 hodRouter.post("/results/upload", upload.single("file"), asyncHandler(async (req, res) => {
-  res.json(await portalService.resultsUpload(req.file?.buffer, req.body));
+  res.json(await portalService.resultsUpload(scopeFrom(req), req.file?.buffer, req.body));
 }));
-hodRouter.post("/results/manual", asyncHandler(async (req, res) => res.json(await portalService.resultsManual(req.body))));
+hodRouter.post("/results/upload-phase", upload.single("file"), asyncHandler(async (req, res) => {
+  res.json(await portalService.resultsUploadPhase(scopeFrom(req), req.file?.buffer, req.body));
+}));
+hodRouter.post("/results/manual", asyncHandler(async (req, res) => res.json(await portalService.resultsManual(scopeFrom(req), req.body))));
 hodRouter.get("/results/preview", asyncHandler(async (req, res) => res.json(await portalService.resultsPreview(String(req.query.phaseId), String(req.query.subjectId), String(req.query.batchId)))));
 hodRouter.post("/results/publish", asyncHandler(async (req, res) => res.json(await portalService.resultsPublish(String(req.body.phaseId), String(req.body.subjectId), String(req.body.batchId)))));
 hodRouter.get("/results/upload-history", asyncHandler(async (req, res) => res.json(await portalService.resultsUploadHistory(scopeFrom(req), Number(req.query.page ?? 1), Number(req.query.limit ?? 10)))));

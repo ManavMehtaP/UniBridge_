@@ -627,9 +627,12 @@ model Result {
   enrollmentId  String    @db.Uuid // FK to StudentEnrollment
   phaseId       String    @db.Uuid // T1 / T2 / T3 / T4
   subjectId     String    @db.Uuid
-  marksObtained Float
+  marksObtained Float // total = offlineMarks + onlineMarks for split (coding) subjects
   maxMarks      Float     @default(100)
-  grade         String? // "A+", "B", "F"
+  offlineMarks  Float? // written-paper component (coding subjects); null for single-paper subjects
+  onlineMarks   Float? // coding-paper component (coding subjects)
+  grade         String? // "A+", "B", "F", "AB" (absent)
+  isAbsent      Boolean   @default(false) // student did not appear for the exam
   isPublished   Boolean   @default(false)
   publishedAt   DateTime?
   uploadedById  String    @db.Uuid // Faculty (HOD) id
@@ -1116,6 +1119,14 @@ model ProxyLecture {
 // that HOD's own students, but every same-year HOD can view/edit them.
 // ─────────────────────────────────────────────────────────────
 
+// Coding subjects run TWO papers on the same day: an OFFLINE written paper and an
+// ONLINE coding paper (smaller lab blocks, 2 supervisors each). Non-coding subjects
+// are OFFLINE only. Marks of the two papers add up to the subject total.
+enum ExamMode {
+  OFFLINE
+  ONLINE
+}
+
 model Exam {
   id             String    @id @default(uuid()) @db.Uuid
   universityId   String    @db.Uuid
@@ -1151,6 +1162,10 @@ model ExamSchedule {
   subjectId       String   @db.Uuid
   branch          String? // "IT" — optional filter
   semesterNumber  Int
+  mode            ExamMode @default(OFFLINE) // OFFLINE written / ONLINE coding component
+  componentMax    Int? // marks for THIS paper (offline 16/35, online 9/15); null → full 25/50
+  supervisorsPerBlock Int  @default(1) // ONLINE labs use 2 invigilators per block
+  blockSize       Int? // override the exam's block size (ONLINE lab blocks are smaller)
   date            DateTime @db.Date
   startTime       String // "14:00"
   endTime         String // "15:15"
@@ -1173,8 +1188,9 @@ model ExamSchedule {
 model ExamBlock {
   id          String   @id @default(uuid()) @db.Uuid
   examId      String   @db.Uuid
+  mode        ExamMode @default(OFFLINE) // OFFLINE and ONLINE have separate seating sets
   ownerHodId  String   @db.Uuid // the HOD whose students fill this block
-  blockNumber Int // independent sequence per HOD
+  blockNumber Int // independent sequence per HOD, per mode
   room        String?
   isLocked    Boolean  @default(false)
   createdAt   DateTime @default(now())
@@ -1184,7 +1200,7 @@ model ExamBlock {
   students    BlockStudent[]
   supervisors SupervisorAllocation[]
 
-  @@unique([examId, ownerHodId, blockNumber])
+  @@unique([examId, mode, ownerHodId, blockNumber])
   @@index([examId])
   @@map("exam_blocks")
 }
@@ -1212,13 +1228,14 @@ model SupervisorAllocation {
   blockId           String   @db.Uuid
   facultyId         String?  @db.Uuid
   externalFacultyId String?  @db.Uuid
+  slot              Int      @default(1) // ONLINE blocks have 2 invigilators (slots 1 & 2)
   source            String   @default("OWN_YEAR") // OWN_YEAR | OTHER_YEAR | EXTERNAL
   createdAt         DateTime @default(now())
 
   schedule ExamSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
   block    ExamBlock    @relation(fields: [blockId], references: [id], onDelete: Cascade)
 
-  @@unique([scheduleId, blockId])
+  @@unique([scheduleId, blockId, slot])
   @@index([examId, facultyId])
   @@index([facultyId])
   @@map("supervisor_allocations")

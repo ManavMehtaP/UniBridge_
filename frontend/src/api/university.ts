@@ -1,3 +1,4 @@
+import type { AxiosRequestConfig } from 'axios'
 import { api } from './client'
 import type { ArchiveSnapshot, ArchiveTree } from '@/types/archive'
 
@@ -74,7 +75,7 @@ export const universityApi = {
   createSubject: (body: Record<string, unknown>) => api.post('/admin/subjects', body).then((r) => r.data),
   updateSubject: (id: string, body: Record<string, unknown>) => api.put(`/admin/subjects/${id}`, body).then((r) => r.data),
   deleteSubject: (id: string) => api.delete(`/admin/subjects/${id}`).then((r) => r.data),
-  uploadSubjectsCsv: (form: FormData) => api.post('/admin/subjects/csv', form).then((r) => r.data),
+  uploadSubjectsCsv: (form: FormData, config?: AxiosRequestConfig) => api.post('/admin/subjects/csv', form, config).then((r) => r.data),
   downloadSubjectsTemplate: () => downloadBlob('/admin/subjects/csv/template', 'subjects-template.csv'),
 
   years: () => api.get<{ data: UniYear[] }>('/admin/years').then((r) => r.data),
@@ -96,7 +97,7 @@ export const universityApi = {
   updateFaculty: (id: string, body: Record<string, unknown>) => api.put(`/admin/faculty/${id}`, body).then((r) => r.data),
   deleteFaculty: (id: string) => api.delete(`/admin/faculty/${id}`).then((r) => r.data),
   promoteToHod: (id: string) => api.post(`/admin/faculty/${id}/promote-to-hod`).then((r) => r.data),
-  uploadFacultyCsv: (form: FormData) => api.post('/admin/faculty/csv', form).then((r) => r.data),
+  uploadFacultyCsv: (form: FormData, config?: AxiosRequestConfig) => api.post('/admin/faculty/csv', form, config).then((r) => r.data),
   downloadFacultyTemplate: () => downloadBlob('/admin/faculty/csv/template', 'faculty-template.csv'),
 
   students: (params: { search?: string; branch?: string; page?: number; limit?: number }) => api.get<Paged<UniStudentRow>>('/admin/students', { params }).then((r) => r.data),

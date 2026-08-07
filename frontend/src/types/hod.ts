@@ -30,7 +30,8 @@ export interface AttendanceTrend {
   data?: number[]
 }
 export interface ResultsOverview {
-  phases: { phase: string; avgMarksPct: number | null; status: string }[]
+  // avgMarks is in marks (out of maxMarks, i.e. 25 or 50) — not a percentage.
+  phases: { phase: string; avgMarks: number | null; maxMarks: number; conducted: boolean }[]
 }
 export interface AtRiskRow {
   enrollmentNo: string
@@ -201,10 +202,10 @@ export interface AssignmentRow {
 // ── Analytics ──────────────────────────────────────────
 export interface AnalyticsKpi {
   avgAttendance: { value: number; deltaLabel: string }
-  avgMarksLatestPhase: { value: number; phaseLabel: string; deltaLabel: string }
+  latestTest: { phaseLabel: string; avgMarks: number; maxMarks: number; rows: number }
+  testsConducted: { done: number; total: number }
   atRiskCount: { value: number; deltaLabel: string }
-  passRateLatestPhase: { value: number; phaseLabel: string; deltaLabel: string }
-  topScorer: { name: string; avgPct: number }
+  topScorer: { name: string; marks: number; maxMarks: number }
 }
 
 // ── Calendar ───────────────────────────────────────────

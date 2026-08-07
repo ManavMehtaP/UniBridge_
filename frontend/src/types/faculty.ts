@@ -181,9 +181,10 @@ export interface ProxyLectureRow {
   slotId: string; batchCode: string; subjectCode: string; slotStart: string; slotEnd: string
   originalFacultyId: string | null; originalFaculty: string
   proxyFacultyId: string | null; proxyFaculty: string | null
+  // proxy candidates for THIS lecture's batch only (~4-5 faculty who teach it)
+  facultyOptions: ProxyFacultyOption[]
 }
 export interface ProxyLectures {
   semesterId: string; date: string
   lectures: ProxyLectureRow[]
-  facultyOptions: ProxyFacultyOption[]
 }

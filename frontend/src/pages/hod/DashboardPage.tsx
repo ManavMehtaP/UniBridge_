@@ -37,7 +37,7 @@ export default function DashboardPage() {
   const trend = useQuery({ queryKey: ['hod', 'dashboard', 'trend', semesterId], queryFn: () => hodApi.dashboard.attendanceTrend(6, semesterId) })
   const results = useQuery({ queryKey: ['hod', 'dashboard', 'results', semesterId], queryFn: () => hodApi.dashboard.resultsOverview(semesterId) })
   const atRisk = useQuery({ queryKey: ['hod', 'dashboard', 'at-risk', semesterId], queryFn: () => hodApi.dashboard.atRisk(5, semesterId) })
-  const feed = useQuery({ queryKey: ['hod', 'dashboard', 'feed'], queryFn: () => hodApi.dashboard.activityFeed(1, 8) })
+  const feed = useQuery({ queryKey: ['hod', 'dashboard', 'feed', semesterId], queryFn: () => hodApi.dashboard.activityFeed(1, 5) })
 
   const firstName = user?.name?.split(' ').slice(0, 2).join(' ') ?? 'HOD'
   const s = summary.data
@@ -111,23 +111,23 @@ export default function DashboardPage() {
           </CardBody>
         </Card>
         <Card>
-          <CardHeader title="Results Overview" subtitle="Avg marks by phase" />
+          <CardHeader title="Results Overview" subtitle="Avg marks per test" />
           <CardBody className="space-y-3">
             {results.data?.phases.map((p, i) => (
               <div key={p.phase} className="flex items-center gap-3">
                 <span className="w-6 text-xs font-bold text-text-secondary">{p.phase}</span>
                 <div className="h-5 flex-1 overflow-hidden rounded bg-bg">
-                  {p.avgMarksPct != null ? (
+                  {p.conducted && p.avgMarks != null ? (
                     <div
                       className="flex h-full items-center rounded pl-2 text-[11px] font-semibold text-white transition-all"
-                      style={{ width: `${p.avgMarksPct}%`, background: PHASE_COLORS[i % 4] }}
+                      style={{ width: `${Math.max(6, (p.avgMarks / p.maxMarks) * 100)}%`, background: PHASE_COLORS[i % 4] }}
                     >
-                      {p.avgMarksPct}%
+                      {p.avgMarks}/{p.maxMarks}
                     </div>
                   ) : null}
                 </div>
-                <span className="w-14 text-right text-xs text-text-muted">
-                  {p.avgMarksPct == null ? 'Pending' : ''}
+                <span className="w-16 text-right text-xs text-text-muted">
+                  {p.conducted ? '' : 'Pending'}
                 </span>
               </div>
             ))}

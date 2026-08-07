@@ -5,12 +5,14 @@ import { Link } from 'react-router-dom'
 import toast from 'react-hot-toast'
 import { ClipboardList, Pencil, Search, ShieldCheck, Upload } from 'lucide-react'
 import { hodApi } from '@/api/hod'
+import { saveBlob } from '@/lib/download'
 import { errorMessage } from '@/api/client'
 import { useHodScope } from '@/hooks/hod/useHodScope'
 import { useHistoryStore } from '@/stores/historyStore'
 import { HistoryBanner } from '@/components/hod/HistoryBanner'
 import { cn } from '@/lib/utils'
 import { PageShell } from '@/components/shared/PageShell'
+import { CsvUploadModal } from '@/components/shared/CsvUploadModal'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -58,6 +60,7 @@ export default function ResultsPage() {
   const [batchId, setBatchId] = useState('')
   const [editOf, setEditOf] = useState<PreviewRow | null>(null)
   const [search, setSearch] = useState('')
+  const [uploadOpen, setUploadOpen] = useState(false)
 
   const ctx = useQuery({
     queryKey: ['hod', 'results', 'ctx', semesterId],
@@ -94,9 +97,12 @@ export default function ResultsPage() {
       title="Results"
       subtitle="Marks are entered by exam checkers and pushed live by your coordinators — browse and correct here"
       action={!readOnly ? (
-        <Link to="/hod/exam-management">
-          <Button variant="outline" leftIcon={<ShieldCheck size={15} />}>Examination</Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Button leftIcon={<Upload size={15} />} onClick={() => setUploadOpen(true)}>Upload / Update Results</Button>
+          <Link to="/hod/exam-management">
+            <Button variant="outline" leftIcon={<ShieldCheck size={15} />}>Examination</Button>
+          </Link>
+        </div>
       ) : undefined}
     >
       <HistoryBanner />
@@ -219,6 +225,15 @@ export default function ResultsPage() {
       </div>
 
       <EditMarksModal row={editOf} onClose={() => setEditOf(null)} />
+      {semesterId && ctx.data && (
+        <PhaseUploadModal
+          open={uploadOpen}
+          onClose={() => setUploadOpen(false)}
+          semesterId={semesterId}
+          ctx={ctx.data}
+          defaultPhaseId={phaseId}
+        />
+      )}
     </PageShell>
   )
 }
@@ -266,6 +281,55 @@ function EditMarksModal({ row, onClose }: { row: PreviewRow | null; onClose: () 
         </div>
       </div>
     </Modal>
+  )
+}
+
+// Upload OR update marks for one test (phase) across every subject at once.
+// Backend upserts by enrollment_no and infers each student's batch from it.
+function PhaseUploadModal({ open, onClose, semesterId, ctx, defaultPhaseId }: {
+  open: boolean; onClose: () => void; semesterId: string; ctx: UploadContext; defaultPhaseId: string
+}) {
+  const qc = useQueryClient()
+  const [uPhase, setUPhase] = useState(defaultPhaseId)
+  const codes = ctx.subjects.map((s) => s.code)
+  const phaseNumber = ctx.phases.find((p) => p.id === uPhase)?.number
+  const maxMarks = phaseNumber === 4 ? 50 : 25 // T-1..T-3 out of 25, T-4 out of 50
+
+  async function downloadTemplate() {
+    try {
+      // empty batchId → whole-semester roster; subjectId unused for the template
+      const { data } = await hodApi.results.students(semesterId, '', '') as { data: { enrollmentNo: string }[] }
+      const header = ['enrollment_no', ...codes].join(',')
+      const lines = data.map((s) => [s.enrollmentNo, ...codes.map(() => '')].join(','))
+      const phaseLabel = ctx.phases.find((p) => p.id === uPhase)?.label ?? 'phase'
+      saveBlob(new Blob([[header, ...lines].join('\n')], { type: 'text/csv' }), `results-${phaseLabel}.csv`)
+    } catch (e) {
+      toast.error(errorMessage(e, 'Could not build template'))
+    }
+  }
+
+  return (
+    <CsvUploadModal
+      open={open}
+      onClose={onClose}
+      title="Upload / Update Results"
+      canSubmit={!!uPhase}
+      requiredColumns={['enrollment_no', ...codes]}
+      onDownloadTemplate={downloadTemplate}
+      buildForm={(form) => form.append('phaseId', uPhase)}
+      onUpload={async (form, config) => {
+        const res = await hodApi.results.uploadPhase(form, config)
+        qc.invalidateQueries({ queryKey: ['hod', 'results'] })
+        return res
+      }}
+      extraFields={
+        <Labeled label="Test / Phase">
+          <Select value={uPhase} onChange={(e) => setUPhase(e.target.value)} placeholder="Select test"
+            options={ctx.phases.map((p) => ({ value: p.id, label: p.label }))} />
+          {uPhase && <p className="mt-1.5 text-[11px] text-text-muted">Marks are out of {maxMarks} for this test.</p>}
+        </Labeled>
+      }
+    />
   )
 }
 

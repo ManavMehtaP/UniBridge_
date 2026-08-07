@@ -1,11 +1,12 @@
 import { Outlet } from 'react-router-dom'
 import { Suspense, useEffect, useMemo, useState } from 'react'
-import { Loader2, FileBarChart } from 'lucide-react'
+import { Loader2, FileBarChart, ShieldCheck } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { portalOf, useUser } from '@/stores/authStore'
 import { useUiStore } from '@/stores/uiStore'
 import { hodApi } from '@/api/hod'
+import { examApi } from '@/api/exam'
 import { facultyApi } from '@/api/faculty'
 import { Sidebar } from './Sidebar'
 import { Topbar } from './Topbar'
@@ -29,12 +30,26 @@ export default function AppShell() {
     queryFn: () => facultyApi.attendanceCoordinatorStatus(),
     enabled: role === 'FACULTY',
   })
+  // Exam coordinators (faculty) get the full exam-management UI outside the HOD portal.
+  const examMgr = useQuery({
+    queryKey: ['faculty', 'exam', 'manager-status'],
+    queryFn: () => examApi.managerStatus(),
+    enabled: role === 'FACULTY',
+  })
   const facultySections = useMemo(() => {
-    if (!coordStatus.data?.isCoordinator) return facultyNavItems
-    return facultyNavItems.map((s) => s.section === 'Teaching'
-      ? { ...s, items: [...s.items, { id: 'attendance-report', label: 'Attendance Report', path: '/faculty/attendance-report', icon: FileBarChart }] }
-      : s)
-  }, [coordStatus.data?.isCoordinator])
+    let sections = facultyNavItems
+    if (coordStatus.data?.isCoordinator) {
+      sections = sections.map((s) => s.section === 'Teaching'
+        ? { ...s, items: [...s.items, { id: 'attendance-report', label: 'Attendance Report', path: '/faculty/attendance-report', icon: FileBarChart }] }
+        : s)
+    }
+    if (examMgr.data?.isCoordinator) {
+      sections = sections.map((s) => s.section === 'Data'
+        ? { ...s, items: [{ id: 'exam-coordinator', label: 'Exam Coordination', path: '/faculty/exam-coordinator', icon: ShieldCheck }, ...s.items] }
+        : s)
+    }
+    return sections
+  }, [coordStatus.data?.isCoordinator, examMgr.data?.isCoordinator])
 
   const sections =
     role === 'UNIVERSITY' ? universityNavItems : role === 'STUDENT' ? studentNavItems : role === 'HOD' ? hodNavItems : facultySections

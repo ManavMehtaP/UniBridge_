@@ -5,13 +5,17 @@ export interface ExamRow {
   id: string; name: string; status: string; yearLevel: string; blockSize: number; bufferMinutes: number; excludeHods: boolean
   scheduleCount: number; blockCount: number; publishedAt: string | null
 }
+export type ExamMode = 'OFFLINE' | 'ONLINE'
 export interface ExamSchedule {
   id: string; subjectId: string; subjectCode: string; subjectName: string; date: string
   startTime: string; endTime: string; durationMinutes: number; studentCount: number; branch: string | null
+  mode: ExamMode; componentMax: number | null; supervisorsPerBlock: number; blockSize: number | null
 }
+export interface ExamPhaseWindow { label: string; startDate: string; endDate: string; examDate: string | null }
 export interface ExamDetail {
   exam: { id: string; name: string; status: string; yearLevel: string; blockSize: number; bufferMinutes: number; excludeHods: boolean }
   blockCount: number; externalCount: number; schedules: ExamSchedule[]
+  phase: ExamPhaseWindow | null
 }
 export interface ExamBlock {
   id: string; ownerHodId: string; ownerHodName: string; blockNumber: number; room: string | null; isLocked: boolean
@@ -20,13 +24,18 @@ export interface ExamBlock {
 }
 export interface FacultyOpt { id: string; name: string; employeeId: string }
 export interface AvailabilityRow { facultyId: string; name: string; employeeId: string; year: string | null; isHod: boolean; isOwnYear: boolean; free: boolean; reason: string | null }
-export interface SupervisionRow { id: string; blockNumber: number; room: string | null; source: string; supervisor: string; facultyId: string | null; externalFacultyId: string | null }
+export interface SupervisionRow { id: string; blockNumber: number; slot: number; room: string | null; source: string; supervisor: string; facultyId: string | null; externalFacultyId: string | null }
 export interface PaperCheckRow { id: string; facultyId: string; faculty: string; range: string; blockCount: number; totalStudents: number; markedCount: number; status: 'Pending' | 'In Progress' | 'Complete' | 'Published' }
 export interface PaperCheckFacultyRow { id: string; name: string; employeeId: string; year: string | null; isSubjectFaculty: boolean; isOwnYear: boolean }
 export interface MyPaperCheckRow { id: string; exam: string; subjectCode: string; date: string; range: string; totalStudents: number; markedCount: number; status: 'Pending' | 'In Progress' | 'Complete' | 'Published' }
 export interface PaperCheckStudents {
-  allocation: { id: string; examName: string; subjectCode: string; subjectName: string; range: string; entryMax: number; phaseNumber: number; isPublished: boolean }
-  students: { enrollmentId: string; enrollmentNo: string; rollNo: string; name: string; blockNumber: number; enteredMarks: number | null; grade: string | null; isPublished: boolean }[]
+  allocation: {
+    id: string; examName: string; subjectCode: string; subjectName: string; range: string
+    entryMax: number; totalMax: number; phaseNumber: number; isPublished: boolean
+    isSplit: boolean; editableComponent: 'FULL' | 'OFFLINE' | 'ONLINE'; componentMax: number
+    offlineMax: number; onlineMax: number; passMark: number
+  }
+  students: { enrollmentId: string; enrollmentNo: string; rollNo: string; name: string; blockNumber: number; enteredMarks: number | null; offlineMarks: number | null; onlineMarks: number | null; total: number | null; grade: string | null; isAbsent: boolean; isPublished: boolean }[]
 }
 export interface StandbyRow { slot: number; facultyId: string; isActive: boolean; faculty: string }
 export interface ExternalFacultyRow { id: string; name: string; mobile: string | null; college: string | null; experience: string | null; remarks: string | null; availability: string | null }
@@ -53,8 +62,8 @@ export const examApi = {
   publish: (examId: string) => api.post(`/exams/${examId}/publish`).then((r) => r.data),
   unpublish: (examId: string) => api.post(`/exams/${examId}/unpublish`).then((r) => r.data),
 
-  yearSubjects: () => api.get<FacultyOpt[] | { id: string; code: string; name: string }[]>('/exams/meta/subjects').then((r) => r.data as { id: string; code: string; name: string }[]),
-  addSchedule: (examId: string, body: { subjectId: string; date: string; startTime: string; endTime: string; branch?: string }) => api.post(`/exams/${examId}/schedules`, body).then((r) => r.data),
+  yearSubjects: (examId?: string) => api.get<{ id: string; code: string; name: string; examDate: string | null }[]>('/exams/meta/subjects', { params: examId ? { examId } : {} }).then((r) => r.data),
+  addSchedule: (examId: string, body: { subjectId: string; date: string; startTime: string; endTime: string; branch?: string; coding?: boolean; online?: { startTime?: string; endTime?: string; blockSize?: number; supervisorsPerBlock?: number } }) => api.post(`/exams/${examId}/schedules`, body).then((r) => r.data),
   updateSchedule: (scheduleId: string, body: Record<string, unknown>) => api.patch(`/exams/schedules/${scheduleId}`, body).then((r) => r.data),
   deleteSchedule: (scheduleId: string) => api.delete(`/exams/schedules/${scheduleId}`).then((r) => r.data),
 
@@ -76,11 +85,13 @@ export const examApi = {
   generatePaperChecking: (scheduleId: string, facultyIds?: string[]) => api.post(`/exams/schedules/${scheduleId}/paper-checking/generate`, { facultyIds }).then((r) => r.data),
   paperChecking: (scheduleId: string) => api.get<PaperCheckRow[]>(`/exams/schedules/${scheduleId}/paper-checking`).then((r) => r.data),
   paperCheckingFaculty: (scheduleId: string) => api.get<{ examYear: string; subjectFacultyIds: string[]; faculties: PaperCheckFacultyRow[] }>(`/exams/schedules/${scheduleId}/paper-checking/faculty`).then((r) => r.data),
+  editPaperChecking: (allocationId: string, facultyId: string) => api.patch(`/exams/paper-checking/${allocationId}`, { facultyId }).then((r) => r.data),
   publishResults: (examId: string) => api.post<{ published: boolean; students: number }>(`/exams/${examId}/publish-results`).then((r) => r.data),
+  managerStatus: () => api.get<{ isManager: boolean; isCoordinator: boolean; isHod: boolean; yearLevel: string | null }>('/exams/me/manager').then((r) => r.data),
 
   myPaperChecking: () => api.get<MyPaperCheckRow[]>('/exams/me/paper-checking').then((r) => r.data),
   paperCheckingStudents: (allocationId: string) => api.get<PaperCheckStudents>(`/exams/paper-checking/${allocationId}/students`).then((r) => r.data),
-  savePaperCheckingMarks: (allocationId: string, marks: { enrollmentId: string; marks: number | null }[]) => api.post<{ saved: number }>(`/exams/paper-checking/${allocationId}/marks`, { marks }).then((r) => r.data),
+  savePaperCheckingMarks: (allocationId: string, marks: { enrollmentId: string; marks: number | null; absent?: boolean }[]) => api.post<{ saved: number }>(`/exams/paper-checking/${allocationId}/marks`, { marks }).then((r) => r.data),
   generateStandby: (scheduleId: string) => api.post(`/exams/schedules/${scheduleId}/standby/generate`).then((r) => r.data),
   standby: (scheduleId: string) => api.get<StandbyRow[]>(`/exams/schedules/${scheduleId}/standby`).then((r) => r.data),
   setStandby: (scheduleId: string, slot: number, facultyId: string) => api.patch(`/exams/schedules/${scheduleId}/standby`, { slot, facultyId }).then((r) => r.data),

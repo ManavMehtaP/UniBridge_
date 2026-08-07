@@ -3,7 +3,7 @@ import { api } from '@/api/client'
 export type ExportFormat = 'csv' | 'pdf'
 type Params = Record<string, string | number | boolean | undefined>
 
-function saveBlob(blob: Blob, filename: string) {
+export function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

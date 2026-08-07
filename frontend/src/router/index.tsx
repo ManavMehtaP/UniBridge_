@@ -110,6 +110,7 @@ export const router = createBrowserRouter([
           { path: '/faculty/attendance', element: <FacAttendance /> },
           { path: '/faculty/attendance-report', element: <FacAttendanceReport /> },
           { path: '/faculty/exam-duties', element: <FacExamDuties /> },
+          { path: '/faculty/exam-coordinator', element: <HodExamManagement coordinator /> },
           { path: '/faculty/notes', element: <FacNotes /> },
           { path: '/faculty/quizzes', element: <FacQuizzes /> },
           { path: '/faculty/announcements', element: <FacAnnouncements /> },

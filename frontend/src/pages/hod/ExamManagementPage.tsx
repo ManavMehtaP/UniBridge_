@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { AlertTriangle, CheckCircle2, Lock, LockOpen, Plus, RefreshCw, Rocket, Send, Trash2, Undo2, UserCheck, Users, Wand2, X } from 'lucide-react'
-import { examApi, type ExamRow, type ExamSchedule, type PaperCheckFacultyRow } from '@/api/exam'
+import { examApi, type ExamRow, type ExamSchedule, type ExamPhaseWindow, type PaperCheckFacultyRow } from '@/api/exam'
 import { api, errorMessage } from '@/api/client'
 import { cn } from '@/lib/utils'
 import { PageShell } from '@/components/shared/PageShell'
@@ -30,7 +30,7 @@ const TABS = [
   { key: 'conflicts', label: 'Conflicts & Publish' },
 ]
 
-export default function ExamManagementPage() {
+export default function ExamManagementPage({ coordinator = false }: { coordinator?: boolean } = {}) {
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: ['exam'] })
   const [examId, setExamId] = useState('')
@@ -70,7 +70,7 @@ export default function ExamManagementPage() {
   const published = detail.data?.exam.status === 'PUBLISHED'
 
   return (
-    <PageShell title="Examination System" subtitle="Year-level exam blocks, supervision & paper-checking allocation"
+    <PageShell title={coordinator ? 'Exam Coordination' : 'Examination System'} subtitle={coordinator ? 'Manage supervision, standby, blocks & paper checking — reassign live for emergencies' : 'Year-level exam blocks, supervision & paper-checking allocation'}
       action={
         <div className="flex flex-wrap items-center gap-2">
           <Select className="w-56" value={examId} onChange={(e) => setExamId(e.target.value)}
@@ -93,7 +93,7 @@ export default function ExamManagementPage() {
             </div>
           )}
 
-          <CoordinatorsSection />
+          {!coordinator && <CoordinatorsSection />}
 
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
@@ -107,13 +107,13 @@ export default function ExamManagementPage() {
                 ? <Button variant="outline" size="sm" leftIcon={<Undo2 size={14} />} loading={unpublish.isPending} onClick={() => unpublish.mutate()}>Unpublish</Button>
                 : <Button size="sm" leftIcon={<Send size={14} />} loading={publish.isPending} onClick={() => publish.mutate()}>Publish Duties</Button>}
               <Button variant="outline" size="sm" leftIcon={<Rocket size={14} />} loading={publishResults.isPending} onClick={() => publishResults.mutate()} title="Push checked marks live to students">Publish Results</Button>
-              <Button variant="danger" size="sm" leftIcon={<Trash2 size={14} />} onClick={() => setDeleteExamOpen(true)}>Delete Exam</Button>
+              {!coordinator && <Button variant="danger" size="sm" leftIcon={<Trash2 size={14} />} onClick={() => setDeleteExamOpen(true)}>Delete Exam</Button>}
             </div>
           </div>
 
           <Tabs className="mb-4" value={tab} onChange={setTab} tabs={TABS} />
 
-          {tab === 'calendar' && <CalendarTab examId={examId} schedules={schedules} published={published} onChange={invalidate} />}
+          {tab === 'calendar' && <CalendarTab examId={examId} schedules={schedules} phase={detail.data?.phase ?? null} published={published} onChange={invalidate} />}
           {tab === 'blocks' && <BlocksTab examId={examId} />}
           {tab === 'external' && <ExternalTab examId={examId} />}
           {(tab === 'supervision' || tab === 'paper' || tab === 'standby') && (
@@ -152,11 +152,32 @@ export default function ExamManagementPage() {
 }
 
 // ── Calendar ──
-function CalendarTab({ examId, schedules, published, onChange }: { examId: string; schedules: ExamSchedule[]; published: boolean; onChange: () => void }) {
-  const subjects = useQuery({ queryKey: ['exam', 'subjects'], queryFn: examApi.yearSubjects })
-  const [form, setForm] = useState({ subjectId: '', date: '', startTime: '14:00', endTime: '15:15' })
-  const add = useMutation({ mutationFn: () => examApi.addSchedule(examId, form), onSuccess: () => { toast.success('Exam day added'); setForm({ ...form, subjectId: '' }); onChange() }, onError: (e) => toast.error(errorMessage(e)) })
+function addDaysIso(iso: string, n: number) { const d = new Date(`${iso}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10) }
+function clampIso(iso: string, min: string, max: string) { return iso < min ? min : iso > max ? max : iso }
+
+function CalendarTab({ examId, schedules, phase, published, onChange }: { examId: string; schedules: ExamSchedule[]; phase: ExamPhaseWindow | null; published: boolean; onChange: () => void }) {
+  const subjects = useQuery({ queryKey: ['exam', 'subjects', examId], queryFn: () => examApi.yearSubjects(examId) })
+  const [form, setForm] = useState({ subjectId: '', date: '', startTime: '14:00', endTime: '16:00', coding: false, onStart: '16:30', onEnd: '17:45', onBlockSize: 12 })
+  const add = useMutation({
+    mutationFn: () => examApi.addSchedule(examId, {
+      subjectId: form.subjectId, date: form.date, startTime: form.startTime, endTime: form.endTime,
+      ...(form.coding ? { coding: true, online: { startTime: form.onStart, endTime: form.onEnd, blockSize: Number(form.onBlockSize), supervisorsPerBlock: 2 } } : {}),
+    }),
+    onSuccess: () => { toast.success(form.coding ? 'Offline + online papers added' : 'Exam day added'); setForm((f) => ({ ...f, subjectId: '', date: '', coding: false })); onChange() },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
   const del = useMutation({ mutationFn: (id: string) => examApi.deleteSchedule(id), onSuccess: () => { toast.success('Removed'); onChange() }, onError: (e) => toast.error(errorMessage(e)) })
+  // #2 Subjects already on the exam calendar drop out of the picker.
+  const scheduledIds = new Set(schedules.map((s) => s.subjectId))
+  const available = (subjects.data ?? []).filter((s) => !scheduledIds.has(s.id))
+  const selected = (subjects.data ?? []).find((s) => s.id === form.subjectId)
+  // #1 Date is auto-fetched from the Academic Calendar. Prefer the SELECTED subject's own
+  // exam date (matched from the calendar); fall back to the next open day in the phase window.
+  const fallbackDate = phase ? clampIso(addDaysIso(phase.startDate, schedules.length), phase.startDate, phase.endDate) : ''
+  function pickSubject(subjectId: string) {
+    const subj = (subjects.data ?? []).find((s) => s.id === subjectId)
+    setForm((f) => ({ ...f, subjectId, date: subj?.examDate ?? fallbackDate }))
+  }
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Card className="lg:col-span-2 overflow-hidden">
@@ -167,7 +188,16 @@ function CalendarTab({ examId, schedules, published, onChange }: { examId: strin
             <tbody>
               {schedules.map((s) => (
                 <Tr key={s.id}>
-                  <Td><div className="font-medium">{s.subjectCode}</div><div className="text-[11px] text-text-muted">{s.subjectName}</div></Td>
+                  <Td>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{s.subjectCode}</span>
+                      {s.mode === 'ONLINE'
+                        ? <Badge tone="purple">Online {s.componentMax != null ? `/${s.componentMax}` : ''}</Badge>
+                        : s.componentMax != null ? <Badge tone="neutral">Offline /{s.componentMax}</Badge> : null}
+                      {s.supervisorsPerBlock > 1 && <span className="text-[10px] text-text-muted">{s.supervisorsPerBlock} inv/block</span>}
+                    </div>
+                    <div className="text-[11px] text-text-muted">{s.subjectName}</div>
+                  </Td>
                   <Td>{fmtDate(s.date)}</Td>
                   <Td className="tabular-nums">{s.startTime}–{s.endTime}</Td>
                   <Td className="tabular-nums">{s.studentCount}</Td>
@@ -182,15 +212,38 @@ function CalendarTab({ examId, schedules, published, onChange }: { examId: strin
         <CardHeader title="Add exam day" />
         <CardBody className="space-y-3">
           <div><label className="mb-1 block text-xs font-medium text-text-muted">Subject</label>
-            <Select value={form.subjectId} onChange={(e) => setForm({ ...form, subjectId: e.target.value })} placeholder="Choose subject"
-              options={(subjects.data ?? []).map((s) => ({ value: s.id, label: `${s.code} — ${s.name}` }))} /></div>
-          <Input label="Date" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+            <Select value={form.subjectId} onChange={(e) => pickSubject(e.target.value)}
+              placeholder={available.length ? 'Choose subject' : 'All subjects scheduled'}
+              options={available.map((s) => ({ value: s.id, label: `${s.code} — ${s.name}${s.examDate ? ` · ${fmtDate(s.examDate)}` : ''}` }))} /></div>
+          <Input label="Date" type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })}
+            min={phase?.startDate} max={phase?.endDate} />
+          {!phase
+            ? <p className="-mt-1 text-[11px] text-warning">No phase linked — link this exam to a T-phase in the calendar to auto-fill dates.</p>
+            : selected?.examDate
+            ? <p className="-mt-1 text-[11px] text-success">From Academic Calendar — {selected.code} exam on {fmtDate(selected.examDate)}</p>
+            : selected
+            ? <p className="-mt-1 text-[11px] text-warning">{selected.code} has no exam entry in the calendar — using next open day in {phase.label}.</p>
+            : <p className="-mt-1 text-[11px] text-text-muted">Pick a subject — its date is fetched from the Academic Calendar ({phase.label}: {fmtDate(phase.startDate)} – {fmtDate(phase.endDate)}).</p>}
           <div className="grid grid-cols-2 gap-2">
-            <Input label="Start" type="time" value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} />
-            <Input label="End" type="time" value={form.endTime} onChange={(e) => setForm({ ...form, endTime: e.target.value })} />
+            <Input label={form.coding ? 'Offline start' : 'Start'} type="time" value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} />
+            <Input label={form.coding ? 'Offline end' : 'End'} type="time" value={form.endTime} onChange={(e) => setForm({ ...form, endTime: e.target.value })} />
           </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.coding} onChange={(e) => setForm({ ...form, coding: e.target.checked })} className="h-4 w-4 accent-primary" />
+            Coding subject — add an <b>online</b> paper too
+          </label>
+          {form.coding && (
+            <div className="space-y-2 rounded-sm border border-border bg-surface-2 p-2.5">
+              <p className="text-[11px] text-text-muted">Marks split automatically: {phase?.label === 'T4' ? 'offline 35 + online 15 = 50' : 'offline 16 + online 9 = 25'}. Online uses smaller lab blocks with 2 invigilators each.</p>
+              <div className="grid grid-cols-2 gap-2">
+                <Input label="Online start" type="time" value={form.onStart} onChange={(e) => setForm({ ...form, onStart: e.target.value })} />
+                <Input label="Online end" type="time" value={form.onEnd} onChange={(e) => setForm({ ...form, onEnd: e.target.value })} />
+              </div>
+              <Input label="Online block size (lab seats)" type="number" min={4} max={40} value={String(form.onBlockSize)} onChange={(e) => setForm({ ...form, onBlockSize: Number(e.target.value) })} />
+            </div>
+          )}
           <Button className="w-full" leftIcon={<Plus size={15} />} loading={add.isPending} disabled={published || !form.subjectId || !form.date}
-            onClick={() => add.mutate()}>Add to calendar</Button>
+            onClick={() => add.mutate()}>{form.coding ? 'Add offline + online' : 'Add to calendar'}</Button>
         </CardBody>
       </Card>
     </div>
@@ -286,7 +339,8 @@ function SupervisionTab({ scheduleId }: { scheduleId: string }) {
   const qc = useQueryClient()
   const [pick, setPick] = useState(false)
   const list = useQuery({ queryKey: ['exam', 'supervision', scheduleId], queryFn: () => examApi.supervision(scheduleId) })
-  const avail = useQuery({ queryKey: ['exam', 'availability', scheduleId], queryFn: () => examApi.availability(scheduleId) })
+  // Free faculty updates live — an emergency morning swap must see who's actually free now.
+  const avail = useQuery({ queryKey: ['exam', 'availability', scheduleId], queryFn: () => examApi.availability(scheduleId), refetchInterval: 15_000 })
   const gen = useMutation({ mutationFn: (ids?: string[]) => examApi.generateSupervision(scheduleId, ids), onSuccess: (r: { unfilled?: number }) => { toast.success(r.unfilled ? `Allocated · ${r.unfilled} unfilled` : 'Supervision allocated'); setPick(false); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
   const edit = useMutation({ mutationFn: ({ id, facultyId }: { id: string; facultyId: string }) => examApi.editSupervision(id, { facultyId }), onSuccess: () => { toast.success('Updated'); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
   const freeFac = (avail.data?.faculties ?? []).filter((f) => f.free)
@@ -309,7 +363,7 @@ function SupervisionTab({ scheduleId }: { scheduleId: string }) {
           <tbody>
             {list.data.map((a) => (
               <Tr key={a.id}>
-                <Td className="font-semibold">Block {a.blockNumber}</Td>
+                <Td className="font-semibold">Block {a.blockNumber}{a.slot > 1 ? <span className="ml-1 text-[10px] font-normal text-text-muted">inv {a.slot}</span> : ''}</Td>
                 <Td>{a.room ?? '—'}</Td>
                 <Td>{a.supervisor}</Td>
                 <Td><Badge tone={a.source === 'OWN_YEAR' ? 'success' : a.source === 'EXTERNAL' ? 'warning' : 'primary'}>{a.source.replace('_', ' ')}</Badge></Td>
@@ -333,8 +387,12 @@ function PaperTab({ scheduleId }: { scheduleId: string }) {
   const qc = useQueryClient()
   const [pick, setPick] = useState(false)
   const list = useQuery({ queryKey: ['exam', 'paper', scheduleId], queryFn: () => examApi.paperChecking(scheduleId), refetchInterval: 30_000 })
-  const faculty = useQuery({ queryKey: ['exam', 'paperFaculty', scheduleId], queryFn: () => examApi.paperCheckingFaculty(scheduleId), enabled: pick })
+  // Loaded always (not just for the picker) so the per-row reassign dropdown has options.
+  const faculty = useQuery({ queryKey: ['exam', 'paperFaculty', scheduleId], queryFn: () => examApi.paperCheckingFaculty(scheduleId) })
   const gen = useMutation({ mutationFn: (ids?: string[]) => examApi.generatePaperChecking(scheduleId, ids), onSuccess: () => { toast.success('Paper checking allocated'); setPick(false); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
+  // Paper allocation stays changeable even after the exam is over.
+  const reassign = useMutation({ mutationFn: ({ id, facultyId }: { id: string; facultyId: string }) => examApi.editPaperChecking(id, facultyId), onSuccess: () => { toast.success('Checker reassigned'); qc.invalidateQueries({ queryKey: ['exam'] }) }, onError: (e) => toast.error(errorMessage(e)) })
+  const checkerOptions = (faculty.data?.faculties ?? []).map((f: PaperCheckFacultyRow) => ({ value: f.id, label: `${f.name} (${f.employeeId})${f.isSubjectFaculty ? ' · subject' : f.isOwnYear ? ' · own year' : f.year ? ` · ${f.year}` : ''}` }))
   const pickerFaculty: PickerFaculty[] = (faculty.data?.faculties ?? []).map((f: PaperCheckFacultyRow) => ({
     id: f.id, label: `${f.name} (${f.employeeId})`,
     hint: f.isSubjectFaculty ? 'subject teacher' : f.isOwnYear ? 'own year' : f.year ?? '', preselected: f.isSubjectFaculty,
@@ -348,7 +406,7 @@ function PaperTab({ scheduleId }: { scheduleId: string }) {
         </div>} />
       {!list.data?.length ? <EmptyState title="Not allocated" description="“Select Faculty” to choose checkers, or “Auto” to split continuous block ranges among the subject's teachers." className="border-0" /> : (
         <Table>
-          <thead><tr><Th>Checker</Th><Th>Block range</Th><Th>Blocks</Th><Th>Marking progress</Th><Th>Status</Th></tr></thead>
+          <thead><tr><Th>Checker</Th><Th>Block range</Th><Th>Blocks</Th><Th>Marking progress</Th><Th>Status</Th><Th>Reassign</Th></tr></thead>
           <tbody>
             {list.data.map((p) => (
               <Tr key={p.id}>
@@ -362,6 +420,10 @@ function PaperTab({ scheduleId }: { scheduleId: string }) {
                   </div>
                 </Td>
                 <Td><Badge tone={p.status === 'Published' ? 'purple' : p.status === 'Complete' ? 'success' : p.status === 'In Progress' ? 'warning' : 'neutral'}>{p.status}</Badge></Td>
+                <Td>
+                  <Select className="min-w-[190px]" value={p.facultyId} onChange={(e) => e.target.value && e.target.value !== p.facultyId && reassign.mutate({ id: p.id, facultyId: e.target.value })}
+                    options={[{ value: p.facultyId, label: 'Change checker…' }, ...checkerOptions.filter((o) => o.value !== p.facultyId)]} />
+                </Td>
               </Tr>
             ))}
           </tbody>

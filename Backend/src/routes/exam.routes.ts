@@ -17,11 +17,13 @@ const s = (v: unknown) => (Array.isArray(v) ? String(v[0] ?? "") : String(v ?? "
 
 // ── Faculty (any authenticated faculty): my published duties ──
 examRouter.get("/me/duties", asyncHandler(async (req, res) => res.json(await examService.facultyDuties(uid(req), uni(req)))));
+// Whether this faculty can manage exams (HOD or coordinator) — drives the faculty portal tab.
+examRouter.get("/me/manager", asyncHandler(async (req, res) => res.json(await examService.myExamManagerStatus(uid(req), uni(req)))));
 
 // ── Exam CRUD ──
 examRouter.post("/", asyncHandler(async (req, res) => res.status(201).json(await examService.createExam(uid(req), uni(req), req.body))));
 examRouter.get("/", asyncHandler(async (req, res) => res.json(await examService.listExams(uid(req), uni(req)))));
-examRouter.get("/meta/subjects", asyncHandler(async (req, res) => res.json(await examService.yearSubjects(uid(req), uni(req)))));
+examRouter.get("/meta/subjects", asyncHandler(async (req, res) => res.json(await examService.yearSubjects(uid(req), uni(req), req.query.examId ? s(req.query.examId) : undefined))));
 examRouter.get("/:examId", asyncHandler(async (req, res) => res.json(await examService.getExam(uid(req), uni(req), s(req.params.examId)))));
 examRouter.delete("/:examId", asyncHandler(async (req, res) => res.json(await examService.deleteExam(uid(req), uni(req), s(req.params.examId)))));
 examRouter.get("/:examId/dashboard", asyncHandler(async (req, res) => res.json(await examService.dashboard(uid(req), uni(req), s(req.params.examId)))));
@@ -36,7 +38,7 @@ examRouter.delete("/schedules/:scheduleId", asyncHandler(async (req, res) => res
 
 // ── Blocks ──
 examRouter.post("/:examId/blocks/generate", asyncHandler(async (req, res) => res.json(await examService.generateBlocks(uid(req), uni(req), s(req.params.examId)))));
-examRouter.get("/:examId/blocks", asyncHandler(async (req, res) => res.json(await examService.listBlocks(uid(req), uni(req), s(req.params.examId)))));
+examRouter.get("/:examId/blocks", asyncHandler(async (req, res) => res.json(await examService.listBlocks(uid(req), uni(req), s(req.params.examId), req.query.mode === "ONLINE" || req.query.mode === "OFFLINE" ? req.query.mode : undefined))));
 examRouter.patch("/blocks/:blockId/room", asyncHandler(async (req, res) => res.json(await examService.setBlockRoom(uid(req), uni(req), s(req.params.blockId), s(req.body.room)))));
 examRouter.patch("/blocks/:blockId/lock", asyncHandler(async (req, res) => res.json(await examService.lockBlock(uid(req), uni(req), s(req.params.blockId), Boolean(req.body.isLocked)))));
 examRouter.post("/blocks/move", asyncHandler(async (req, res) => res.json(await examService.moveStudent(uid(req), uni(req), req.body))));
@@ -55,6 +57,7 @@ examRouter.patch("/supervision/:allocationId", asyncHandler(async (req, res) => 
 examRouter.post("/schedules/:scheduleId/paper-checking/generate", asyncHandler(async (req, res) => res.json(await examService.generatePaperChecking(uid(req), uni(req), s(req.params.scheduleId), req.body?.facultyIds))));
 examRouter.get("/schedules/:scheduleId/paper-checking", asyncHandler(async (req, res) => res.json(await examService.listPaperChecking(uid(req), uni(req), s(req.params.scheduleId)))));
 examRouter.get("/schedules/:scheduleId/paper-checking/faculty", asyncHandler(async (req, res) => res.json(await examService.paperCheckingFaculty(uid(req), uni(req), s(req.params.scheduleId)))));
+examRouter.patch("/paper-checking/:allocationId", asyncHandler(async (req, res) => res.json(await examService.editPaperChecking(uid(req), uni(req), s(req.params.allocationId), s(req.body.facultyId)))));
 
 // ── Paper-checking marks entry (checker / coordinator / year HOD) ──
 examRouter.get("/me/paper-checking", asyncHandler(async (req, res) => res.json(await examService.myPaperChecking(uid(req), uni(req)))));

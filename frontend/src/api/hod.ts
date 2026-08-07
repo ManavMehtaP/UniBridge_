@@ -1,3 +1,4 @@
+import type { AxiosRequestConfig } from 'axios'
 import { downloadExport, downloadFile, type ExportFormat } from '@/lib/download'
 import { api } from './client'
 import type { PaginatedResponse } from '@/types/common'
@@ -73,7 +74,7 @@ export const hodApi = {
       api.get<T.ResultsOverview>('/hod/dashboard/results-overview', { params: { semesterId } }).then((r) => r.data),
     atRisk: (limit = 5, semesterId?: string) =>
       api.get<{ data: T.AtRiskRow[]; total: number }>('/hod/dashboard/at-risk', { params: { limit, semesterId } }).then((r) => r.data),
-    activityFeed: (page = 1, limit = 10) =>
+    activityFeed: (page = 1, limit = 5) =>
       api.get<PaginatedResponse<T.ActivityItem>>('/hod/dashboard/activity-feed', { params: { page, limit } }).then((r) => r.data),
   },
 
@@ -93,8 +94,8 @@ export const hodApi = {
       api.patch(`/hod/students/${enrollmentNo}/status`, { isActive, reason }).then((r) => r.data),
     remove: (enrollmentNo: string) =>
       api.delete(`/hod/students/${enrollmentNo}`).then((r) => r.data),
-    uploadCsv: (form: FormData) =>
-      api.post<T.CsvResult>('/hod/students/csv', form).then((r) => r.data),
+    uploadCsv: (form: FormData, config?: AxiosRequestConfig) =>
+      api.post<T.CsvResult>('/hod/students/csv', form, config).then((r) => r.data),
     downloadTemplate: () => downloadFile('/hod/students/csv/template', 'students-template.csv'),
     export: (params: Params, format: ExportFormat = 'csv') => downloadExport('/hod/students/export', 'students', format, params),
   },
@@ -113,7 +114,7 @@ export const hodApi = {
     setStatus: (employeeId: string, isActive: boolean) =>
       api.patch(`/hod/faculty/${employeeId}/status`, { isActive }).then((r) => r.data),
     remove: (employeeId: string) => api.delete(`/hod/faculty/${employeeId}`).then((r) => r.data),
-    uploadCsv: (form: FormData) => api.post<T.CsvResult>('/hod/faculty/csv', form).then((r) => r.data),
+    uploadCsv: (form: FormData, config?: AxiosRequestConfig) => api.post<T.CsvResult>('/hod/faculty/csv', form, config).then((r) => r.data),
     assign: (body: Record<string, unknown>) =>
       api.post('/hod/faculty/assignments', body).then((r) => r.data),
     unassign: (assignmentId: string) =>
@@ -128,6 +129,7 @@ export const hodApi = {
     students: (semesterId: string, batchId: string, subjectId: string) =>
       api.get('/hod/results/students', { params: { semesterId, batchId, subjectId } }).then((r) => r.data),
     upload: (form: FormData) => api.post('/hod/results/upload', form).then((r) => r.data),
+    uploadPhase: (form: FormData, config?: AxiosRequestConfig) => api.post('/hod/results/upload-phase', form, config).then((r) => r.data),
     manual: (body: Record<string, unknown>) => api.post('/hod/results/manual', body).then((r) => r.data),
     preview: (phaseId: string, subjectId: string, batchId: string) =>
       api.get('/hod/results/preview', { params: { phaseId, subjectId, batchId } }).then((r) => r.data),
@@ -197,8 +199,8 @@ export const hodApi = {
         '/hod/mentorship/unassigned', { params: { semesterId } }).then((r) => r.data),
     assign: (studentEnrollmentNo: string, facultyId: string, semesterId: string) =>
       api.post('/hod/mentorship/assign', { studentEnrollmentNo, facultyId, semesterId }).then((r) => r.data),
-    assignCsv: (form: FormData) =>
-      api.post<T.CsvResult>('/hod/mentorship/assign/csv', form).then((r) => r.data),
+    assignCsv: (form: FormData, config?: AxiosRequestConfig) =>
+      api.post<T.CsvResult>('/hod/mentorship/assign/csv', form, config).then((r) => r.data),
     reassign: (studentEnrollmentNo: string, newFacultyId: string, semesterId: string) =>
       api.patch('/hod/mentorship/reassign', { studentEnrollmentNo, newFacultyId, semesterId }).then((r) => r.data),
     autoAssign: (semesterId: string) =>
@@ -298,7 +300,7 @@ export const hodApi = {
     create: (body: Record<string, unknown>) => api.post('/hod/timetable', body).then((r) => r.data),
     update: (slotId: string, body: Record<string, unknown>) => api.put(`/hod/timetable/${slotId}`, body).then((r) => r.data),
     remove: (slotId: string) => api.delete(`/hod/timetable/${slotId}`).then((r) => r.data),
-    uploadExcel: (form: FormData) => api.post<T.CsvResult>('/hod/timetable/excel', form).then((r) => r.data),
+    uploadExcel: (form: FormData, config?: AxiosRequestConfig) => api.post<T.CsvResult>('/hod/timetable/excel', form, config).then((r) => r.data),
     downloadTemplate: () => {
       const link = document.createElement('a')
       link.href = '/templates/timetable-template.xlsx'
