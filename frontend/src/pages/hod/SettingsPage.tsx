@@ -187,46 +187,24 @@ function NotificationsSection() {
 
 function SecuritySection() {
   const [pw, setPw] = useState({ currentPassword: '', newPassword: '', confirm: '' })
-  const sessions = useQuery({ queryKey: ['hod', 'settings', 'sessions'], queryFn: () => hodApi.settings.sessions() as Promise<{ data: { id: string; device: string; ip: string; location?: string; isCurrent: boolean; lastActive: string }[] }> })
-  const qc = useQueryClient()
   const change = useMutation({
     mutationFn: () => hodApi.settings.changePassword(pw.currentPassword, pw.newPassword),
     onSuccess: () => { toast.success('Password updated'); setPw({ currentPassword: '', newPassword: '', confirm: '' }) },
     onError: (e) => toast.error(errorMessage(e)),
   })
-  const revoke = useMutation({
-    mutationFn: (id: string) => hodApi.settings.revokeSession(id),
-    onSuccess: () => { toast.success('Session revoked'); qc.invalidateQueries({ queryKey: ['hod', 'settings', 'sessions'] }) },
-    onError: (e) => toast.error(errorMessage(e)),
-  })
   const mismatch = pw.newPassword !== pw.confirm && pw.confirm.length > 0
   return (
-    <div className="space-y-4">
-      <SectionCard title="Change Password">
-        <div className="grid max-w-md grid-cols-1 gap-4">
-          <Field label="Current Password"><Input type="password" value={pw.currentPassword} onChange={(e) => setPw((p) => ({ ...p, currentPassword: e.target.value }))} /></Field>
-          <Field label="New Password"><Input type="password" value={pw.newPassword} onChange={(e) => setPw((p) => ({ ...p, newPassword: e.target.value }))} /></Field>
-          <Field label="Confirm New Password"><Input type="password" invalid={mismatch} value={pw.confirm} onChange={(e) => setPw((p) => ({ ...p, confirm: e.target.value }))} /></Field>
-          {mismatch && <p className="text-xs text-danger">Passwords do not match.</p>}
-        </div>
-        <div className="mt-4">
-          <Button leftIcon={<ShieldCheck size={15} />} disabled={!pw.currentPassword || !pw.newPassword || mismatch} loading={change.isPending} onClick={() => change.mutate()}>Update Password</Button>
-        </div>
-      </SectionCard>
-      <SectionCard title="Active Sessions">
-        <div className="space-y-2">
-          {sessions.data?.data.map((s) => (
-            <div key={s.id} className="flex items-center justify-between rounded-sm border border-border px-3 py-2.5">
-              <div>
-                <div className="text-sm font-medium">{s.device} {s.isCurrent && <Badge tone="success">This device</Badge>}</div>
-                <div className="text-xs text-text-muted">{s.ip}{s.location ? ` · ${s.location}` : ''} · {new Date(s.lastActive).toLocaleString()}</div>
-              </div>
-              {!s.isCurrent && <Button size="sm" variant="outline" loading={revoke.isPending} onClick={() => revoke.mutate(s.id)}>Revoke</Button>}
-            </div>
-          ))}
-        </div>
-      </SectionCard>
-    </div>
+    <SectionCard title="Change Password">
+      <div className="grid max-w-md grid-cols-1 gap-4">
+        <Field label="Current Password"><Input type="password" value={pw.currentPassword} onChange={(e) => setPw((p) => ({ ...p, currentPassword: e.target.value }))} /></Field>
+        <Field label="New Password"><Input type="password" value={pw.newPassword} onChange={(e) => setPw((p) => ({ ...p, newPassword: e.target.value }))} /></Field>
+        <Field label="Confirm New Password"><Input type="password" invalid={mismatch} value={pw.confirm} onChange={(e) => setPw((p) => ({ ...p, confirm: e.target.value }))} /></Field>
+        {mismatch && <p className="text-xs text-danger">Passwords do not match.</p>}
+      </div>
+      <div className="mt-4">
+        <Button leftIcon={<ShieldCheck size={15} />} disabled={!pw.currentPassword || !pw.newPassword || mismatch} loading={change.isPending} onClick={() => change.mutate()}>Update Password</Button>
+      </div>
+    </SectionCard>
   )
 }
 

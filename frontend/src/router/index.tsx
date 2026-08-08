@@ -60,7 +60,6 @@ const StuTimetable = lazy(() => import('@/pages/student/TimetablePage'))
 const StuResults = lazy(() => import('@/pages/student/ResultsPage'))
 const StuAttendance = lazy(() => import('@/pages/student/AttendancePage'))
 const StuNotes = lazy(() => import('@/pages/student/NotesPage'))
-const StuSelfNotes = lazy(() => import('@/pages/student/SelfNotesPage'))
 const StuQuizzes = lazy(() => import('@/pages/student/QuizzesPage'))
 const StuAnnouncements = lazy(() => import('@/pages/student/AnnouncementsPage'))
 const StuCalendar = lazy(() => import('@/pages/student/CalendarPage'))
@@ -139,7 +138,7 @@ export const router = createBrowserRouter([
           { path: '/student/results', element: <StuResults /> },
           { path: '/student/attendance', element: <StuAttendance /> },
           { path: '/student/notes', element: <StuNotes /> },
-          { path: '/student/self-notes', element: <StuSelfNotes /> },
+          { path: '/student/self-notes', element: <Navigate to="/student/notes" replace /> },
           { path: '/student/quizzes', element: <StuQuizzes /> },
           { path: '/student/announcements', element: <StuAnnouncements /> },
           { path: '/student/calendar', element: <StuCalendar /> },

@@ -268,6 +268,7 @@ function parseCsvRecords(fileBuffer: Buffer, requiredHeaders: string[]) {
 
 // Marks are out of 25 for T-1..T-3 and out of 50 for T-4. One source of truth.
 const phaseMaxMarks = (phaseNumber: number) => (phaseNumber === 4 ? 50 : 25);
+const PASS_PCT = 36;
 // Below this many marks the student is at risk: <9 of 25, <18 of 50 (both 36%).
 const riskMark = (maxMarks: number) => (maxMarks >= 50 ? 18 : 9);
 
@@ -276,7 +277,7 @@ function gradeFromPct(pct: number): string {
   if (pct >= 80) return "A";
   if (pct >= 70) return "B";
   if (pct >= 60) return "C";
-  if (pct >= 50) return "D";
+  if (pct >= PASS_PCT) return "D";
   return "F";
 }
 
@@ -829,7 +830,7 @@ async function isAnnouncementRead(studentId: string, announcementId: string) {
 async function statusFromAttendancePctAndMarks(attendancePct: number, avgMarksPct: number, universityId: string, isActive = true) {
   if (!isActive) return "INACTIVE";
   const rules = await getAttendanceRules(universityId);
-  if (attendancePct < rules.minThresholdPct || avgMarksPct < 40) return "AT_RISK";
+  if (attendancePct < rules.minThresholdPct || avgMarksPct < PASS_PCT) return "AT_RISK";
   return "ACTIVE";
 }
 
@@ -1240,9 +1241,9 @@ export const portalService = {
           batchCode: batch.code,
           attendancePct,
           avgMarksPct,
-          status: attendancePct < rules.minThresholdPct && avgMarksPct < 40 ? "BOTH" : attendancePct < rules.minThresholdPct ? "ATTENDANCE" : "MARKS",
+          status: attendancePct < rules.minThresholdPct && avgMarksPct < PASS_PCT ? "BOTH" : attendancePct < rules.minThresholdPct ? "ATTENDANCE" : "MARKS",
           mentorCode: mentorFaculty?.mentorCode ?? null,
-          isAtRisk: attendancePct < rules.minThresholdPct || avgMarksPct < 40,
+          isAtRisk: attendancePct < rules.minThresholdPct || avgMarksPct < PASS_PCT,
         };
       }),
     );
@@ -1326,7 +1327,7 @@ export const portalService = {
         const attendancePct = await computeOverallAttendancePct(e.id);
         const results = await prisma.result.findMany({ where: { enrollmentId: e.id, isPublished: true }, select: { marksObtained: true, maxMarks: true } });
         const avgMarksPct = results.length === 0 ? 0 : average(results.map((r) => (r.marksObtained / r.maxMarks) * 100));
-        const status = !e.student.isActive ? "INACTIVE" : attendancePct < rules.minThresholdPct || avgMarksPct < 40 ? "AT_RISK" : "ACTIVE";
+        const status = !e.student.isActive ? "INACTIVE" : attendancePct < rules.minThresholdPct || avgMarksPct < PASS_PCT ? "AT_RISK" : "ACTIVE";
         return {
           enrollmentNo: e.student.enrollmentNo,
           name: e.student.name,
@@ -2697,7 +2698,7 @@ export const portalService = {
     for (const e of enrs) {
       const a = agg.get(e.id);
       if (!a || a.max === 0) pending++;
-      else if ((a.got / a.max) * 100 >= 40) passed++;
+      else if ((a.got / a.max) * 100 >= PASS_PCT) passed++;
       else failed++;
     }
     const nextYearLevel = sem.yearLevel === "FY" ? "SY" : sem.yearLevel === "SY" ? "TY" : "FINAL";
@@ -2742,7 +2743,7 @@ export const portalService = {
         enrollmentId: e.id, enrollmentNo: e.student.enrollmentNo, name: e.student.name,
         branch: e.student.branch, batchCode: e.batch.code, rollNo: e.rollNo,
         aggregatePct: pct === null ? null : Math.round(pct * 10) / 10,
-        status: pct === null ? "Pending" : pct >= 40 ? "Pass" : "Fail",
+        status: pct === null ? "Pending" : pct >= PASS_PCT ? "Pass" : "Fail",
       };
     });
     // merit order: highest % first, ungraded last, then enrollment no
@@ -3438,13 +3439,21 @@ export const portalService = {
 
   async studentResultsSummary(studentId: string) {
     const enrollments = await prisma.studentEnrollment.findMany({ where: { studentId }, include: { semester: true, batch: true }, orderBy: { semester: { number: "asc" } } });
+    let totalPct = 0, resultCount = 0, passCount = 0, failCount = 0;
     const summary = await Promise.all(
       enrollments.map(async (e) => {
         const rows = await prisma.result.findMany({ where: { enrollmentId: e.id, isPublished: true }, select: { marksObtained: true, maxMarks: true } });
+        for (const row of rows) {
+          const pct = (row.marksObtained / row.maxMarks) * 100;
+          totalPct += pct;
+          resultCount++;
+          if (pct >= PASS_PCT) passCount++;
+          else failCount++;
+        }
         return { semesterNumber: e.semester.number, label: `Sem ${e.semester.number}`, yearLevel: e.batch.yearLevel, avgPct: rows.length === 0 ? null : average(rows.map((r) => (r.marksObtained / r.maxMarks) * 100)), status: e.semester.status === "ACTIVE" ? "in_progress" : "complete" };
       }),
     );
-    return { summary };
+    return { summary, avgMarksPct: resultCount === 0 ? null : totalPct / resultCount, passCount, failCount };
   },
 
   async studentResultsSemester(studentId: string, semesterId: string) {
@@ -4547,7 +4556,7 @@ export const portalService = {
         const attendancePct = await computeOverallAttendancePct(e.id);
         const results = await prisma.result.findMany({ where: { enrollmentId: e.id, isPublished: true }, select: { marksObtained: true, maxMarks: true } });
         const avgMarksPct = results.length === 0 ? 0 : average(results.map((r) => (r.marksObtained / r.maxMarks) * 100));
-        const status = !student?.isActive ? "INACTIVE" : attendancePct < rules.minThresholdPct || avgMarksPct < 40 ? "AT_RISK" : "ACTIVE";
+        const status = !student?.isActive ? "INACTIVE" : attendancePct < rules.minThresholdPct || avgMarksPct < PASS_PCT ? "AT_RISK" : "ACTIVE";
         return { enrollmentNo: student?.enrollmentNo ?? "", name: student?.name ?? "", branch: student?.branch ?? "", currentBatch: { code: batch.code }, rollNo: e.rollNo, attendancePct, status };
       }),
     );
@@ -4587,7 +4596,7 @@ export const portalService = {
     const results = await prisma.result.findMany({ where: { enrollmentId: enrollment.id, isPublished: true }, select: { marksObtained: true, maxMarks: true } });
     const avgMarksPct = results.length === 0 ? 0 : average(results.map((r) => (r.marksObtained / r.maxMarks) * 100));
     const rules = await getAttendanceRules(universityId);
-    const status = !student.isActive ? "INACTIVE" : attendancePct < rules.minThresholdPct || avgMarksPct < 40 ? "AT_RISK" : "ACTIVE";
+    const status = !student.isActive ? "INACTIVE" : attendancePct < rules.minThresholdPct || avgMarksPct < PASS_PCT ? "AT_RISK" : "ACTIVE";
     return { enrollmentNo: student.enrollmentNo, name: student.name, branch: student.branch, rollNo: enrollment.rollNo, currentBatch: { code: batch.code }, currentSemester: { label: scope.semester.label }, phone: student.phone, attendancePct, status, isMentee: scope.mentorStudentIds.includes(student.id) };
   },
 
@@ -5201,7 +5210,7 @@ export const portalService = {
       const attendancePct = enrollment ? await computeOverallAttendancePct(enrollment.id) : 0;
       const results = enrollment ? await prisma.result.findMany({ where: { enrollmentId: enrollment.id, isPublished: true }, select: { marksObtained: true, maxMarks: true } }) : [];
       const avgMarksPct = results.length === 0 ? 0 : average(results.map((r) => (r.marksObtained / r.maxMarks) * 100));
-      const status = !student?.isActive ? "INACTIVE" : attendancePct < rules.minThresholdPct || avgMarksPct < 40 ? "AT_RISK" : "ACTIVE";
+      const status = !student?.isActive ? "INACTIVE" : attendancePct < rules.minThresholdPct || avgMarksPct < PASS_PCT ? "AT_RISK" : "ACTIVE";
       const unreadMessages = await prisma.chatMessage.count({ where: { mentorAssignmentId: a.id, senderRole: "STUDENT", isRead: false } });
       const lastMsg = await prisma.chatMessage.findFirst({ where: { mentorAssignmentId: a.id }, orderBy: { sentAt: "desc" } });
       return { mentorAssignmentId: a.id, enrollmentNo: student?.enrollmentNo ?? "", name: student?.name ?? "", branch: student?.branch ?? "", batchCode: batch?.code ?? "", rollNo: enrollment?.rollNo ?? "", attendancePct, latestMarksPct: avgMarksPct, status, unreadMessages, lastMessageAt: lastMsg?.sentAt ?? null };
@@ -5228,7 +5237,7 @@ export const portalService = {
     const attendancePct = await computeOverallAttendancePct(enrollment.id);
     const results = await prisma.result.findMany({ where: { enrollmentId: enrollment.id, isPublished: true }, select: { marksObtained: true, maxMarks: true } });
     const avgMarksPct = results.length === 0 ? 0 : average(results.map((r) => (r.marksObtained / r.maxMarks) * 100));
-    const riskFlag = attendancePct < 75 && avgMarksPct < 40 ? "BOTH" : attendancePct < 75 ? "ATTENDANCE" : avgMarksPct < 40 ? "MARKS" : "NONE";
+    const riskFlag = attendancePct < 75 && avgMarksPct < PASS_PCT ? "BOTH" : attendancePct < 75 ? "ATTENDANCE" : avgMarksPct < PASS_PCT ? "MARKS" : "NONE";
     const history = await prisma.studentEnrollment.findMany({ where: { studentId: student.id }, include: { semester: { select: { label: true } }, batch: { select: { yearLevel: true, code: true } } } });
     return { mentorAssignmentId: assignment.id, enrollmentNo: student.enrollmentNo, name: student.name, branch: student.branch, batchCode: batch.code, rollNo: enrollment.rollNo, phone: student.phone, admissionYear: student.admissionYear, attendanceSummary, resultsSummary: resultsSummary.map((r) => ({ phase: r.phase.label, subjectCode: r.subject.code, marks: r.marksObtained, grade: r.grade })), riskFlag, academicHistory: history.map((h) => ({ semesterLabel: h.semester.label, yearLevel: h.batch.yearLevel, batchCode: h.batch.code, rollNo: h.rollNo })) };
   },
@@ -5253,9 +5262,9 @@ export const portalService = {
       const results = await prisma.result.findMany({ where: { enrollmentId: enrollment.id, isPublished: true }, select: { marksObtained: true, maxMarks: true } });
       const avgMarksPct = results.length === 0 ? 0 : average(results.map((r) => (r.marksObtained / r.maxMarks) * 100));
       const batch = await batchById(enrollment.batchId);
-      return { enrollmentNo: student?.enrollmentNo ?? "", name: student?.name ?? "", batchCode: batch.code, attendancePct, latestMarksPct: avgMarksPct, riskFactor: attendancePct < 75 && avgMarksPct < 40 ? "BOTH" : attendancePct < 75 ? "ATTENDANCE" : "MARKS" };
+      return { enrollmentNo: student?.enrollmentNo ?? "", name: student?.name ?? "", batchCode: batch.code, attendancePct, latestMarksPct: avgMarksPct, riskFactor: attendancePct < 75 && avgMarksPct < PASS_PCT ? "BOTH" : attendancePct < 75 ? "ATTENDANCE" : "MARKS" };
     }))).filter(Boolean) as Array<{ enrollmentNo: string; name: string; batchCode: string; attendancePct: number; latestMarksPct: number; riskFactor: string }>;
-    return { data: data.filter((r) => r.attendancePct < 75 || r.latestMarksPct < 40), total: data.filter((r) => r.attendancePct < 75 || r.latestMarksPct < 40).length };
+    return { data: data.filter((r) => r.attendancePct < 75 || r.latestMarksPct < PASS_PCT), total: data.filter((r) => r.attendancePct < 75 || r.latestMarksPct < PASS_PCT).length };
   },
 
   async facultyChatMessages(facultyId: string, universityId: string, mentorAssignmentId: string, page = 1, limit = 30) {
@@ -5304,7 +5313,20 @@ export const portalService = {
     const scope = await getFacultyScopeData(facultyId, universityId, query.semesterId as string | undefined);
     const subjectId = query.subjectId as string | undefined;
     const batchId = query.batchId as string | undefined;
-    const phaseId = query.phaseId as string | undefined;
+    const phaseParam = query.phaseId as string | undefined;
+    let phaseId: string | undefined;
+    if (phaseParam) {
+      const phaseKey = phaseParam.trim().toUpperCase().replace(/[\s-]/g, "");
+      const phaseNumber = Number(phaseKey.replace(/^T/, ""));
+      const phaseFilters: Prisma.PhaseWhereInput[] = [
+        { label: { equals: phaseParam, mode: "insensitive" } },
+        { label: { equals: phaseKey, mode: "insensitive" } },
+      ];
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(phaseParam)) phaseFilters.push({ id: phaseParam });
+      if (Number.isInteger(phaseNumber) && phaseNumber >= 1 && phaseNumber <= 4) phaseFilters.push({ number: phaseNumber });
+      const phase = await prisma.phase.findFirst({ where: { semesterId: scope.semester.id, OR: phaseFilters }, select: { id: true } });
+      phaseId = phase?.id ?? "__NO_MATCH__";
+    }
     if (subjectId) await ensureFacultyAssignedSubject(facultyId, universityId, subjectId, scope.semester.id);
     if (batchId) await ensureFacultyAssignedBatch(facultyId, universityId, batchId, scope.semester.id);
     const results = await prisma.result.findMany({
@@ -5312,7 +5334,11 @@ export const portalService = {
       include: { enrollment: { include: { student: true, batch: true } }, phase: true, subject: true },
     });
     const rows = results.map((r) => ({ enrollmentNo: r.enrollment.student.enrollmentNo, studentName: r.enrollment.student.name, batchCode: r.enrollment.batch.code, subjectCode: r.subject.code, phase: r.phase.label, marksObtained: r.marksObtained, maxMarks: r.maxMarks, grade: r.grade, isPublished: r.isPublished }));
-    const stats = { avgMarksPct: average(rows.map((r) => (r.marksObtained / r.maxMarks) * 100)), passCount: rows.filter((r) => r.marksObtained >= 40).length, failCount: rows.filter((r) => r.marksObtained < 40).length };
+    const stats = {
+      avgMarksPct: average(rows.map((r) => (r.marksObtained / r.maxMarks) * 100)),
+      passCount: rows.filter((r) => (r.marksObtained / r.maxMarks) * 100 >= PASS_PCT).length,
+      failCount: rows.filter((r) => (r.marksObtained / r.maxMarks) * 100 < PASS_PCT).length,
+    };
     return { ...paginate(rows, Number(query.page ?? 1), Number(query.limit ?? 50)), stats };
   },
 
@@ -5368,7 +5394,7 @@ export const portalService = {
     return {
       subjectCode: subject?.code ?? null,
       phase: phase?.label ?? null,
-      stats: { avgMarksPct: average(results.map((r) => (r.marksObtained / r.maxMarks) * 100)), passRate: results.length === 0 ? 0 : Number(((results.filter((r) => r.marksObtained >= 40).length / results.length) * 100).toFixed(1)), highestMarks: results.length === 0 ? 0 : Math.max(...results.map((r) => r.marksObtained)), lowestMarks: results.length === 0 ? 0 : Math.min(...results.map((r) => r.marksObtained)) },
+      stats: { avgMarksPct: average(results.map((r) => (r.marksObtained / r.maxMarks) * 100)), passRate: results.length === 0 ? 0 : Number(((results.filter((r) => (r.marksObtained / r.maxMarks) * 100 >= PASS_PCT).length / results.length) * 100).toFixed(1)), highestMarks: results.length === 0 ? 0 : Math.max(...results.map((r) => r.marksObtained)), lowestMarks: results.length === 0 ? 0 : Math.min(...results.map((r) => r.marksObtained)) },
       gradeDistribution: ["A+", "A", "B", "C", "D", "F"].map((g) => ({ grade: g, count: results.filter((r) => r.grade === g).length })),
       phaseComparison: phase ? [{ phase: phase.label, avgPct: average(results.map((r) => (r.marksObtained / r.maxMarks) * 100)) }] : [],
     };
@@ -5492,7 +5518,7 @@ export const portalService = {
     const results = enrollment ? await prisma.result.findMany({ where: { enrollmentId: enrollment.id, isPublished: true }, select: { marksObtained: true, maxMarks: true } }) : [];
     const avgMarks = results.length === 0 ? 0 : average(results.map((r) => (r.marksObtained / r.maxMarks) * 100));
     const rules = await getAttendanceRules(s.universityId);
-    const status = !s.isActive ? "INACTIVE" : (attendancePct < rules.minThresholdPct || avgMarks < 40) ? "AT_RISK" : "ACTIVE";
+    const status = !s.isActive ? "INACTIVE" : (attendancePct < rules.minThresholdPct || avgMarks < PASS_PCT) ? "AT_RISK" : "ACTIVE";
     return {
       enrollmentNo: s.enrollmentNo, name: s.name, email: s.email, phone: s.phone ?? undefined,
       branch: s.branch, admissionYear: s.admissionYear, status,
@@ -5692,19 +5718,25 @@ export const portalService = {
       ? await prisma.semester.findUnique({ where: { id: semesterId }, include: { academicYear: true } })
       : await prisma.semester.findFirst({ where: { universityId: scope.universityId, status: "ACTIVE" }, include: { academicYear: true } });
     if (!semester) return { academicYears: [], semesters: [], phases: [], subjects: [], batches: [] };
-    const [years, semesters, phases, subjects, batches] = await Promise.all([
+    const [years, semesters, phases, subjects, batches, assignments] = await Promise.all([
       prisma.academicYear.findMany({ where: { universityId: scope.universityId }, orderBy: { label: "desc" } }),
       prisma.semester.findMany({ where: { universityId: scope.universityId }, orderBy: { number: "asc" } }),
       prisma.phase.findMany({ where: { semesterId: semester.id }, orderBy: { number: "asc" } }),
       subjectsBySemester(semester.id),
       prisma.batch.findMany({ where: { id: { in: scope.hodBatchIds } } }),
+      prisma.facultyBatchAssignment.findMany({ where: { semesterId: semester.id, batchId: { in: scope.hodBatchIds } }, select: { batchId: true, subjectId: true } }),
     ]);
+    const conductedLectures = await prisma.attendanceRecord.findMany({ where: { subjectId: { in: subjects.map((s) => s.id) }, enrollment: { semesterId: semester.id, batchId: { in: scope.hodBatchIds } } }, select: { subjectId: true, enrollment: { select: { batchId: true } } } });
+    const conductedBatchSubjects = new Set(conductedLectures.map((record) => `${record.enrollment.batchId}:${record.subjectId}`));
+    const effectiveBatchSubjects = assignments.filter((assignment) => conductedBatchSubjects.has(`${assignment.batchId}:${assignment.subjectId}`));
+    const assignedSubjectIds = new Set(effectiveBatchSubjects.map((a) => a.subjectId));
     return {
       academicYears: years.map((y) => ({ id: y.id, label: y.label })),
       semesters: semesters.map((s) => ({ id: s.id, label: s.label, number: s.number })),
       phases: phases.map((p, i, arr) => ({ id: p.id, label: p.label, number: p.number, isActive: !p.isComplete && arr.slice(0, i).every((q) => q.isComplete), isComplete: p.isComplete })),
-      subjects: subjects.map((s) => ({ id: s.id, code: s.code, name: s.name })),
+      subjects: subjects.filter((s) => assignedSubjectIds.has(s.id)).map((s) => ({ id: s.id, code: s.code, name: s.name })),
       batches: batches.map((b) => ({ id: b.id, code: b.code })),
+      batchSubjects: effectiveBatchSubjects.map((a) => ({ batchId: a.batchId, subjectId: a.subjectId })),
     };
   },
 
@@ -5747,7 +5779,7 @@ export const portalService = {
       }
       totalMarks += pct;
       markCount++;
-      if (pct < 40) belowPass++;
+      if (pct < PASS_PCT) belowPass++;
     }
     return { totalRows: rows.length, inserted, updated, errors, summary: { avgMarks: markCount === 0 ? 0 : totalMarks / markCount, belowPassCount: belowPass, studentCount: markCount } };
   },
@@ -5774,6 +5806,8 @@ export const portalService = {
       throw new ApiError(422, "UNPROCESSABLE_CSV", `Unknown subject code column(s): ${invalidColumns.join(", ")}.`);
     }
     const enrollmentMap = new Map(enrollments.map((e) => [e.student.enrollmentNo.trim(), e]));
+    const conductedLectures = await prisma.attendanceRecord.findMany({ where: { subjectId: { in: subjects.map((s) => s.id) }, enrollment: { semesterId, batchId: { in: scope.hodBatchIds } } }, select: { subjectId: true, enrollment: { select: { batchId: true } } } });
+    const conductedByBatch = new Set(conductedLectures.map((record) => `${record.enrollment.batchId}:${record.subjectId}`));
     const errors: { row: number; enrollmentNo?: string; reason: string }[] = [];
     let inserted = 0, updated = 0, totalMarks = 0, belowPass = 0, markCount = 0;
     for (const { row, record } of rows) {
@@ -5794,6 +5828,10 @@ export const portalService = {
           continue;
         }
         const subject = subjectsByCode.get(key.trim().toLowerCase())!;
+        if (!conductedByBatch.has(`${enrollment.batchId}:${subject.id}`)) {
+          errors.push({ row, enrollmentNo, reason: `${subject.code} lectures were not conducted for this student's batch.` });
+          continue;
+        }
         const pct = (marksObtained / maxMarks) * 100;
         const grade = gradeFromPct(pct);
         const existing = await prisma.result.findFirst({ where: { enrollmentId: enrollment.id, phaseId: body.phaseId, subjectId: subject.id } });
@@ -5806,7 +5844,7 @@ export const portalService = {
         }
         totalMarks += pct;
         markCount++;
-        if (pct < 40) belowPass++;
+        if (pct < PASS_PCT) belowPass++;
       }
     }
     return { totalRows: rows.length, inserted, updated, errors, summary: { avgMarks: markCount === 0 ? 0 : totalMarks / markCount, belowPassCount: belowPass, studentCount: markCount } };
@@ -5827,7 +5865,7 @@ export const portalService = {
         inserted++;
       }
       totalMarks += pct;
-      if (pct < 40) belowPass++;
+      if (pct < PASS_PCT) belowPass++;
     }
     return { inserted, updated, summary: { avgMarks: body.results.length === 0 ? 0 : totalMarks / body.results.length, belowPassCount: belowPass } };
   },
@@ -5838,7 +5876,7 @@ export const portalService = {
       const r = await prisma.result.findFirst({ where: { enrollmentId: e.id, phaseId, subjectId } });
       if (!r) return { resultId: null, enrollmentNo: e.student.enrollmentNo, name: e.student.name, marksObtained: null, maxMarks: null, grade: null, status: "Pending", isPublished: false };
       const pct = (r.marksObtained / r.maxMarks) * 100;
-      return { resultId: r.id, enrollmentNo: e.student.enrollmentNo, name: e.student.name, marksObtained: r.marksObtained, maxMarks: r.maxMarks, grade: r.grade, status: pct < 40 ? "Fail" : "Pass", isPublished: r.isPublished };
+      return { resultId: r.id, enrollmentNo: e.student.enrollmentNo, name: e.student.name, marksObtained: r.marksObtained, maxMarks: r.maxMarks, grade: r.grade, status: pct < PASS_PCT ? "Fail" : "Pass", isPublished: r.isPublished };
     }));
     const filled = results.filter((r) => r.marksObtained != null);
     const avgMarks = filled.length === 0 ? 0 : average(filled.map((r) => ((r.marksObtained ?? 0) / (r.maxMarks ?? 100)) * 100));

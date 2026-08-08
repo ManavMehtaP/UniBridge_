@@ -23,7 +23,7 @@ export default function StudentResultsPage() {
     marksObtained: sub.marksObtained, maxMarks: sub.maxMarks, grade: sub.grade,
     isPublished: sub.isPublished,
   }))))
-  const stats = summary.data as { avgMarksPct?: number; passCount?: number; failCount?: number; cgpa?: number } | undefined
+  const stats = summary.data as { avgMarksPct?: number | null; passCount?: number; failCount?: number; cgpa?: number } | undefined
 
   const byPhase = new Map<string, StudentResult[]>()
   rows.forEach((r) => {
@@ -80,7 +80,7 @@ export default function StudentResultsPage() {
             <tbody>
               {sort.rows.map((r, i) => {
                 const pct = (r.marksObtained / r.maxMarks) * 100
-                const passed = pct >= 40
+                const passed = pct >= 36
                 return (
                   <Tr key={i}>
                     <Td><Badge tone="primary">{r.phase}</Badge></Td>
