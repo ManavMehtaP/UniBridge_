@@ -428,6 +428,11 @@ facultyRouter.get("/mentees", asyncHandler(async (req, res) => {
   res.json(await portalService.facultyMentees(req.user!.id, req.user!.universityId, req.query as Record<string, string | number | undefined>));
 }));
 
+// Mentor (or HOD) sets a mentee's own + parent contact numbers.
+facultyRouter.patch("/mentees/:enrollmentNo/contact", asyncHandler(async (req, res) => {
+  res.json(await portalService.updateMenteeContact(req.user!.id, req.user!.universityId, str(req.params.enrollmentNo), req.body));
+}));
+
 facultyRouter.get("/chat/:mentorAssignmentId/messages", asyncHandler(async (req, res) => {
   res.json(
     await portalService.facultyChatMessages(

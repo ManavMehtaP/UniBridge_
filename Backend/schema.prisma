@@ -522,7 +522,8 @@ model Student {
   branchId         String?   @db.Uuid // FK to UniversityBranch (optional, for structured lookup)
   admissionYear    Int // 2023
   profilePhotoUrl  String?
-  phone            String?
+  phone            String? // student's own mobile
+  parentPhone      String? // parent/guardian mobile — set by the 1st-sem mentor, editable only by mentor/HOD
   isActive         Boolean   @default(true)
   // ponytail: graduation is a STATUS, never a delete/archive. History stays fully accessible.
   graduationStatus String    @default("ACTIVE") // ACTIVE | PASS_OUT | DETAINED

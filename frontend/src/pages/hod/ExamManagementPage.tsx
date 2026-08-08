@@ -261,11 +261,12 @@ function BlocksTab({ examId }: { examId: string }) {
   return (
     <Card className="overflow-hidden">
       <Table>
-        <thead><tr><Th>Block</Th><Th>Owner HOD</Th><Th>Students</Th><Th>Enrollment range</Th><Th>Room</Th><Th /></tr></thead>
+        <thead><tr><Th>Block</Th><Th>Mode</Th><Th>Owner HOD</Th><Th>Students</Th><Th>Enrollment range</Th><Th>Room</Th><Th /></tr></thead>
         <tbody>
           {blocks.data.map((b) => (
             <Tr key={b.id}>
-              <Td className="font-semibold">Block {b.blockNumber}{b.isLocked && <Lock size={12} className="ml-1 inline text-teal" />}</Td>
+              <Td className="font-semibold">{b.label}{b.isLocked && <Lock size={12} className="ml-1 inline text-teal" />}</Td>
+              <Td><Badge tone={b.mode === 'ONLINE' ? 'purple' : 'neutral'}>{b.mode === 'ONLINE' ? 'Online' : 'Offline'}</Badge></Td>
               <Td>{b.ownerHodName}</Td>
               <Td className="tabular-nums">{b.studentCount}</Td>
               <Td className="font-mono text-[11px]">{b.firstEnrollment} – {b.lastEnrollment}</Td>
@@ -363,7 +364,7 @@ function SupervisionTab({ scheduleId }: { scheduleId: string }) {
           <tbody>
             {list.data.map((a) => (
               <Tr key={a.id}>
-                <Td className="font-semibold">Block {a.blockNumber}{a.slot > 1 ? <span className="ml-1 text-[10px] font-normal text-text-muted">inv {a.slot}</span> : ''}</Td>
+                <Td className="font-semibold">{a.blockLabel}{a.slot > 1 ? <span className="ml-1 text-[10px] font-normal text-text-muted">inv {a.slot}</span> : ''}</Td>
                 <Td>{a.room ?? '—'}</Td>
                 <Td>{a.supervisor}</Td>
                 <Td><Badge tone={a.source === 'OWN_YEAR' ? 'success' : a.source === 'EXTERNAL' ? 'warning' : 'primary'}>{a.source.replace('_', ' ')}</Badge></Td>

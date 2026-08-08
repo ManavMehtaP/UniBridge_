@@ -1,10 +1,16 @@
-import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, CalendarX, CheckCircle2, GraduationCap, TrendingDown, Users, XCircle } from 'lucide-react'
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
+import { AlertTriangle, CalendarX, CheckCircle2, GraduationCap, Pencil, Phone, TrendingDown, Users, XCircle } from 'lucide-react'
 import { facultyApi } from '@/api/faculty'
+import { errorMessage } from '@/api/client'
 import { PageShell } from '@/components/shared/PageShell'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { StatCard } from '@/components/ui/StatCard'
 import { Badge } from '@/components/ui/Badge'
+import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
+import { Modal } from '@/components/ui/Modal'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { StatCardSkeleton, TableSkeleton } from '@/components/ui/Skeleton'
 import { Table, Td, Th, Tr } from '@/components/ui/Table'
@@ -13,6 +19,7 @@ type FailingExam = { subjectCode: string; phase: string; marksObtained: number; 
 type FailingSubject = { subjectCode: string; totalObtained: number; totalMax: number; pct: number }
 type Mentee = {
   enrollmentNo: string; name: string; batchCode: string
+  phone: string | null; parentPhone: string | null
   weeklyAttendancePct: number | null; weeklyAttended: number; weeklyTotal: number
   overallAttendancePct: number; lowWeekly: boolean; lowOverall: boolean
   failingExams: FailingExam[]; failingSubjects: FailingSubject[]; hasRisk: boolean
@@ -29,6 +36,7 @@ const pctTone = (p: number | null, threshold: number) =>
 export default function FacultyAnalyticsPage() {
   const q = useQuery({ queryKey: ['faculty', 'analytics-mentees'], queryFn: facultyApi.analyticsMentees })
   const d = q.data as MenteeAnalytics | undefined
+  const [editContact, setEditContact] = useState<Mentee | null>(null)
 
   const mentees = d?.mentees ?? []
   const threshold = d?.threshold ?? 75
@@ -182,7 +190,7 @@ export default function FacultyAnalyticsPage() {
         />
         <CardBody className="pt-0">
           <Table>
-            <thead><tr><Th>Student</Th><Th>Batch</Th><Th>Last Week</Th><Th>Overall Att.</Th><Th>Failing Exams</Th><Th>Status</Th></tr></thead>
+            <thead><tr><Th>Student</Th><Th>Batch</Th><Th>Last Week</Th><Th>Overall Att.</Th><Th>Failing Exams</Th><Th>Status</Th><Th>Contact</Th></tr></thead>
             <tbody>
               {mentees.map((m) => (
                 <Tr key={m.enrollmentNo}>
@@ -192,12 +200,61 @@ export default function FacultyAnalyticsPage() {
                   <Td><span className={pctTone(m.overallAttendancePct, threshold)}>{m.overallAttendancePct}%</span></Td>
                   <Td>{m.failingExams.length > 0 ? <span className="font-bold text-danger">{m.failingExams.length}</span> : <span className="text-text-muted">0</span>}</Td>
                   <Td>{m.hasRisk ? <Badge tone="danger">At Risk</Badge> : <Badge tone="success">On Track</Badge>}</Td>
+                  <Td><ContactCell m={m} onEdit={() => setEditContact(m)} /></Td>
                 </Tr>
               ))}
             </tbody>
           </Table>
         </CardBody>
       </Card>
+      <ContactModal mentee={editContact} onClose={() => setEditContact(null)} />
     </PageShell>
+  )
+}
+
+// Student + parent numbers. Call buttons (tel: links) render only on mobile — the whole
+// point is one-tap dialling from a phone; the edit pencil is available everywhere for the mentor/HOD.
+function ContactCell({ m, onEdit }: { m: Mentee; onEdit: () => void }) {
+  const tel = (n: string) => n.replace(/[^\d+]/g, '')
+  return (
+    <div className="flex flex-col gap-1">
+      {/* Mobile: one-tap call buttons */}
+      <div className="flex gap-1.5 sm:hidden">
+        {m.phone ? <a href={`tel:${tel(m.phone)}`} className="inline-flex items-center gap-1 rounded-sm bg-primary px-2 py-1 text-[11px] font-semibold text-white"><Phone size={12} /> Student</a> : null}
+        {m.parentPhone ? <a href={`tel:${tel(m.parentPhone)}`} className="inline-flex items-center gap-1 rounded-sm bg-teal px-2 py-1 text-[11px] font-semibold text-white"><Phone size={12} /> Parent</a> : null}
+        {!m.phone && !m.parentPhone && <span className="text-[11px] text-text-muted">No numbers</span>}
+      </div>
+      {/* Desktop: show the numbers as text (calling from desktop isn't the use case) */}
+      <div className="hidden text-[11px] text-text-secondary sm:block">
+        <div>S: {m.phone ?? '—'}</div>
+        <div>P: {m.parentPhone ?? '—'}</div>
+      </div>
+      <button onClick={onEdit} className="inline-flex w-fit items-center gap-1 text-[11px] text-text-muted hover:text-primary"><Pencil size={11} /> Edit</button>
+    </div>
+  )
+}
+
+function ContactModal({ mentee, onClose }: { mentee: Mentee | null; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [phone, setPhone] = useState('')
+  const [parentPhone, setParentPhone] = useState('')
+  // Reset fields when a new mentee opens.
+  const key = mentee?.enrollmentNo ?? ''
+  const [loadedKey, setLoadedKey] = useState('')
+  if (mentee && key !== loadedKey) { setLoadedKey(key); setPhone(mentee.phone ?? ''); setParentPhone(mentee.parentPhone ?? '') }
+  const save = useMutation({
+    mutationFn: () => facultyApi.updateMenteeContact(mentee!.enrollmentNo, { phone, parentPhone }),
+    onSuccess: () => { toast.success('Contact numbers saved'); qc.invalidateQueries({ queryKey: ['faculty', 'analytics-mentees'] }); onClose() },
+    onError: (e) => toast.error(errorMessage(e)),
+  })
+  return (
+    <Modal open={!!mentee} onClose={onClose} title={`Contact — ${mentee?.name ?? ''}`} size="sm"
+      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button loading={save.isPending} onClick={() => save.mutate()}>Save</Button></>}>
+      <div className="space-y-3">
+        <p className="text-xs text-text-muted">Only you (the mentor) or a HOD can change these.</p>
+        <Input label="Student mobile" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. 9876543210" />
+        <Input label="Parent / guardian mobile" type="tel" value={parentPhone} onChange={(e) => setParentPhone(e.target.value)} placeholder="e.g. 9876500000" />
+      </div>
+    </Modal>
   )
 }

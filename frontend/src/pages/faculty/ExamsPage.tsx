@@ -161,7 +161,7 @@ function MarksEntry({ allocationId, onBack }: { allocationId: string; onBack: ()
                 const failed = total != null && total < passMark
                 return (
                 <Tr key={s.enrollmentId}>
-                  <Td className="tabular-nums">B{s.blockNumber}</Td>
+                  <Td className="whitespace-nowrap text-xs font-medium">{s.blockLabel}</Td>
                   <Td className="whitespace-nowrap">{s.rollNo}</Td>
                   <Td className="whitespace-nowrap text-xs">{s.enrollmentNo}</Td>
                   <Td className="font-medium">{s.name}</Td>

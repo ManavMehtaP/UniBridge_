@@ -18,13 +18,13 @@ export interface ExamDetail {
   phase: ExamPhaseWindow | null
 }
 export interface ExamBlock {
-  id: string; ownerHodId: string; ownerHodName: string; blockNumber: number; room: string | null; isLocked: boolean
+  id: string; mode: ExamMode; ownerHodId: string; ownerHodName: string; blockNumber: number; label: string; room: string | null; isLocked: boolean
   studentCount: number; firstEnrollment: string | null; lastEnrollment: string | null
   students: { studentId: string; enrollmentNo: string; seatOrder: number }[]
 }
 export interface FacultyOpt { id: string; name: string; employeeId: string }
 export interface AvailabilityRow { facultyId: string; name: string; employeeId: string; year: string | null; isHod: boolean; isOwnYear: boolean; free: boolean; reason: string | null }
-export interface SupervisionRow { id: string; blockNumber: number; slot: number; room: string | null; source: string; supervisor: string; facultyId: string | null; externalFacultyId: string | null }
+export interface SupervisionRow { id: string; blockNumber: number; blockLabel: string; slot: number; room: string | null; source: string; supervisor: string; facultyId: string | null; externalFacultyId: string | null }
 export interface PaperCheckRow { id: string; facultyId: string; faculty: string; range: string; blockCount: number; totalStudents: number; markedCount: number; status: 'Pending' | 'In Progress' | 'Complete' | 'Published' }
 export interface PaperCheckFacultyRow { id: string; name: string; employeeId: string; year: string | null; isSubjectFaculty: boolean; isOwnYear: boolean }
 export interface MyPaperCheckRow { id: string; exam: string; subjectCode: string; date: string; range: string; totalStudents: number; markedCount: number; status: 'Pending' | 'In Progress' | 'Complete' | 'Published' }
@@ -35,7 +35,7 @@ export interface PaperCheckStudents {
     isSplit: boolean; editableComponent: 'FULL' | 'OFFLINE' | 'ONLINE'; componentMax: number
     offlineMax: number; onlineMax: number; passMark: number
   }
-  students: { enrollmentId: string; enrollmentNo: string; rollNo: string; name: string; blockNumber: number; enteredMarks: number | null; offlineMarks: number | null; onlineMarks: number | null; total: number | null; grade: string | null; isAbsent: boolean; isPublished: boolean }[]
+  students: { enrollmentId: string; enrollmentNo: string; rollNo: string; name: string; blockNumber: number; blockLabel: string; enteredMarks: number | null; offlineMarks: number | null; onlineMarks: number | null; total: number | null; grade: string | null; isAbsent: boolean; isPublished: boolean }[]
 }
 export interface StandbyRow { slot: number; facultyId: string; isActive: boolean; faculty: string }
 export interface ExternalFacultyRow { id: string; name: string; mobile: string | null; college: string | null; experience: string | null; remarks: string | null; availability: string | null }
@@ -46,7 +46,7 @@ export interface ExamDashboard {
   externalFaculties: number; standbyFaculties: number; paperCheckingPending: number; coordinators: number; totalFaculty: number; published: boolean
 }
 export interface FacultyDuties {
-  supervision: { exam: string; subject: string; date: string; time: string; block: number; room: string | null; isToday: boolean }[]
+  supervision: { exam: string; subject: string; date: string; time: string; block: string; room: string | null; isToday: boolean }[]
   paperChecking: { exam: string; subject: string; range: string; blocks: number }[]
   standby: { exam: string; subject: string; date: string; time: string; slot: number; isToday: boolean }[]
 }

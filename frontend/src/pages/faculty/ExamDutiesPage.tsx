@@ -30,7 +30,7 @@ export default function ExamDutiesPage() {
                       <Tr key={i}>
                         <Td>{s.exam}</Td><Td>{s.subject}</Td>
                         <Td>{fmtDate(s.date)} {s.isToday && <Badge tone="primary">Today</Badge>}</Td>
-                        <Td className="tabular-nums">{s.time}</Td><Td className="font-semibold">Block {s.block}</Td><Td>{s.room ?? '—'}</Td>
+                        <Td className="tabular-nums">{s.time}</Td><Td className="font-semibold">{s.block}</Td><Td>{s.room ?? '—'}</Td>
                       </Tr>
                     ))}
                   </tbody>

@@ -5380,6 +5380,20 @@ export const portalService = {
   //  • failing exam results — below the pass mark of 36% of that exam's max
   //    (so <9/25, <18/50, <36/100 all fall out of one percentage rule)
   //  • failing subjects overall — total across all published phases < 36%.
+  // A mentee's own + parent contact numbers — set/edited only by their assigned mentor or a HOD.
+  async updateMenteeContact(facultyId: string, universityId: string, enrollmentNo: string, body: { phone?: string | null; parentPhone?: string | null }) {
+    const student = await prisma.student.findFirst({ where: { enrollmentNo, universityId, deletedAt: null }, select: { id: true } });
+    if (!student) throw new ApiError(404, "STUDENT_NOT_FOUND", "Student not found.");
+    const fac = await prisma.faculty.findFirst({ where: { id: facultyId, universityId, deletedAt: null }, select: { isHod: true } });
+    const isMentor = await prisma.mentorAssignment.findFirst({ where: { studentId: student.id, facultyId }, select: { id: true } });
+    if (!isMentor && !fac?.isHod) throw new ApiError(403, "NOT_MENTOR", "Only this student's mentor or a HOD can edit contact numbers.");
+    const data: { phone?: string | null; parentPhone?: string | null } = {};
+    if (body.phone !== undefined) data.phone = String(body.phone ?? "").trim() || null;
+    if (body.parentPhone !== undefined) data.parentPhone = String(body.parentPhone ?? "").trim() || null;
+    const updated = await prisma.student.update({ where: { id: student.id }, data, select: { phone: true, parentPhone: true } });
+    return updated;
+  },
+
   async facultyAnalyticsMentees(facultyId: string, universityId: string, semesterId?: string) {
     const scope = await getFacultyScopeData(facultyId, universityId, semesterId);
     const semId = scope.semester.id;
@@ -5392,7 +5406,7 @@ export const portalService = {
     const studentIds = scope.mentorAssignments.map((a) => a.studentId);
     const enrollments = await prisma.studentEnrollment.findMany({
       where: { studentId: { in: studentIds }, semesterId: semId, isCurrent: true },
-      include: { student: { select: { enrollmentNo: true, name: true } }, batch: { select: { code: true } } },
+      include: { student: { select: { id: true, enrollmentNo: true, name: true, phone: true, parentPhone: true } }, batch: { select: { code: true } } },
     });
     if (enrollments.length === 0) return empty;
     const enrIds = enrollments.map((e) => e.id);
@@ -5443,6 +5457,7 @@ export const portalService = {
       const lowOverall = overallPct < THRESH;
       return {
         enrollmentNo: e.student.enrollmentNo, name: e.student.name, batchCode: e.batch.code,
+        phone: e.student.phone, parentPhone: e.student.parentPhone,
         weeklyAttendancePct: weeklyPct, weeklyAttended: w.att, weeklyTotal: w.tot,
         overallAttendancePct: overallPct, lowWeekly, lowOverall,
         failingExams, failingSubjects,

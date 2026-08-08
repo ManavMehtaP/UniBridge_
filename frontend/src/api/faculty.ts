@@ -175,6 +175,8 @@ export const facultyApi = {
   analyticsMarks: (params: Params) =>
     api.get('/faculty/analytics/marks', { params }).then((r) => r.data),
   analyticsMentees: () => api.get('/faculty/analytics/mentees').then((r) => r.data),
+  updateMenteeContact: (enrollmentNo: string, body: { phone?: string | null; parentPhone?: string | null }) =>
+    api.patch<{ phone: string | null; parentPhone: string | null }>(`/faculty/mentees/${enrollmentNo}/contact`, body).then((r) => r.data),
   quizPerformance: (params: Params) => api.get('/faculty/analytics/quiz-performance', { params }).then((r) => r.data),
 }
 

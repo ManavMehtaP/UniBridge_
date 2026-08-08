@@ -138,10 +138,10 @@ async function phaseEntryMax(phaseId: string | null): Promise<{ phaseId: string;
 // Ordered students of a paper-checking allocation (across its blocks), mapped to
 // the current-semester StudentEnrollment that Result rows reference.
 async function allocationStudents(blockIds: string[], semesterId: string) {
-  if (!blockIds.length) return [] as { enrollmentId: string; enrollmentNo: string; rollNo: string; name: string; blockNumber: number }[];
+  if (!blockIds.length) return [] as { enrollmentId: string; enrollmentNo: string; rollNo: string; name: string; blockNumber: number; ownerHodId: string }[];
   const bs = await prisma.blockStudent.findMany({
     where: { blockId: { in: blockIds } },
-    include: { block: { select: { blockNumber: true } } },
+    include: { block: { select: { blockNumber: true, ownerHodId: true } } },
     orderBy: [{ block: { blockNumber: "asc" } }, { seatOrder: "asc" }],
   });
   const enrs = await prisma.studentEnrollment.findMany({
@@ -152,8 +152,35 @@ async function allocationStudents(blockIds: string[], semesterId: string) {
   return bs.flatMap((b) => {
     const e = enrByStudent.get(b.studentId);
     if (!e) return [];
-    return [{ enrollmentId: e.id, enrollmentNo: b.enrollmentNo, rollNo: e.rollNo, name: e.student.name, blockNumber: b.block.blockNumber }];
+    return [{ enrollmentId: e.id, enrollmentNo: b.enrollmentNo, rollNo: e.rollNo, name: e.student.name, blockNumber: b.block.blockNumber, ownerHodId: b.block.ownerHodId }];
   });
+}
+
+// Human block labels: "SY-C-1" = year level + owning HOD's division letter (their batch
+// code's first letter, A/B/C/D…) + block number. Used on every page that shows a block so
+// blocks from different HODs sharing one exam never collide as bare "Block 1".
+async function blockLabeler(exam: { id: string; yearLevel: string; semesterId: string }) {
+  const scopes = await prisma.hodBatchScope.findMany({ where: { semesterId: exam.semesterId }, select: { facultyId: true, batchId: true } });
+  const batchIds = [...new Set(scopes.map((s) => s.batchId))];
+  const batches = batchIds.length ? await prisma.batch.findMany({ where: { id: { in: batchIds } }, select: { id: true, code: true } }) : [];
+  const codeById = new Map(batches.map((b) => [b.id, b.code]));
+  const initial = new Map<string, string>();
+  for (const s of scopes) {
+    if (initial.has(s.facultyId)) continue;
+    const ch = codeById.get(s.batchId)?.trim()?.[0]?.toUpperCase();
+    if (ch && ch >= "A" && ch <= "Z") initial.set(s.facultyId, ch);
+  }
+  const blocks = await prisma.examBlock.findMany({ where: { examId: exam.id }, select: { id: true, blockNumber: true, ownerHodId: true } });
+  const byId = new Map(blocks.map((b) => [b.id, b]));
+  const label = (ownerHodId: string, blockNumber: number) => `${exam.yearLevel}-${initial.get(ownerHodId) ?? "?"}-${blockNumber}`;
+  const rangeOf = (blockIds: string[]) => {
+    const bs = blockIds.map((id) => byId.get(id)).filter(Boolean).sort((a, b) => a!.blockNumber - b!.blockNumber);
+    if (!bs.length) return "—";
+    const lo = label(bs[0]!.ownerHodId, bs[0]!.blockNumber);
+    const hi = label(bs[bs.length - 1]!.ownerHodId, bs[bs.length - 1]!.blockNumber);
+    return lo === hi ? lo : `${lo} – ${hi}`;
+  };
+  return { label, rangeOf, initial };
 }
 
 // Access to a paper-checking allocation: the assigned checker, a semester exam
@@ -385,7 +412,8 @@ export const examService = {
 
   async listBlocks(actorId: string, universityId: string, examId: string, mode?: "OFFLINE" | "ONLINE") {
     const ctx = await assertManager(actorId, universityId);
-    await getExamOrThrow(examId, ctx);
+    const exam = await getExamOrThrow(examId, ctx);
+    const labeler = await blockLabeler(exam);
     const blocks = await prisma.examBlock.findMany({
       where: { examId, ...(mode ? { mode } : {}) },
       include: { students: { orderBy: { seatOrder: "asc" }, select: { studentId: true, enrollmentNo: true, seatOrder: true } }, _count: { select: { students: true } } },
@@ -394,12 +422,18 @@ export const examService = {
     const hodIds = [...new Set(blocks.map((b) => b.ownerHodId))];
     const hods = hodIds.length ? await prisma.faculty.findMany({ where: { id: { in: hodIds } }, select: { id: true, name: true } }) : [];
     const hodName = new Map(hods.map((h) => [h.id, h.name]));
-    return blocks.map((b) => ({
-      id: b.id, mode: b.mode, ownerHodId: b.ownerHodId, ownerHodName: hodName.get(b.ownerHodId) ?? "—",
-      blockNumber: b.blockNumber, room: b.room, isLocked: b.isLocked, studentCount: b._count.students,
-      firstEnrollment: b.students[0]?.enrollmentNo ?? null, lastEnrollment: b.students[b.students.length - 1]?.enrollmentNo ?? null,
-      students: b.students,
-    }));
+    // Order by division letter (A→B→C…) then block number — ownerHodId is a UUID, so the
+    // DB sort can't do it; the initial map gives the human A/B/C/D order.
+    const div = (hodId: string) => labeler.initial.get(hodId) ?? "~";
+    return blocks
+      .sort((a, b) => (a.mode < b.mode ? -1 : a.mode > b.mode ? 1 : 0) || div(a.ownerHodId).localeCompare(div(b.ownerHodId)) || a.blockNumber - b.blockNumber)
+      .map((b) => ({
+        id: b.id, mode: b.mode, ownerHodId: b.ownerHodId, ownerHodName: hodName.get(b.ownerHodId) ?? "—",
+        blockNumber: b.blockNumber, label: labeler.label(b.ownerHodId, b.blockNumber),
+        room: b.room, isLocked: b.isLocked, studentCount: b._count.students,
+        firstEnrollment: b.students[0]?.enrollmentNo ?? null, lastEnrollment: b.students[b.students.length - 1]?.enrollmentNo ?? null,
+        students: b.students,
+      }));
   },
 
   // ── Block manual edits ──
@@ -602,12 +636,16 @@ export const examService = {
     const ctx = await assertManager(actorId, universityId);
     const sched = await prisma.examSchedule.findUnique({ where: { id: scheduleId } });
     if (!sched) throw new ApiError(404, "NOT_FOUND", "Schedule not found.");
-    await getExamOrThrow(sched.examId, ctx);
+    const exam = await getExamOrThrow(sched.examId, ctx);
+    const labeler = await blockLabeler(exam);
     const allocs = await prisma.supervisorAllocation.findMany({
       where: { scheduleId },
       include: { block: { select: { blockNumber: true, room: true, ownerHodId: true } } },
-      orderBy: [{ block: { blockNumber: "asc" } }, { slot: "asc" }],
     });
+    // Division letter (A→B→C…) then block number, then invigilator slot — so a 2-invigilator
+    // block reads SY-A-1, SY-A-1, SY-A-2… ownerHodId is a UUID, so sort by its initial in JS.
+    const div = (hodId: string) => labeler.initial.get(hodId) ?? "~";
+    allocs.sort((a, b) => div(a.block.ownerHodId).localeCompare(div(b.block.ownerHodId)) || a.block.blockNumber - b.block.blockNumber || a.slot - b.slot);
     const facIds = allocs.map((a) => a.facultyId).filter(Boolean) as string[];
     const extIds = allocs.map((a) => a.externalFacultyId).filter(Boolean) as string[];
     const [facs, exts] = await Promise.all([
@@ -617,7 +655,7 @@ export const examService = {
     const facById = new Map(facs.map((f) => [f.id, f]));
     const extById = new Map(exts.map((e) => [e.id, e]));
     return allocs.map((a) => ({
-      id: a.id, blockNumber: a.block.blockNumber, slot: a.slot, room: a.block.room, source: a.source,
+      id: a.id, blockNumber: a.block.blockNumber, blockLabel: labeler.label(a.block.ownerHodId, a.block.blockNumber), slot: a.slot, room: a.block.room, source: a.source,
       supervisor: a.facultyId ? `${facById.get(a.facultyId)?.name ?? "?"} (${facById.get(a.facultyId)?.employeeId ?? ""})`
         : a.externalFacultyId ? `${extById.get(a.externalFacultyId)?.name ?? "?"} (External)` : "—",
       facultyId: a.facultyId, externalFacultyId: a.externalFacultyId,
@@ -668,7 +706,15 @@ export const examService = {
     const facs = await prisma.faculty.findMany({ where: { id: { in: facIds }, deletedAt: null }, select: { id: true } });
     const eligible = facs.map((f) => f.id);
 
-    const blocks = await prisma.examBlock.findMany({ where: { examId: exam.id, mode: sched.mode }, orderBy: [{ ownerHodId: "asc" }, { blockNumber: "asc" }], select: { id: true, blockNumber: true, ownerHodId: true } });
+    // Coding subjects run an offline + an online paper. Both must be checked by the SAME
+    // faculty per student, so we build ONE assignment on the OFFLINE block set and write it
+    // identically to both schedules (the online rows reference the offline blocks/students).
+    const siblings = await prisma.examSchedule.findMany({ where: { examId: exam.id, subjectId: sched.subjectId }, select: { id: true, mode: true } });
+    const isCoding = siblings.length > 1;
+    const blockMode = isCoding ? "OFFLINE" : sched.mode;
+    const targetScheduleIds = isCoding ? siblings.map((s) => s.id) : [scheduleId];
+
+    const blocks = await prisma.examBlock.findMany({ where: { examId: exam.id, mode: blockMode }, orderBy: [{ ownerHodId: "asc" }, { blockNumber: "asc" }], select: { id: true, blockNumber: true, ownerHodId: true } });
     if (blocks.length === 0) throw new ApiError(400, "NO_BLOCKS", "Generate student blocks first.");
 
     // Each checker's OWN HOD(s): the HOD(s) whose batches this checker teaches for this
@@ -692,13 +738,14 @@ export const examService = {
       for (const f of facHods) if (f.hodId) ownHods.set(f.id, new Set([f.hodId]));
     }
 
-    await prisma.paperCheckingAllocation.deleteMany({ where: { scheduleId } });
     // Group blocks by owner HOD; distribute each group (contiguous, near-equal ranges) among
     // checkers NOT in that HOD, shuffled every run. If no cross-HOD checker exists (single-HOD
     // pool) fall back to all eligible so no paper is left unchecked.
+    const labeler = await blockLabeler(exam);
     const byOwner = new Map<string, typeof blocks>();
     for (const b of blocks) { const arr = byOwner.get(b.ownerHodId) ?? []; arr.push(b); byOwner.set(b.ownerHodId, arr); }
     const loadOf = new Map<string, number>();
+    const plan: { facultyId: string; blockIds: string[]; fromLabel: string; toLabel: string }[] = [];
     for (const [ownerHod, group] of byOwner) {
       let pool = shuffle(eligible.filter((id) => !ownHods.get(id)?.has(ownerHod)));
       if (pool.length === 0) pool = shuffle([...eligible]);
@@ -708,18 +755,24 @@ export const examService = {
         const take = base + (i < extra ? 1 : 0);
         if (take === 0) continue;
         const slice = group.slice(idx, idx + take); idx += take;
-        await prisma.paperCheckingAllocation.create({
-          data: {
-            examId: exam.id, scheduleId, subjectId: sched.subjectId, facultyId: pool[i],
-            blockIds: slice.map((b) => b.id), fromLabel: `Block ${slice[0].blockNumber}`, toLabel: `Block ${slice[slice.length - 1].blockNumber}`,
-          },
+        plan.push({
+          facultyId: pool[i], blockIds: slice.map((b) => b.id),
+          fromLabel: labeler.label(slice[0].ownerHodId, slice[0].blockNumber),
+          toLabel: labeler.label(slice[slice.length - 1].ownerHodId, slice[slice.length - 1].blockNumber),
         });
         loadOf.set(pool[i], (loadOf.get(pool[i]) ?? 0) + take);
       }
     }
+    // Write the SAME plan to every target schedule (offline + online for coding).
+    await prisma.paperCheckingAllocation.deleteMany({ where: { scheduleId: { in: targetScheduleIds } } });
+    for (const tsid of targetScheduleIds) {
+      for (const a of plan) {
+        await prisma.paperCheckingAllocation.create({ data: { examId: exam.id, scheduleId: tsid, subjectId: sched.subjectId, facultyId: a.facultyId, blockIds: a.blockIds, fromLabel: a.fromLabel, toLabel: a.toLabel } });
+      }
+    }
     const distribution = [...loadOf.entries()].map(([facultyId, count]) => ({ facultyId, count }));
-    await audit(exam.id, actorId, "GENERATE_PAPER_CHECKING", `sched ${scheduleId}: ${blocks.length} blocks, cross-HOD randomised`);
-    return { blocks: blocks.length, faculty: distribution.length, distribution };
+    await audit(exam.id, actorId, "GENERATE_PAPER_CHECKING", `${blocks.length} blocks → ${targetScheduleIds.length} schedule(s)${isCoding ? " (offline+online mirrored)" : ""}`);
+    return { blocks: blocks.length, faculty: distribution.length, distribution, mirrored: isCoding };
   },
 
   async listPaperChecking(actorId: string, universityId: string, scheduleId: string) {
@@ -727,6 +780,7 @@ export const examService = {
     const sched = await prisma.examSchedule.findUnique({ where: { id: scheduleId } });
     if (!sched) throw new ApiError(404, "NOT_FOUND", "Schedule not found.");
     const exam = await getExamOrThrow(sched.examId, ctx);
+    const labeler = await blockLabeler(exam);
     // Created in block order; order by that (fromLabel is a string → "Block 11" < "Block 2").
     const allocs = await prisma.paperCheckingAllocation.findMany({ where: { scheduleId }, orderBy: { createdAt: "asc" } });
     const facs = allocs.length ? await prisma.faculty.findMany({ where: { id: { in: allocs.map((a) => a.facultyId) } }, select: { id: true, name: true, employeeId: true } }) : [];
@@ -742,7 +796,7 @@ export const examService = {
       const published = results.length > 0 && results.every((r) => r.isPublished);
       out.push({
         id: a.id, facultyId: a.facultyId, faculty: `${facById.get(a.facultyId)?.name ?? "?"} (${facById.get(a.facultyId)?.employeeId ?? ""})`,
-        range: `${a.fromLabel} – ${a.toLabel}`, blockCount: a.blockIds.length,
+        range: labeler.rangeOf(a.blockIds), blockCount: a.blockIds.length,
         totalStudents: students.length, markedCount: marked,
         status: published ? "Published" : marked === 0 ? "Pending" : marked < students.length ? "In Progress" : "Complete",
       });
@@ -812,13 +866,14 @@ export const examService = {
     const editableComponent = !isSplit ? "FULL" : sched!.mode === "ONLINE" ? "ONLINE" : "OFFLINE";
     const componentMax = editableComponent === "FULL" ? entryMax : editableComponent === "ONLINE" ? split.online : split.offline;
     const passMark = entryMax >= 50 ? 18 : 9; // below this the total is a fail (shown red)
+    const labeler = await blockLabeler(exam);
     const students = await allocationStudents(alloc.blockIds, exam.semesterId);
     const results = students.length ? await prisma.result.findMany({ where: { enrollmentId: { in: students.map((s) => s.enrollmentId) }, phaseId, subjectId: alloc.subjectId } }) : [];
     const rById = new Map(results.map((r) => [r.enrollmentId, r]));
     return {
       allocation: {
         id: alloc.id, examName: (await prisma.exam.findUnique({ where: { id: exam.id }, select: { name: true } }))?.name ?? "",
-        subjectCode: subject?.code ?? "?", subjectName: subject?.name ?? "", range: `${alloc.fromLabel} – ${alloc.toLabel}`,
+        subjectCode: subject?.code ?? "?", subjectName: subject?.name ?? "", range: labeler.rangeOf(alloc.blockIds),
         entryMax, totalMax: entryMax, phaseNumber: number, isSplit, editableComponent, componentMax,
         offlineMax: split.offline, onlineMax: split.online, passMark,
         isPublished: results.length > 0 && results.every((r) => r.isPublished),
@@ -829,7 +884,7 @@ export const examService = {
         const online = r?.onlineMarks ?? null;
         const total = r && !r.isAbsent ? r.marksObtained : null;
         return {
-          enrollmentId: s.enrollmentId, enrollmentNo: s.enrollmentNo, rollNo: s.rollNo, name: s.name, blockNumber: s.blockNumber,
+          enrollmentId: s.enrollmentId, enrollmentNo: s.enrollmentNo, rollNo: s.rollNo, name: s.name, blockNumber: s.blockNumber, blockLabel: labeler.label(s.ownerHodId, s.blockNumber),
           offlineMarks: offline, onlineMarks: online, total,
           // non-split convenience: the single editable value is the total
           enteredMarks: !isSplit ? total : (editableComponent === "ONLINE" ? online : offline),
@@ -885,23 +940,26 @@ export const examService = {
     // results, independent of supervision-duty publishing.
     const allocs = await prisma.paperCheckingAllocation.findMany({
       where: { facultyId, schedule: { exam: { universityId, deletedAt: null } } },
-      include: { schedule: { select: { date: true, exam: { select: { name: true, phaseId: true, semesterId: true } } } } },
+      include: { schedule: { select: { date: true, exam: { select: { id: true, name: true, phaseId: true, semesterId: true, yearLevel: true } } } } },
       orderBy: { createdAt: "asc" },
     });
     const subjIds = [...new Set(allocs.map((a) => a.subjectId))];
     const subs = subjIds.length ? await prisma.subject.findMany({ where: { id: { in: subjIds } }, select: { id: true, code: true } }) : [];
     const subCode = new Map(subs.map((s) => [s.id, s.code]));
+    const labelers = new Map<string, Awaited<ReturnType<typeof blockLabeler>>>();
     const out = [];
     for (const a of allocs) {
-      const students = await allocationStudents(a.blockIds, a.schedule.exam.semesterId);
+      const ex = a.schedule.exam;
+      if (!labelers.has(ex.id)) labelers.set(ex.id, await blockLabeler({ id: ex.id, yearLevel: ex.yearLevel, semesterId: ex.semesterId }));
+      const students = await allocationStudents(a.blockIds, ex.semesterId);
       const enrIds = students.map((s) => s.enrollmentId);
-      const phaseId = a.schedule.exam.phaseId;
+      const phaseId = ex.phaseId;
       const results = phaseId && enrIds.length ? await prisma.result.findMany({ where: { enrollmentId: { in: enrIds }, phaseId, subjectId: a.subjectId }, select: { isPublished: true } }) : [];
       const marked = results.length;
       const published = results.length > 0 && results.every((r) => r.isPublished);
       out.push({
-        id: a.id, exam: a.schedule.exam.name, subjectCode: subCode.get(a.subjectId) ?? "?", date: dateStr(a.schedule.date),
-        range: `${a.fromLabel} – ${a.toLabel}`, totalStudents: students.length, markedCount: marked,
+        id: a.id, exam: ex.name, subjectCode: subCode.get(a.subjectId) ?? "?", date: dateStr(a.schedule.date),
+        range: labelers.get(ex.id)!.rangeOf(a.blockIds), totalStudents: students.length, markedCount: marked,
         status: published ? "Published" : marked === 0 ? "Pending" : marked < students.length ? "In Progress" : "Complete",
       });
     }
@@ -1103,16 +1161,19 @@ export const examService = {
     const ctx = await assertManager(actorId, universityId);
     const exam = await getExamOrThrow(examId, ctx);
     const coords = await coordinatorIds(exam.semesterId);
-    const [blockCount, schedules, externalCount] = await Promise.all([
+    const [blockCount, offlineBlocks, onlineBlocks, schedules, externalCount] = await Promise.all([
       prisma.examBlock.count({ where: { examId } }),
-      prisma.examSchedule.findMany({ where: { examId }, select: { id: true } }),
+      prisma.examBlock.count({ where: { examId, mode: "OFFLINE" } }),
+      prisma.examBlock.count({ where: { examId, mode: "ONLINE" } }),
+      prisma.examSchedule.findMany({ where: { examId }, select: { id: true, mode: true, supervisorsPerBlock: true } }),
       prisma.externalFaculty.count({ where: { examId } }),
     ]);
     let allocated = 0, pending = 0, standby = 0, paperPending = 0;
     for (const sc of schedules) {
       const filled = await prisma.supervisorAllocation.count({ where: { scheduleId: sc.id } });
+      const need = (sc.mode === "ONLINE" ? onlineBlocks : offlineBlocks) * Math.max(1, sc.supervisorsPerBlock);
       allocated += filled;
-      pending += Math.max(0, blockCount - filled);
+      pending += Math.max(0, need - filled);
       standby += await prisma.standbyFaculty.count({ where: { scheduleId: sc.id } });
       if ((await prisma.paperCheckingAllocation.count({ where: { scheduleId: sc.id } })) === 0) paperPending++;
     }
@@ -1139,13 +1200,18 @@ export const examService = {
   async facultyDuties(facultyId: string, universityId: string) {
     const supervision = await prisma.supervisorAllocation.findMany({
       where: { facultyId, schedule: { exam: { status: "PUBLISHED", universityId } } },
-      include: { schedule: { select: { date: true, startTime: true, endTime: true, subjectId: true, exam: { select: { name: true } } } }, block: { select: { blockNumber: true, room: true } } },
+      include: { schedule: { select: { date: true, startTime: true, endTime: true, subjectId: true, exam: { select: { id: true, name: true, yearLevel: true, semesterId: true } } } }, block: { select: { blockNumber: true, room: true, ownerHodId: true } } },
       orderBy: { schedule: { date: "asc" } },
     });
     const paperChecking = await prisma.paperCheckingAllocation.findMany({
       where: { facultyId, schedule: { exam: { status: "PUBLISHED", universityId } } },
-      include: { schedule: { select: { date: true, subjectId: true, exam: { select: { name: true } } } } },
+      include: { schedule: { select: { date: true, subjectId: true, exam: { select: { id: true, name: true, yearLevel: true, semesterId: true } } } } },
     });
+    // One labeler per distinct exam, reused for supervision blocks + paper-checking ranges.
+    const labelers = new Map<string, Awaited<ReturnType<typeof blockLabeler>>>();
+    for (const ex of [...supervision.map((s) => s.schedule.exam), ...paperChecking.map((p) => p.schedule.exam)]) {
+      if (!labelers.has(ex.id)) labelers.set(ex.id, await blockLabeler({ id: ex.id, yearLevel: ex.yearLevel, semesterId: ex.semesterId }));
+    }
     const standby = await prisma.standbyFaculty.findMany({
       where: { facultyId, schedule: { exam: { status: "PUBLISHED", universityId } } },
       include: { schedule: { select: { date: true, startTime: true, subjectId: true, exam: { select: { name: true } } } } },
@@ -1156,8 +1222,8 @@ export const examService = {
     const subCode = new Map(subs.map((s) => [s.id, s.code]));
     const today = dateStr(new Date());
     return {
-      supervision: supervision.map((s) => ({ exam: s.schedule.exam.name, subject: subCode.get(s.schedule.subjectId) ?? "?", date: dateStr(s.schedule.date), time: `${s.schedule.startTime}-${s.schedule.endTime}`, block: s.block.blockNumber, room: s.block.room, isToday: dateStr(s.schedule.date) === today })),
-      paperChecking: paperChecking.map((p) => ({ exam: p.schedule.exam.name, subject: subCode.get(p.schedule.subjectId) ?? "?", range: `${p.fromLabel} – ${p.toLabel}`, blocks: p.blockIds.length })),
+      supervision: supervision.map((s) => ({ exam: s.schedule.exam.name, subject: subCode.get(s.schedule.subjectId) ?? "?", date: dateStr(s.schedule.date), time: `${s.schedule.startTime}-${s.schedule.endTime}`, block: labelers.get(s.schedule.exam.id)!.label(s.block.ownerHodId, s.block.blockNumber), room: s.block.room, isToday: dateStr(s.schedule.date) === today })),
+      paperChecking: paperChecking.map((p) => ({ exam: p.schedule.exam.name, subject: subCode.get(p.schedule.subjectId) ?? "?", range: labelers.get(p.schedule.exam.id)!.rangeOf(p.blockIds), blocks: p.blockIds.length })),
       standby: standby.map((s) => ({ exam: s.schedule.exam.name, subject: subCode.get(s.schedule.subjectId) ?? "?", date: dateStr(s.schedule.date), time: s.schedule.startTime, slot: s.slot, isToday: dateStr(s.schedule.date) === today })),
     };
   },
